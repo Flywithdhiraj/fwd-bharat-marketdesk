@@ -1,0 +1,1315 @@
+// Native straddle desk and volatility skew renderers
+ async function refreshStraddleChain(forceExpiryKey) {
+ const requestedExpiry = forceExpiryKey || state.straddleChain?.expiryKey || state.expiryKey || '';
+ setState({ straddleLoading: true, straddleError: '', straddlePreview: null }, { persist: false });
+ const result = await send('v17:getStraddleChain', { underlying: state.underlying, expiryKey: requestedExpiry });
+ if (result?.ok) {
+ setState({ straddleChain: result, straddleLoading: false, straddleSelectedSymbol: '' }, { persist: false });
+ await refreshStraddleSettings();
+ await Promise.all([refreshStraddleDashboard(), refreshStraddlePreview(getSelectedStraddleContract(result))]);
+ } else {
+ setState({ straddleLoading: false, straddleError: result?.error || 'Failed to load straddle chain' }, { persist: false });
+ }
+ }
+
+ function LEGACY_RENDER_STRADDLE_MODE() {
+ const sc = state.straddleChain;
+ const loading = state.straddleLoading;
+ const error = state.straddleError;
+
+ // Underlying tabs
+ const underlyingTabs = (api.OPTION_UNDERLYINGS || ['BTC', 'ETH']).map(u =>
+ `<button type="button" class="od-ghost-btn ${u === state.underlying ? 'active' : ''}" data-options-action="set-underlying" data-underlying="${u}">${u}</button>`
+ ).join('');
+
+ // Expiry selector
+ let expirySelect = '';
+ if (sc?.expiries?.length) {
+ expirySelect = `<select class="od-straddle-expiry-select" data-straddle-action="set-expiry">${sc.expiries.map(e =>
+ `<option value="${esc(e.key)}" ${e.key === sc.expiryKey ? 'selected' : ''}>${esc(e.label)} (${days(e.daysToExpiry)})</option>`
+ ).join('')}</select>`;
+ }
+
+ const header = `<div class="od-straddle-header">
+ <div class="od-underlying-tabs">${underlyingTabs}</div>
+ ${expirySelect}
+ <button type="button" class="od-ghost-btn" data-options-action="refresh-straddle-chain">${loading ? 'Loading...' : 'Refresh'}</button>
+ ${sc ? `<span class="od-straddle-spot">Spot: $${n(sc.underlyingPrice).toFixed(0)}</span><span class="od-straddle-spot">ATM: ${n(sc.atmStrike).toFixed(0)}</span>` : ''}
+ </div>`;
+
+ if (error) return `<div class="od-straddle-mode">${header}<div class="od-top-error">${esc(error)}</div></div>`;
+ if (loading && !sc) return `<div class="od-straddle-mode">${header}<div class="od-loading">Loading straddle contracts...</div></div>`;
+ if (!sc?.contracts?.length) return `<div class="od-straddle-mode">${header}<div class="od-empty">No native straddle (MV-) contracts found for ${esc(state.underlying)}. Click Refresh to fetch.</div></div>`;
+
+ // Score all contracts
+ const spot = n(sc.underlyingPrice);
+ const scored = sc.contracts.map(c => ({
+ ...c,
+ score: api.scoreNativeStraddleContract?.(c, spot, 'neutral', {}, { marketContext: sc?.marketContext }) || 0,
+ }));
+ const best = scored.reduce((b, c) => (!b || c.score > b.score) ? c : b, null);
+
+ // Determine the active/selected contract for the decision panel
+ const selectedSym = state.straddleSelectedSymbol || (best ? best.symbol : '');
+ const active = scored.find(c => c.symbol === selectedSym) || best;
+
+ // Table
+ const rows = scored.map(c => {
+ const isBest = best && c.symbol === best.symbol;
+ const isAtm = c.strike === sc.atmStrike;
+ const isSelected = active && c.symbol === active.symbol;
+ const barWidth = Math.max(0, Math.min(100, c.score));
+ return `<tr class="od-straddle-row ${isAtm ? 'is-atm' : ''} ${isBest ? 'is-best' : ''} ${isSelected ? 'is-selected' : ''}" data-options-action="select-straddle-contract" data-symbol="${esc(c.symbol)}">
+ <td class="od-straddle-strike">${isAtm ? '<span class="od-atm-dot"></span>' : ''}${n(c.strike).toFixed(0)}</td>
+ <td>$${n(c.markPrice).toFixed(2)}</td>
+ <td>$${n(c.bid).toFixed(2)}</td>
+ <td>$${n(c.ask).toFixed(2)}</td>
+ <td>${compact(c.volume)}</td>
+ <td>${compact(c.oiContracts)}</td>
+ <td>${n(c.theta).toFixed(2)}</td>
+ <td>${pct(n(c.iv) * 100, 1)}</td>
+ <td><div class="od-straddle-score"><div class="od-straddle-score-fill" style="width:${barWidth}%"></div></div> <span class="od-score-num">${c.score}</span></td>
+ <td><button type="button" class="od-sell-icon" data-options-action="sell-native-straddle" data-symbol="${esc(c.symbol)}" data-product-id="${c.productId}" title="Sell ${esc(c.symbol)}">S</button></td>
+ </tr>`;
+ }).join('');
+
+ const table = isAdvanced ? `<div class="od-straddle-table-wrap"><table class="od-straddle-table">
+ <thead><tr><th>Strike</th><th>Mark</th><th>Bid</th><th>Ask</th><th>Vol</th><th>OI</th><th>Theta</th><th>IV</th><th>Score</th><th></th></tr></thead>
+ <tbody>${rows}</tbody>
+ </table></div>` : '';
+
+ // ===== DECISION PANEL (below table) =====
+ let decisionPanel = '';
+ if (active) {
+ const c = active;
+ const cm = Math.max(0.000001, n(c.contractMultiplier || 1));
+ const mark = n(c.markPrice);
+ const strike = n(c.strike);
+ const dte = n(c.daysToExpiry);
+ const dteHours = Math.max(0, Math.round(dte * 24));
+ const theta = n(c.theta);
+ const iv = n(c.iv);
+ const spread = (n(c.ask) > 0 && n(c.bid) > 0) ? n(c.ask) - n(c.bid) : 0;
+ const spreadPctVal = mark > 0 ? (spread / mark * 100) : 0;
+
+ // Short straddle P&L calculations
+ const premiumPerContract = mark * cm;
+ const breakevenLow = strike - mark;
+ const breakevenHigh = strike + mark;
+ const profitRange = breakevenHigh - breakevenLow;
+ const profitRangePctVal = spot > 0 ? (profitRange / spot * 100) : 0;
+
+ // Stop-loss from settings (default 30%)
+ const slPct = 30;
+ const maxLossPerContract = mark * (slPct / 100) * cm;
+ const maxProfitPerContract = premiumPerContract;
+ const dailyThetaPerContract = Math.abs(theta) * cm;
+
+ // Size calculator
+ const targetUSD = n(state.straddleTargetUSD || 100);
+ const estQty = premiumPerContract > 0 ? Math.max(1, Math.ceil(targetUSD / premiumPerContract)) : 1;
+ const totalPremium = premiumPerContract * estQty;
+ const totalMaxLoss = maxLossPerContract * estQty;
+ const totalDailyTheta = dailyThetaPerContract * estQty;
+ const riskReward = totalMaxLoss > 0 ? (totalPremium / totalMaxLoss).toFixed(1) : 'NA';
+
+ // Decision Tree reasoning bullets
+ const reasons = [];
+ if (c.score >= 85) reasons.push({ icon: '&#10003;', cls: 'profit', text: `High score (${c.score}/100) - strong candidate` });
+ else if (c.score >= 65) reasons.push({ icon: '&#9679;', cls: 'info', text: `Moderate score (${c.score}/100) - acceptable` });
+ else reasons.push({ icon: '&#10007;', cls: 'loss', text: `Low score (${c.score}/100) - weak candidate` });
+
+ if (strike === sc.atmStrike) reasons.push({ icon: '&#10003;', cls: 'profit', text: 'ATM strike - maximum theta capture' });
+ else reasons.push({ icon: '&#9679;', cls: 'info', text: `${Math.abs(strike - sc.atmStrike).toFixed(0)} away from ATM` });
+
+ if (Math.abs(theta) > 300) reasons.push({ icon: '&#10003;', cls: 'profit', text: `Strong theta decay ($${dailyThetaPerContract.toFixed(2)}/day/contract)` });
+ else if (Math.abs(theta) > 100) reasons.push({ icon: '&#9679;', cls: 'info', text: `Moderate theta ($${dailyThetaPerContract.toFixed(2)}/day/contract)` });
+ else reasons.push({ icon: '&#10007;', cls: 'loss', text: `Weak theta ($${dailyThetaPerContract.toFixed(2)}/day/contract)` });
+
+ if (iv > 0.30) reasons.push({ icon: '&#10003;', cls: 'profit', text: `IV ${pct(iv * 100, 1)} - elevated, premium rich` });
+ else if (iv > 0.20) reasons.push({ icon: '&#9679;', cls: 'info', text: `IV ${pct(iv * 100, 1)} - moderate` });
+ else reasons.push({ icon: '&#10007;', cls: 'loss', text: `IV ${pct(iv * 100, 1)} - low, thin premium` });
+
+ if (n(c.oiContracts) > 2000) reasons.push({ icon: '&#10003;', cls: 'profit', text: `Good liquidity (OI: ${compact(c.oiContracts)}, Vol: ${compact(c.volume)})` });
+ else if (n(c.oiContracts) > 500) reasons.push({ icon: '&#9679;', cls: 'info', text: `Fair liquidity (OI: ${compact(c.oiContracts)})` });
+ else reasons.push({ icon: '&#10007;', cls: 'loss', text: `Low liquidity (OI: ${compact(c.oiContracts)}) - wider slippage` });
+
+ if (spreadPctVal < 2) reasons.push({ icon: '&#10003;', cls: 'profit', text: `Tight spread (${spreadPctVal.toFixed(1)}%)` });
+ else if (spreadPctVal < 5) reasons.push({ icon: '&#9679;', cls: 'info', text: `Moderate spread (${spreadPctVal.toFixed(1)}%)` });
+ else reasons.push({ icon: '&#10007;', cls: 'loss', text: `Wide spread (${spreadPctVal.toFixed(1)}%) - entry cost high` });
+
+ if (dte < 0.5) reasons.push({ icon: '&#10007;', cls: 'loss', text: `Very short DTE (${dteHours}h) - gamma risk, fast moves hurt` });
+ else if (dte < 2) reasons.push({ icon: '&#9679;', cls: 'info', text: `Short DTE (${days(dte)}) - fast theta but gamma risk` });
+ else reasons.push({ icon: '&#10003;', cls: 'profit', text: `DTE ${days(dte)} - good time for theta collection` });
+
+ const reasonsHtml = reasons.map(r =>
+ `<div class="od-dt-reason ${r.cls}"><span class="od-dt-icon">${r.icon}</span> ${r.text}</div>`
+ ).join('');
+
+ const verdictScore = reasons.filter(r => r.cls === 'profit').length;
+ const verdictTotal = reasons.length;
+ const verdictLabel = verdictScore >= 5 ? 'STRONG SELL' : verdictScore >= 3 ? 'SELL' : verdictScore >= 2 ? 'MARGINAL' : 'AVOID';
+ const verdictCls = verdictScore >= 5 ? 'profit' : verdictScore >= 3 ? 'info' : verdictScore >= 2 ? 'warn' : 'loss';
+
+ decisionPanel = `<div class="od-dt-panel">
+ <div class="od-dt-header">
+ <div class="od-dt-symbol">${esc(c.symbol)}</div>
+ <div class="od-dt-verdict ${verdictCls}">${verdictLabel} (${verdictScore}/${verdictTotal})</div>
+ </div>
+
+ <div class="od-dt-grid">
+ <div class="od-dt-section">
+ <div class="od-dt-section-title">Risk / Reward</div>
+ <div class="od-dt-row"><span>Profit Range</span><strong>$${breakevenLow.toFixed(0)} - $${breakevenHigh.toFixed(0)} (${profitRangePctVal.toFixed(1)}%)</strong></div>
+ <div class="od-dt-row"><span>Max Profit / Ct</span><strong class="profit">$${maxProfitPerContract.toFixed(2)}</strong></div>
+ <div class="od-dt-row"><span>Max Loss / Ct (${slPct}% SL)</span><strong class="loss">$${maxLossPerContract.toFixed(2)}</strong></div>
+ <div class="od-dt-row"><span>R:R Ratio</span><strong>${riskReward}:1</strong></div>
+ <div class="od-dt-row"><span>Breakevens</span><strong>$${breakevenLow.toFixed(0)} / $${breakevenHigh.toFixed(0)}</strong></div>
+ </div>
+
+ <div class="od-dt-section">
+ <div class="od-dt-section-title">Time &amp; Greeks</div>
+ <div class="od-dt-row"><span>Time to Expiry</span><strong>${days(dte)} (${dteHours}h)</strong></div>
+ <div class="od-dt-row"><span>Theta / Day / Ct</span><strong class="profit">$${dailyThetaPerContract.toFixed(2)}</strong></div>
+ <div class="od-dt-row"><span>IV</span><strong>${pct(iv * 100, 1)}</strong></div>
+ <div class="od-dt-row"><span>Delta</span><strong>${n(c.delta).toFixed(3)}</strong></div>
+ <div class="od-dt-row"><span>Gamma</span><strong>${n(c.gamma).toFixed(5)}</strong></div>
+ <div class="od-dt-row"><span>Contract Multiplier</span><strong>${cm}</strong></div>
+ </div>
+ </div>
+
+ <div class="od-dt-section">
+ <div class="od-dt-section-title">Decision Tree</div>
+ ${reasonsHtml}
+ </div>
+
+ <div class="od-dt-order-section">
+ <div class="od-dt-section-title">Size Calculator &amp; Order</div>
+ <div class="od-dt-size-row">
+ <label>Target Profit ($)</label>
+ <input type="number" class="od-dt-input" id="odStraddleTarget" value="${n(state.straddleTargetUSD)}" min="1" max="1000000" step="10" data-straddle-action="set-target"/>
+ <span class="od-dt-arrow">&#8594;</span>
+ <div class="od-dt-calc">
+ <div class="od-dt-calc-item"><span>Est. Qty</span><strong>${estQty}</strong></div>
+ <div class="od-dt-calc-item"><span>Total Premium</span><strong class="profit">$${totalPremium.toFixed(2)}</strong></div>
+ <div class="od-dt-calc-item"><span>Max Loss (${slPct}% SL)</span><strong class="loss">$${totalMaxLoss.toFixed(2)}</strong></div>
+ <div class="od-dt-calc-item"><span>Daily &theta;</span><strong class="profit">$${totalDailyTheta.toFixed(2)}/d</strong></div>
+ </div>
+ </div>
+ <div class="od-dt-order-bar">
+ <div class="od-dt-order-summary">
+ <strong>SELL ${estQty}x ${esc(c.symbol)}</strong>
+ <span>@ $${mark.toFixed(2)} | SL: $${(mark * (1 + slPct / 100)).toFixed(2)} | TP: $0.00</span>
+ </div>
+ <button type="button" class="od-straddle-sell-btn ${state.placing ? 'disabled' : ''}" data-options-action="place-straddle-order" data-symbol="${esc(c.symbol)}" data-product-id="${c.productId}" data-qty="${estQty}" data-mark="${mark}" data-strike="${c.strike}" data-expiry-ts="${c.expiryTs}" data-expiry-key="${c.expiryKey || ''}" data-cm="${cm}" data-score="${c.score}" data-underlying="${c.underlying || state.underlying}" data-spot="${spot}" data-sl-pct="${slPct}">${state.placing ? 'Placing...' : `Sell ${estQty} Straddle${estQty > 1 ? 's' : ''}`}</button>
+ </div>
+ </div>
+ </div>`;
+ }
+
+ return `<div class="od-straddle-mode">${header}${table}${decisionPanel}</div>`;
+ }
+
+ function renderStraddleModeV2() {
+ const sc = state.straddleChain;
+ const loading = state.straddleLoading;
+ const error = state.straddleError;
+ const settings = state.straddleSettings || autoSettings();
+
+ const underlyingTabs = (api.OPTION_UNDERLYINGS || ['BTC', 'ETH']).map(u =>
+ `<button type="button" class="od-ghost-btn ${u === state.underlying ? 'active' : ''}" data-options-action="set-underlying" data-underlying="${u}">${u}</button>`
+ ).join('');
+
+ let expirySelect = '';
+ if (sc?.expiries?.length) {
+ expirySelect = `<select class="od-straddle-expiry-select" data-straddle-action="set-expiry">${sc.expiries.map(e =>
+ `<option value="${esc(e.key)}" ${e.key === sc.expiryKey ? 'selected' : ''}>${esc(e.label)} (${days(e.daysToExpiry)})</option>`
+ ).join('')}</select>`;
+ }
+
+ const header = `<div class="od-straddle-header">
+ <div class="od-underlying-tabs">${underlyingTabs}</div>
+ ${expirySelect}
+ <button type="button" class="od-ghost-btn" data-options-action="refresh-straddle-chain">${loading ? 'Loading...' : 'Refresh'}</button>
+ ${sc ? `<span class="od-straddle-spot">Spot: $${n(sc.underlyingPrice).toFixed(0)}</span><span class="od-straddle-spot">ATM: ${n(sc.atmStrike).toFixed(0)}</span>` : ''}
+ </div>`;
+
+ if (error) return `<div class="od-straddle-mode">${header}<div class="od-top-error">${esc(error)}</div></div>`;
+ if (loading && !sc) return `<div class="od-straddle-mode">${header}<div class="od-loading">Loading straddle contracts...</div></div>`;
+ if (!sc?.contracts?.length) return `<div class="od-straddle-mode">${header}<div class="od-empty">No native straddle (MV-) contracts found for ${esc(state.underlying)}. Click Refresh to fetch.</div></div>`;
+
+ const spot = n(sc.underlyingPrice);
+ const scored = sc.contracts.map(contract => {
+ const analysis = api.analyzeNativeStraddleContract?.(contract, spot, 'neutral', settings, { marketContext: sc?.marketContext }) || { score: getStraddleScore(contract, spot) };
+ return { ...contract, ...analysis, score: Number(analysis.score || 0) };
+ });
+ const best = scored.reduce((current, contract) => (!current || contract.score > current.score ? contract : current), null);
+ const selectedSym = state.straddleSelectedSymbol || (best ? best.symbol : '');
+ const active = scored.find(contract => contract.symbol === selectedSym) || best;
+ const activePreview = state.straddlePreview && state.straddlePreview.symbol === active?.symbol ? state.straddlePreview : null;
+ const activeEntries = Array.isArray(state.straddleDashboard?.entries)
+ ? state.straddleDashboard.entries.filter(entry =>
+ entry?.underlying === state.underlying
+ && entry?.type === 'native_straddle'
+ && ['active', 'partial_stop'].includes(String(entry?.status || ''))
+ )
+ : [];
+ const automation = state.straddleDashboard?.automation || null;
+
+ const rows = scored.map(contract => {
+ const isBest = best && contract.symbol === best.symbol;
+ const isAtm = contract.strike === sc.atmStrike;
+ const isSelected = active && contract.symbol === active.symbol;
+ const barWidth = Math.max(0, Math.min(100, contract.score));
+ return `<tr class="od-straddle-row ${isAtm ? 'is-atm' : ''} ${isBest ? 'is-best' : ''} ${isSelected ? 'is-selected' : ''}" data-options-action="select-straddle-contract" data-symbol="${esc(contract.symbol)}">
+ <td class="od-straddle-strike">${isAtm ? '<span class="od-atm-dot"></span>' : ''}${n(contract.strike).toFixed(0)}</td>
+ <td>$${n(contract.markPrice).toFixed(2)}</td>
+ <td>$${n(contract.bid).toFixed(2)}</td>
+ <td>$${n(contract.ask).toFixed(2)}</td>
+ <td>${compact(contract.volume)}</td>
+ <td>${compact(contract.oiContracts)}</td>
+ <td>${n(contract.theta).toFixed(2)}</td>
+ <td>${pct(n(contract.iv) * 100, 1)}</td>
+ <td><div class="od-straddle-score"><div class="od-straddle-score-fill" style="width:${barWidth}%"></div></div> <span class="od-score-num">${contract.score}</span></td>
+ <td><button type="button" class="od-sell-icon" data-options-action="sell-native-straddle" data-symbol="${esc(contract.symbol)}" data-product-id="${contract.productId}" title="Sell ${esc(contract.symbol)}">S</button></td>
+ </tr>`;
+ }).join('');
+
+ const table = `<div class="od-straddle-table-wrap"><table class="od-straddle-table">
+ <thead><tr><th>Strike</th><th>Mark</th><th>Bid</th><th>Ask</th><th>Vol</th><th>OI</th><th>Theta</th><th>IV</th><th>Score</th><th></th></tr></thead>
+ <tbody>${rows}</tbody>
+ </table></div>`;
+
+ let decisionPanel = '';
+ if (active) {
+ const preview = activePreview?.ok !== false ? (activePreview || api.buildNativeStraddleTicketPreview?.({
+ ...active,
+ qty: estimateStraddleQty(active),
+ spotPrice: spot,
+ entryMode: settings.entryMode,
+ stopLossPct: settings.legStopLossPct,
+ }, settings, { marketContext: sc?.marketContext })) : null;
+ const qty = Math.max(1, Math.round(n(preview?.qty || estimateStraddleQty(active), 1)));
+ const mark = n(preview?.markPrice || active.markPrice);
+ const dte = n(active.daysToExpiry);
+ const dteHours = Math.max(0, Math.round(dte * 24));
+ const score = n(preview?.score || active.score);
+ const softGate = n(preview?.softGateThreshold || settings.minTradeQuality || 70);
+ const canPlace = preview?.canPlace !== false;
+ const warningRequired = !!preview?.warningRequired;
+ const tone = !canPlace ? 'loss' : warningRequired ? 'warn' : score >= 85 ? 'profit' : score >= 70 ? 'info' : 'warn';
+ const settingsCopy = `Mode ${esc(preview?.entryMode || settings.entryMode || 'limit')} | Stop ${n(preview?.stopLossPct || settings.legStopLossPct || 30).toFixed(0)}% | Close ${n(settings.closeMinutesBeforeExpiry || 30)}m pre-expiry${settings.profileId ? ` | Profile ${esc(settings.profileId)}` : ''}`;
+ const reasons = [
+ score >= 85
+ ? { icon: '&#10003;', cls: 'profit', text: `Score ${score}/100 - premium and liquidity are aligned` }
+ : score >= softGate
+ ? { icon: '&#9679;', cls: 'info', text: `Score ${score}/100 - above the advisory gate ${softGate}` }
+ : { icon: '&#9888;', cls: 'warn', text: `Score ${score}/100 - below the advisory gate ${softGate}` },
+ n(active.strike) === n(sc.atmStrike)
+ ? { icon: '&#10003;', cls: 'profit', text: 'ATM strike selected for maximum theta capture' }
+ : { icon: '&#9679;', cls: 'info', text: `${Math.abs(n(active.strike) - n(sc.atmStrike)).toFixed(0)} away from ATM strike` },
+ n(active.spreadPct) <= 2
+ ? { icon: '&#10003;', cls: 'profit', text: `Tight spread ${pct(n(active.spreadPct), 1)}` }
+ : { icon: '&#9888;', cls: 'warn', text: `Spread ${pct(n(active.spreadPct), 1)} needs caution` },
+ n(active.oiContracts) >= 1000
+ ? { icon: '&#10003;', cls: 'profit', text: `Liquidity OI ${compact(active.oiContracts)} | Vol ${compact(active.volume)}` }
+ : { icon: '&#9888;', cls: 'warn', text: `Thin liquidity OI ${compact(active.oiContracts)} | Vol ${compact(active.volume)}` },
+ dte < 1
+ ? { icon: '&#9888;', cls: 'warn', text: `Short DTE ${days(dte)} means faster gamma and tighter management` }
+ : { icon: '&#10003;', cls: 'profit', text: `DTE ${days(dte)} keeps theta attractive without same-hour pressure` },
+ ];
+ if (!canPlace && preview?.reason) reasons.push({ icon: '&#10007;', cls: 'loss', text: preview.reason });
+ const reasonsHtml = reasons.map(reason => `<div class="od-dt-reason ${reason.cls}"><span class="od-dt-icon">${reason.icon}</span> ${reason.text}</div>`).join('');
+ const verdict = !canPlace ? 'BLOCKED' : warningRequired ? 'REVIEW' : score >= 85 ? 'STRONG SELL' : score >= 70 ? 'SELL' : 'MARGINAL';
+
+ decisionPanel = `<div class="od-dt-panel">
+ <div class="od-dt-header">
+ <div class="od-dt-symbol">${esc(active.symbol)}</div>
+ <div class="od-dt-verdict ${tone}">${verdict} | ${score}/100</div>
+ </div>
+ <div class="od-dt-copy">${settingsCopy}</div>
+ <div class="od-dt-grid">
+ <div class="od-dt-section">
+ <div class="od-dt-section-title">Pre-Trade Ticket</div>
+ <div class="od-dt-row"><span>Net Credit</span><strong class="profit">${money(n(preview?.premiumUSD))}</strong></div>
+ <div class="od-dt-row"><span>Estimated Fees</span><strong>${money(n(preview?.estimatedFeesUSD))}</strong></div>
+ <div class="od-dt-row"><span>Est. Margin</span><strong>${money(n(preview?.estimatedMarginUSD))}</strong></div>
+ <div class="od-dt-row"><span>Stop-Loss Risk</span><strong class="loss">${money(n(preview?.stopLossUSD))}</strong></div>
+ <div class="od-dt-row"><span>Break-Even Band</span><strong>$${n(preview?.breakEvenLow).toFixed(0)} - $${n(preview?.breakEvenHigh).toFixed(0)}</strong></div>
+ <div class="od-dt-row"><span>Expected Move Width</span><strong>$${n(preview?.expectedMoveWidth).toFixed(0)} (${spot > 0 ? ((n(preview?.expectedMoveWidth) / spot) * 100).toFixed(1) : '0.0'}%)</strong></div>
+ </div>
+ <div class="od-dt-section">
+ <div class="od-dt-section-title">Time &amp; Contract</div>
+ <div class="od-dt-row"><span>Time to Expiry</span><strong>${days(dte)} (${dteHours}h)</strong></div>
+ <div class="od-dt-row"><span>Theta / Day / Ct</span><strong class="profit">${money(n(active.thetaPerContractUSD || (Math.abs(n(active.theta)) * n(active.contractMultiplier || 1))))}</strong></div>
+ <div class="od-dt-row"><span>IV</span><strong>${pct(n(active.iv) * 100, 1)}</strong></div>
+ <div class="od-dt-row"><span>Delta</span><strong>${n(active.delta).toFixed(3)}</strong></div>
+ <div class="od-dt-row"><span>Gamma</span><strong>${n(active.gamma).toFixed(5)}</strong></div>
+ <div class="od-dt-row"><span>Contract Multiplier</span><strong>${n(active.contractMultiplier || 1)}</strong></div>
+ <div class="od-dt-row"><span>Max Size by Cap</span><strong>${n(preview?.maxContractsByProfileCap || 0) > 0 ? `${n(preview?.maxContractsByProfileCap || 0)} contracts` : 'No cap data'}</strong></div>
+ </div>
+ </div>
+ <div class="od-dt-section">
+ <div class="od-dt-section-title">Decision Tree</div>
+ ${reasonsHtml}
+ </div>
+ <div class="od-dt-order-section">
+ <div class="od-dt-section-title">Sizing &amp; Execution</div>
+ <div class="od-dt-size-row">
+ <label>Target Credit ($)</label>
+ <input type="number" class="od-dt-input" id="odStraddleTarget" value="${n(state.straddleTargetUSD)}" min="1" max="1000000" step="10" data-straddle-action="set-target"/>
+ <span class="od-dt-arrow">&#8594;</span>
+ <div class="od-dt-calc">
+ <div class="od-dt-calc-item"><span>Est. Qty</span><strong>${qty}</strong></div>
+ <div class="od-dt-calc-item"><span>Credit / Ct</span><strong class="profit">${money(n(preview?.premiumPerContract))}</strong></div>
+ <div class="od-dt-calc-item"><span>Soft Gate</span><strong>${softGate}</strong></div>
+ <div class="od-dt-calc-item"><span>Preview</span><strong>${state.straddlePreviewLoading ? 'Updating...' : (canPlace ? 'Ready' : 'Blocked')}</strong></div>
+ </div>
+ </div>
+ ${warningRequired ? `<div class="od-top-error">Score ${score} is below the soft gate ${softGate}. One extra confirmation will be required, but the order stays available while the hard checks pass.</div>` : ''}
+ ${!canPlace && preview?.reason ? `<div class="od-top-error">${esc(preview.reason)}</div>` : ''}
+ <div class="od-dt-order-bar">
+ <div class="od-dt-order-summary">
+ <strong>SELL ${qty}x ${esc(active.symbol)}</strong>
+ <span>@ $${mark.toFixed(2)} | Stop: $${n(preview?.stopPrice).toFixed(2)} | Credit: ${money(n(preview?.premiumUSD))}</span>
+ </div>
+ <button type="button" class="od-straddle-sell-btn ${state.placing || !canPlace ? 'disabled' : ''}" data-options-action="place-straddle-order" data-side="${esc(preview?.orderSide || 'sell')}" data-symbol="${esc(active.symbol)}" data-product-id="${active.productId}" data-qty="${qty}" data-mark="${mark}" data-strike="${active.strike}" data-expiry-ts="${active.expiryTs}" data-expiry-key="${active.expiryKey || ''}" data-cm="${n(active.contractMultiplier || 1)}" data-score="${score}" data-underlying="${active.underlying || state.underlying}" data-spot="${spot}" data-premium-usd="${n(preview?.premiumUSD)}" data-premium-per-contract="${n(preview?.premiumPerContract)}" data-stop-price="${n(preview?.stopPrice)}" data-stop-risk="${n(preview?.stopLossUSD)}" data-fees="${n(preview?.estimatedFeesUSD)}" data-margin="${n(preview?.estimatedMarginUSD)}" data-be-low="${n(preview?.breakEvenLow)}" data-be-high="${n(preview?.breakEvenHigh)}" ${state.placing || !canPlace ? 'disabled' : ''}>${state.placing ? 'Placing...' : `${String(preview?.orderSide || 'sell').toUpperCase()} ${qty} Straddle${qty > 1 ? 's' : ''}`}</button>
+ </div>
+ </div>
+ </div>`;
+ }
+
+ const auditRows = [
+ {
+ label: 'Last Decision',
+ value: automation?.lastDecision || 'not run',
+ meta: automation?.blockedReason || 'No current automation block recorded.',
+ tone: automation?.blockedReason ? 'loss' : 'info',
+ },
+ {
+ label: 'Monitor',
+ value: automation?.monitorEnabled ? 'active' : 'idle',
+ meta: automation?.nextRunAt ? `Next scan ${msShort(Math.max(0, n(automation.nextRunAt) - Date.now()))}` : 'No scheduled monitor run.',
+ tone: automation?.monitorEnabled ? 'profit' : 'warn',
+ },
+ {
+ label: 'Active Native',
+ value: `${activeEntries.length}`,
+ meta: activeEntries.length ? activeEntries.map(entry => entry.symbol || entry.sourceSymbol || entry.id).slice(0, 3).join(', ') : 'No active native straddles.',
+ tone: activeEntries.length ? 'info' : 'profit',
+ },
+ {
+ label: 'Protection Audit',
+ value: activeEntries.some(entry => ['unprotected', 'missing'].includes(String(entry.stopHealth || '').toLowerCase())) ? 'review' : 'clean',
+ meta: activeEntries.some(entry => String(entry.stopHealth || '').toLowerCase() === 'unprotected') ? 'At least one entry is unprotected.' : 'No unprotected live entry detected in dashboard.',
+ tone: activeEntries.some(entry => String(entry.stopHealth || '').toLowerCase() === 'unprotected') ? 'loss' : 'profit',
+ },
+ ];
+ const auditPanel = `<div class="od-straddle-audit-panel">
+ <div class="od-dt-section-title">Audit Trail</div>
+ <div class="od-straddle-audit-grid">${auditRows.map(row => `
+ <div class="od-straddle-audit-item ${toneClass(row.tone)}">
+ <span>${esc(row.label)}</span>
+ <strong>${esc(row.value)}</strong>
+ <small>${esc(row.meta)}</small>
+ </div>`).join('')}</div>
+ </div>`;
+
+ const activeStrip = `<div class="od-dt-section od-straddle-active-strip">
+ <div class="od-dt-section-title">Active ${esc(state.underlying)} Native Straddles</div>
+ ${state.straddleDashboardLoading
+ ? '<div class="od-loading">Refreshing active straddles...</div>'
+ : activeEntries.length
+ ? `<div class="od-straddle-active-list">${activeEntries.map(entry => `
+ <div class="od-straddle-active-row">
+ <div>
+ <strong>${esc(entry.symbol || entry.sourceSymbol || entry.id)}</strong>
+ <div class="od-chain-copy">Qty ${n(entry.qty, 1)} | Credit ${money(entry.premiumUSD)} | Re-entries ${n(entry.reentryCount, 0)}</div>
+ </div>
+ <div class="od-chain-copy">P&amp;L <strong class="${n(entry.totalPnlUSD) >= 0 ? 'profit' : 'loss'}">${money(n(entry.totalPnlUSD))}</strong></div>
+ <div class="od-chain-copy">Stop ${n(entry.stopPrice) > 0 ? `$${n(entry.stopPrice).toFixed(2)}` : '-'}</div>
+ <div class="od-chain-copy">${entry.stopOrderId ? `Stop order ${esc(entry.stopOrderId)}` : 'Stop order pending'}</div>
+ <div class="od-chain-copy">${entry.timeToExpiryMs > 0 ? days(entry.timeToExpiryMs / 86400000) : 'Expired'}</div>
+ <button type="button" class="od-ghost-btn" data-options-action="open-straddle-manage">View in Manage</button>
+ </div>`).join('')}</div>`
+ : '<div class="od-empty">No active native straddles for this underlying. Once one is live, its P&amp;L and stop status will appear here.</div>'}
+ </div>`;
+
+ return `<div class="od-straddle-mode">${header}${table}${decisionPanel}${auditPanel}${activeStrip}</div>`;
+ }
+
+ function normalCdf(value) {
+ const x = n(value);
+ const sign = x < 0 ? -1 : 1;
+ const z = Math.abs(x) / Math.sqrt(2);
+ const t = 1 / (1 + 0.3275911 * z);
+ const erf = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z);
+ return 0.5 * (1 + sign * erf);
+ }
+
+ function buildStraddleProbabilityModel(preview, contract, spot) {
+ const strike = n(contract?.strike || preview?.strike || spot, spot);
+ const dte = Math.max(0.02, n(contract?.daysToExpiry || preview?.daysToExpiry || 1, 1));
+ const iv = Math.max(0.05, n(contract?.iv || preview?.iv || 0.45, 0.45));
+ const expected = Math.max(1, n(preview?.expectedMoveWidth, spot * iv * Math.sqrt(dte / 365)));
+ const low = n(preview?.breakEvenLow, strike - expected);
+ const high = n(preview?.breakEvenHigh, strike + expected);
+ const sigma = Math.max(1, expected / 1.25);
+ const probRange = Math.max(0, Math.min(100, (normalCdf((high - spot) / sigma) - normalCdf((low - spot) / sigma)) * 100));
+ const bandPct = spot > 0 ? ((high - low) / spot) * 100 : 0;
+ const moveLowPct = spot > 0 ? Math.abs(spot - low) / spot * 100 : 0;
+ const moveHighPct = spot > 0 ? Math.abs(high - spot) / spot * 100 : 0;
+ const minMovePct = Math.min(moveLowPct || 0, moveHighPct || 0);
+ const gammaRisk = Math.min(100, Math.max(0, (1 / Math.max(0.15, dte)) * 16 + Math.max(0, 18 - minMovePct) * 2));
+ return {
+ low,
+ high,
+ expected,
+ probRange,
+ bandPct,
+ minMovePct,
+ gammaRisk,
+ expiryLabel: dte < 1 ? 'Same-day gamma' : dte <= 3 ? 'Near expiry' : 'Standard expiry',
+ };
+ }
+
+ function renderStraddleDeskNav(activeTab) {
+ const labels = { find: 'Find Trade', analyze: 'Analyze', manage: 'Manage', history: 'History' };
+ return `<div class="od-straddle-desk-nav" role="tablist">${STRADDLE_DESK_TABS.map(tab => `
+ <button type="button" role="tab" class="${activeTab === tab ? 'active' : ''}" data-options-action="set-straddle-desk-tab" data-tab="${tab}">
+ <span>${esc(labels[tab])}</span>
+ </button>`).join('')}</div>`;
+ }
+
+ function renderStraddlePayoffPanel(preview, contract, spot) {
+ if (!contract) return '';
+ const model = buildStraddleProbabilityModel(preview, contract, spot);
+ const strike = n(contract.strike || spot, spot);
+ const qty = Math.max(1, Math.round(n(preview?.qty || estimateStraddleQty(contract), 1)));
+ const cm = Math.max(0.000001, n(contract.contractMultiplier || preview?.contractMultiplier || 1, 1));
+ const premium = Math.max(0, n(preview?.premiumUSD || preview?.premiumPerContract || contract.markPrice || contract.mark || 0, 0));
+ const range = Math.max(model.expected * 1.8, Math.abs(model.high - model.low) * 0.75, spot * 0.06, 1);
+ const minX = Math.max(1, Math.min(model.low, spot, strike) - range * 0.35);
+ const maxX = Math.max(minX + 1, Math.max(model.high, spot, strike) + range * 0.35);
+ const w = 760;
+ const h = 240;
+ const pad = { l: 42, r: 18, t: 18, b: 32 };
+ const xs = Array.from({ length: 81 }, (_, index) => minX + ((maxX - minX) * index / 80));
+ const payoff = price => premium - (Math.abs(price - strike) * qty * cm);
+ const ys = xs.map(payoff);
+ const yMin = Math.min(...ys, -Math.max(1, premium * 0.8));
+ const yMax = Math.max(...ys, Math.max(1, premium * 0.8));
+ const xScale = price => pad.l + ((price - minX) / Math.max(1, maxX - minX)) * (w - pad.l - pad.r);
+ const yScale = value => pad.t + ((yMax - value) / Math.max(1, yMax - yMin)) * (h - pad.t - pad.b);
+ const line = xs.map((price, index) => `${index ? 'L' : 'M'}${xScale(price).toFixed(1)},${yScale(payoff(price)).toFixed(1)}`).join(' ');
+ const zeroY = yScale(0);
+ const expanded = !!state.straddlePayoffExpanded;
+ const marker = (price, cls, label) => {
+ const x = xScale(price);
+ if (!Number.isFinite(x) || x < pad.l - 2 || x > w - pad.r + 2) return '';
+ return `<g class="od-straddle-payoff-marker ${cls}"><line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${pad.t}" y2="${h - pad.b}"></line><text x="${x.toFixed(1)}" y="${h - 10}" text-anchor="middle">${esc(label)}</text></g>`;
+ };
+ const cards = [
+ { label: 'Probability In Band', value: pct(model.probRange, 0), meta: `$${model.low.toFixed(0)} - $${model.high.toFixed(0)}`, tone: model.probRange >= 58 ? 'profit' : model.probRange >= 46 ? 'info' : 'warn' },
+ { label: 'Move To Breach', value: pct(model.minMovePct, 1), meta: `${pct(model.bandPct, 1)} total band`, tone: model.minMovePct >= 3 ? 'profit' : 'warn' },
+ { label: 'Gamma Pressure', value: pct(model.gammaRisk, 0), meta: model.expiryLabel, tone: model.gammaRisk >= 70 ? 'loss' : model.gammaRisk >= 45 ? 'warn' : 'profit' },
+ ];
+ return `<section class="od-straddle-payoff-panel ${expanded ? 'is-expanded' : ''}">
+ <div class="od-straddle-section-head">
+ <div><span>Risk Map</span><strong>Payoff, break-evens, and probability</strong></div>
+ <div class="od-straddle-payoff-actions">
+ <small>Hover the chart to see estimated P&amp;L at each price.</small>
+ <button type="button" class="od-ghost-btn" data-options-action="toggle-straddle-payoff-size">${expanded ? 'Close Large' : 'Make Large'}</button>
+ </div>
+ </div>
+ <div class="od-straddle-payoff-layout">
+ <div class="od-straddle-payoff-chart">
+ <svg class="od-straddle-payoff-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-label="Straddle payoff chart">
+ <rect x="0" y="0" width="${w}" height="${h}"></rect>
+ <line class="zero" x1="${pad.l}" x2="${w - pad.r}" y1="${zeroY.toFixed(1)}" y2="${zeroY.toFixed(1)}"></line>
+ <path class="band" d="M${xScale(model.low).toFixed(1)},${pad.t} L${xScale(model.high).toFixed(1)},${pad.t} L${xScale(model.high).toFixed(1)},${h - pad.b} L${xScale(model.low).toFixed(1)},${h - pad.b} Z"></path>
+ <path class="line" d="${line}"></path>
+ ${marker(model.low, 'be', 'BE Low')}
+ ${marker(strike, 'strike', 'Strike')}
+ ${marker(spot, 'spot', 'Spot')}
+ ${marker(model.high, 'be', 'BE High')}
+ <text class="axis left" x="${pad.l}" y="${h - 8}">$${minX.toFixed(0)}</text>
+ <text class="axis right" x="${w - pad.r}" y="${h - 8}" text-anchor="end">$${maxX.toFixed(0)}</text>
+ <rect class="od-straddle-payoff-hit" x="${pad.l}" y="${pad.t}" width="${w - pad.l - pad.r}" height="${h - pad.t - pad.b}" data-x-min="${minX}" data-x-max="${maxX}" data-strike="${strike}" data-qty="${qty}" data-cm="${cm}" data-premium="${premium}"></rect>
+ </svg>
+ <div class="od-straddle-payoff-tooltip" data-payoff-tooltip>Move over chart for price and P&amp;L</div>
+ </div>
+ <div class="od-straddle-prob-grid">${cards.map(card => `
+ <div class="od-straddle-prob-card ${toneClass(card.tone)}">
+ <span>${esc(card.label)}</span>
+ <strong>${esc(card.value)}</strong>
+ <small>${esc(card.meta)}</small>
+ </div>`).join('')}</div>
+ </div>
+ </section>`;
+ }
+
+ function renderStraddleCompareCards(preview, contract, scored, spot) {
+ if (!contract) return '';
+ const credit = n(preview?.premiumUSD || contract.markPrice || 0);
+ const model = buildStraddleProbabilityModel(preview, contract, spot);
+ const ranked = (Array.isArray(scored) ? scored : []).slice().sort((a, b) => n(b.score) - n(a.score));
+ const nextBest = ranked.find(item => item.symbol !== contract.symbol) || ranked[1] || null;
+ const ideas = [
+ { label: 'Native Straddle', badge: 'Selected', value: money(credit), meta: `Max theta at ${n(contract.strike).toFixed(0)} strike. Manage tightly after entry.`, tone: 'profit' },
+ { label: 'Wider Strangle', badge: 'Alternative', value: nextBest ? `${n(nextBest.strike).toFixed(0)} area` : 'Builder', meta: 'Lower credit, wider room. Better when spot is moving too much for ATM risk.', tone: 'info' },
+ { label: 'Iron Fly', badge: 'Defined Risk', value: `${pct(model.minMovePct, 1)} room`, meta: 'Add wings when margin, overnight gaps, or account cap are the main concern.', tone: model.gammaRisk > 65 ? 'warn' : 'info' },
+ ];
+ return `<section class="od-straddle-compare-grid">${ideas.map(item => `
+ <div class="od-straddle-compare-card ${toneClass(item.tone)}">
+ <div><span>${esc(item.label)}</span><em>${esc(item.badge)}</em></div>
+ <strong>${esc(item.value)}</strong>
+ <small>${esc(item.meta)}</small>
+ </div>`).join('')}</section>`;
+ }
+
+ function renderStraddleManagementTimeline(preview, entries, settings) {
+ const liveCount = Array.isArray(entries) ? entries.length : 0;
+ const capture = n(settings?.premiumCapturePct || preview?.premiumCapturePct || 0);
+ const stop = n(preview?.stopPrice);
+ const steps = [
+ { label: 'Entry', value: preview ? 'Ticket ready' : 'Select contract', meta: preview ? `${money(n(preview.premiumUSD))} credit planned` : 'Choose a native MV contract first.', tone: preview ? 'profit' : 'warn' },
+ { label: 'Protection', value: stop > 0 ? money(stop) : 'Stop pending', meta: stop > 0 ? 'Static premium stop calculated before order.' : 'No stop value from preview yet.', tone: stop > 0 ? 'profit' : 'loss' },
+ { label: 'Monitor', value: liveCount ? `${liveCount} live` : 'No live trade', meta: liveCount ? 'Dashboard is tracking active native straddles.' : 'Live P&L appears here after placement.', tone: liveCount ? 'info' : 'warn' },
+ { label: 'Exit', value: capture > 0 ? `${capture.toFixed(0)}% capture` : 'Manual close', meta: `Close ${n(settings?.closeMinutesBeforeExpiry || 0)}m before expiry unless stop/target hits.`, tone: 'info' },
+ ];
+ return `<section class="od-straddle-timeline">
+ <div class="od-straddle-section-head"><div><span>Management Plan</span><strong>Entry to exit workflow</strong></div></div>
+ <div class="od-straddle-timeline-grid">${steps.map((stepItem, index) => `
+ <div class="od-straddle-timeline-card ${toneClass(stepItem.tone)}">
+ <b>${index + 1}</b>
+ <span>${esc(stepItem.label)}</span>
+ <strong>${esc(stepItem.value)}</strong>
+ <small>${esc(stepItem.meta)}</small>
+ </div>`).join('')}</div>
+ </section>`;
+ }
+
+ function renderStraddleFinderPanel(scored, active, best, spot) {
+ const ranked = (Array.isArray(scored) ? scored : []).slice().sort((a, b) => n(b.score) - n(a.score)).slice(0, 9);
+ return `<aside class="od-straddle-cockpit-finder">
+ <div class="od-straddle-panel-title">
+ <span>Trade Finder</span>
+ <strong>Ranked native straddles</strong>
+ </div>
+ <div class="od-straddle-finder-list">${ranked.map((contract, index) => {
+ const selected = active && contract.symbol === active.symbol;
+ const tag = best && contract.symbol === best.symbol ? 'Best' : index === 1 ? 'Liquid' : index === 2 ? 'Theta' : 'Rank';
+ const spread = n(contract.spreadPct);
+ const theta = Math.abs(n(contract.thetaPerContractUSD || contract.theta));
+ return `<button type="button" class="od-straddle-finder-card ${selected ? 'active' : ''}" data-options-action="select-straddle-contract" data-symbol="${esc(contract.symbol)}">
+ <div>
+ <strong>${n(contract.strike).toFixed(0)}</strong>
+ <span>${esc(tag)} ${index + 1}</span>
+ </div>
+ <div>
+ <b>${n(contract.score).toFixed(0)}</b>
+ <small>score</small>
+ </div>
+ <footer>
+ <span>${money(n(contract.markPrice))}</span>
+ <span>${pct(spread, 1)} spr</span>
+ <span>${theta.toFixed(2)} th</span>
+ </footer>
+ </button>`;
+ }).join('')}</div>
+ <div class="od-straddle-finder-foot">
+ <span>Spot distance</span>
+ <strong>${active ? Math.abs(n(active.strike) - spot).toFixed(0) : 'NA'} pts</strong>
+ </div>
+ </aside>`;
+ }
+
+ function renderStraddleTopBar(preview, active, spot, sc) {
+ const model = buildStraddleProbabilityModel(preview, active, spot);
+ const marketContext = preview?.marketContext || sc?.marketContext || { underlying: sc?.underlying || 'BTC', sellPremiumScore: 50, label: 'Wait' };
+ const items = [
+ { label: 'Spot', value: `$${spot.toFixed(0)}`, meta: `ATM ${n(sc?.atmStrike).toFixed(0)}` },
+ { label: `${marketContext.underlying || 'BTC'} Score`, value: `${n(marketContext.sellPremiumScore).toFixed(0)}/100`, meta: marketContext.label || 'Wait' },
+ { label: 'Credit', value: money(n(preview?.premiumUSD)), meta: `${n(preview?.qty || estimateStraddleQty(active), 1)} contract` },
+ { label: 'Range Prob', value: pct(model.probRange, 0), meta: `$${model.low.toFixed(0)} - $${model.high.toFixed(0)}` },
+ { label: 'Expected Move', value: `$${model.expected.toFixed(0)}`, meta: pct(spot > 0 ? (model.expected / spot) * 100 : 0, 1) },
+ { label: 'Gamma Risk', value: pct(model.gammaRisk, 0), meta: model.expiryLabel },
+ { label: 'Time Left', value: days(n(active?.daysToExpiry)), meta: `${Math.max(0, Math.round(n(active?.daysToExpiry) * 24))}h` },
+ ];
+ return `<div class="od-straddle-cockpit-top">${items.map(item => `
+ <div class="od-straddle-cockpit-stat">
+ <span>${esc(item.label)}</span>
+ <strong>${esc(item.value)}</strong>
+ <small>${esc(item.meta)}</small>
+ </div>`).join('')}</div>`;
+ }
+
+ function renderStraddleExecutionPanel(payload) {
+ const { active, preview, settings, qty, mark, score, softGate, canPlace, warningRequired, spot } = payload;
+ const marketContext = preview?.marketContext || { underlying: active?.underlying || 'BTC', recommendedSide: 'wait', label: 'Wait', sellPremiumScore: 50 };
+ const sideRead = marketContext.recommendedSide === 'sell' ? 'SELL' : marketContext.recommendedSide === 'buy' ? 'BUY VOL WATCH' : 'WAIT';
+ return `<aside class="od-straddle-cockpit-ticket">
+ <div class="od-straddle-panel-title">
+ <span>Execution</span>
+ <strong>${esc(active.symbol)}</strong>
+ </div>
+ <div class="od-straddle-ticket-stack">
+ <div class="od-straddle-ticket-row"><span>BTC Read</span><strong class="${marketContext.recommendedSide === 'sell' ? 'profit' : marketContext.recommendedSide === 'buy' ? 'loss' : 'warn'}">${esc(sideRead)}</strong></div>
+ <div class="od-straddle-ticket-row"><span>Qty</span><strong>${qty}</strong></div>
+ <div class="od-straddle-ticket-row"><span>Entry</span><strong>$${mark.toFixed(2)}</strong></div>
+ <div class="od-straddle-ticket-row"><span>Net Credit</span><strong class="profit">${money(n(preview?.premiumUSD))}</strong></div>
+ <div class="od-straddle-ticket-row"><span>Stop</span><strong>${money(n(preview?.stopPrice))}</strong></div>
+ <div class="od-straddle-ticket-row"><span>Margin</span><strong>${money(n(preview?.estimatedMarginUSD))}</strong></div>
+ </div>
+ <div class="od-straddle-ticket-size">
+ <label>Target Credit</label>
+ <input type="number" class="od-dt-input" id="odStraddleTargetCockpit" value="${n(state.straddleTargetUSD)}" min="1" max="1000000" step="10" data-straddle-action="set-target"/>
+ </div>
+ <div class="od-straddle-ticket-badges">
+ <span class="${score >= softGate ? 'profit' : 'warn'}">Score ${score}/${softGate}</span>
+ <span class="${toneClass(marketContext.tone)}">${esc(marketContext.underlying || 'BTC')} ${n(marketContext.sellPremiumScore).toFixed(0)}/100</span>
+ <span class="${canPlace ? 'profit' : 'loss'}">${canPlace ? 'Order ready' : 'Blocked'}</span>
+ ${warningRequired ? '<span class="warn">Confirm needed</span>' : ''}
+ </div>
+ ${!canPlace && preview?.reason ? `<div class="od-straddle-ticket-alert">${esc(preview.reason)}</div>` : ''}
+ <button type="button" class="od-straddle-sell-btn od-straddle-cockpit-submit ${state.placing || !canPlace ? 'disabled' : ''}" data-options-action="place-straddle-order" data-side="${esc(preview?.orderSide || 'sell')}" data-symbol="${esc(active.symbol)}" data-product-id="${active.productId}" data-qty="${qty}" data-mark="${mark}" data-strike="${active.strike}" data-expiry-ts="${active.expiryTs}" data-expiry-key="${active.expiryKey || ''}" data-cm="${n(active.contractMultiplier || 1)}" data-score="${score}" data-underlying="${active.underlying || state.underlying}" data-spot="${spot}" data-premium-usd="${n(preview?.premiumUSD)}" data-premium-per-contract="${n(preview?.premiumPerContract)}" data-stop-price="${n(preview?.stopPrice)}" data-stop-risk="${n(preview?.stopLossUSD)}" data-fees="${n(preview?.estimatedFeesUSD)}" data-margin="${n(preview?.estimatedMarginUSD)}" data-be-low="${n(preview?.breakEvenLow)}" data-be-high="${n(preview?.breakEvenHigh)}" ${state.placing || !canPlace ? 'disabled' : ''}>${state.placing ? 'Placing...' : canPlace ? `${String(preview?.orderSide || 'sell').toUpperCase()} Native Straddle` : sideRead}</button>
+ <button type="button" class="od-ghost-btn od-straddle-ticket-link" data-options-action="open-straddle-analyzer">Open Analyzer</button>
+ <small>Stop ${n(preview?.stopLossPct || settings.legStopLossPct || 30).toFixed(0)}% | Capture ${n(settings.premiumCapturePct || preview?.premiumCapturePct || 0).toFixed(0)}% | Close ${n(settings.closeMinutesBeforeExpiry || 0)}m before expiry</small>
+ </aside>`;
+ }
+
+ function renderStraddleModeV3() {
+ const sc = state.straddleChain;
+ const loading = state.straddleLoading;
+ const error = state.straddleError;
+ const settings = state.straddleSettings || autoSettings();
+ const viewMode = state.straddleViewMode === 'advanced' ? 'advanced' : 'simple';
+ const isAdvanced = viewMode === 'advanced';
+ const deskTab = STRADDLE_DESK_TABS.includes(state.straddleDeskTab) ? state.straddleDeskTab : DEFAULT.straddleDeskTab;
+
+ const underlyingTabs = (api.OPTION_UNDERLYINGS || ['BTC', 'ETH']).map(u =>
+ `<button type="button" class="od-ghost-btn ${u === state.underlying ? 'active' : ''}" data-options-action="set-underlying" data-underlying="${u}">${u}</button>`
+ ).join('');
+
+ let expirySelect = '';
+ if (sc?.expiries?.length) {
+ expirySelect = `<select class="od-straddle-expiry-select" data-straddle-action="set-expiry">${sc.expiries.map(e =>
+ `<option value="${esc(e.key)}" ${e.key === sc.expiryKey ? 'selected' : ''}>${esc(e.label)} (${days(e.daysToExpiry)})</option>`
+ ).join('')}</select>`;
+ }
+
+ const header = `<div class="od-straddle-header od-straddle-header--desk">
+ <div class="od-straddle-title">
+ <strong>Native Straddle Desk</strong>
+ <small>Find the trade, inspect payoff and probability, manage open risk, and review decision history.</small>
+ </div>
+ <div class="od-straddle-controls">
+ <div class="od-underlying-tabs">${underlyingTabs}</div>
+ ${expirySelect}
+ <button type="button" class="od-ghost-btn" data-options-action="refresh-straddle-chain">${loading ? 'Loading...' : 'Refresh'}</button>
+ <div class="od-straddle-view-toggle" aria-label="Straddle view mode">
+ <button type="button" class="${viewMode === 'simple' ? 'active' : ''}" data-options-action="set-straddle-view" data-view-mode="simple">Simple</button>
+ <button type="button" class="${viewMode === 'advanced' ? 'active' : ''}" data-options-action="set-straddle-view" data-view-mode="advanced">Advanced</button>
+ </div>
+ </div>
+ ${sc ? `<div class="od-straddle-market-strip"><span>Spot <strong>$${n(sc.underlyingPrice).toFixed(0)}</strong></span><span>ATM <strong>${n(sc.atmStrike).toFixed(0)}</strong></span><span>${sc.contracts?.length || 0} native contracts</span></div>` : ''}
+ </div>`;
+
+ if (error) return `<div class="od-straddle-mode">${header}<div class="od-top-error">${esc(error)}</div></div>`;
+ if (loading && !sc) return `<div class="od-straddle-mode">${header}<div class="od-loading">Loading straddle contracts...</div></div>`;
+ if (!sc?.contracts?.length) return `<div class="od-straddle-mode">${header}<div class="od-empty">No native straddle (MV-) contracts found for ${esc(state.underlying)}. Click Refresh to fetch.</div></div>`;
+
+ const spot = n(sc.underlyingPrice);
+ const scored = sc.contracts.map(contract => {
+ const analysis = api.analyzeNativeStraddleContract?.(contract, spot, 'neutral', settings, { marketContext: sc?.marketContext }) || { score: getStraddleScore(contract, spot) };
+ return { ...contract, ...analysis, score: Number(analysis.score || 0) };
+ });
+ const best = scored.reduce((current, contract) => (!current || contract.score > current.score ? contract : current), null);
+ const selectedSym = state.straddleSelectedSymbol || (best ? best.symbol : '');
+ const active = scored.find(contract => contract.symbol === selectedSym) || best;
+ const activePreview = state.straddlePreview && state.straddlePreview.symbol === active?.symbol ? state.straddlePreview : null;
+ const activeEntries = Array.isArray(state.straddleDashboard?.entries)
+ ? state.straddleDashboard.entries.filter(entry =>
+ entry?.underlying === state.underlying
+ && entry?.type === 'native_straddle'
+ && ['active', 'partial_stop'].includes(String(entry?.status || ''))
+ )
+ : [];
+ const automation = state.straddleDashboard?.automation || null;
+ const deskNav = renderStraddleDeskNav(deskTab);
+
+ const rows = scored.map(contract => {
+ const isBest = best && contract.symbol === best.symbol;
+ const isAtm = contract.strike === sc.atmStrike;
+ const isSelected = active && contract.symbol === active.symbol;
+ const barWidth = Math.max(0, Math.min(100, contract.score));
+ return `<tr class="od-straddle-row ${isAtm ? 'is-atm' : ''} ${isBest ? 'is-best' : ''} ${isSelected ? 'is-selected' : ''}" data-options-action="select-straddle-contract" data-symbol="${esc(contract.symbol)}">
+ <td class="od-straddle-strike">${isAtm ? '<span class="od-atm-dot"></span>' : ''}${n(contract.strike).toFixed(0)}</td>
+ <td>$${n(contract.markPrice).toFixed(2)}</td>
+ <td>$${n(contract.bid).toFixed(2)}</td>
+ <td>$${n(contract.ask).toFixed(2)}</td>
+ <td>${compact(contract.volume)}</td>
+ <td>${compact(contract.oiContracts)}</td>
+ <td>${n(contract.theta).toFixed(2)}</td>
+ <td>${pct(n(contract.iv) * 100, 1)}</td>
+ <td><div class="od-straddle-score"><div class="od-straddle-score-fill" style="width:${barWidth}%"></div></div> <span class="od-score-num">${contract.score}</span></td>
+ <td><button type="button" class="od-sell-icon" data-options-action="sell-native-straddle" data-symbol="${esc(contract.symbol)}" data-product-id="${contract.productId}" title="Sell ${esc(contract.symbol)}">S</button></td>
+ </tr>`;
+ }).join('');
+
+ const table = isAdvanced ? `<div class="od-straddle-table-wrap"><table class="od-straddle-table">
+ <thead><tr><th>Strike</th><th>Mark</th><th>Bid</th><th>Ask</th><th>Vol</th><th>OI</th><th>Theta</th><th>IV</th><th>Score</th><th></th></tr></thead>
+ <tbody>${rows}</tbody>
+ </table></div>` : '';
+
+ let decisionPanel = '';
+ if (active) {
+ const preview = activePreview?.ok !== false ? (activePreview || api.buildNativeStraddleTicketPreview?.({
+ ...active,
+ qty: estimateStraddleQty(active),
+ spotPrice: spot,
+ entryMode: settings.entryMode,
+ stopLossPct: settings.legStopLossPct,
+ }, settings, { marketContext: sc?.marketContext })) : null;
+ const qty = Math.max(1, Math.round(n(preview?.qty || estimateStraddleQty(active), 1)));
+ const mark = n(preview?.markPrice || active.markPrice);
+ const dte = n(active.daysToExpiry);
+ const dteHours = Math.max(0, Math.round(dte * 24));
+ const score = n(preview?.score || active.score);
+ const softGate = n(preview?.softGateThreshold || settings.minTradeQuality || 70);
+ const canPlace = preview?.canPlace !== false;
+ const warningRequired = !!preview?.warningRequired;
+ const verdictTone = !canPlace ? 'loss' : warningRequired ? 'warn' : score >= 85 ? 'profit' : score >= softGate ? 'info' : 'warn';
+ const verdict = !canPlace ? 'BLOCKED' : warningRequired ? 'REVIEW' : score >= 85 ? 'STRONG SELL' : score >= softGate ? 'SELL' : 'WATCH';
+ const regime = preview?.regime || { label: 'Watch', tone: 'warn', summary: '' };
+ const marketContext = preview?.marketContext || sc?.marketContext || active?.marketContext || { underlying: state.underlying || 'BTC', sellPremiumScore: 50, recommendedSide: 'wait', label: 'Wait', tone: 'warn', summary: 'Market score is not loaded yet.' };
+ const sideRead = marketContext.recommendedSide === 'sell' ? 'SELL STRADDLE' : marketContext.recommendedSide === 'buy' ? 'BUY VOL / DO NOT SELL' : 'WAIT';
+ const expiryRisk = preview?.expiryRisk || { label: 'Watch', tone: 'warn', summary: '' };
+ const hardChecks = Array.isArray(preview?.hardChecks) ? preview.hardChecks : [];
+ const blockedReasons = Array.isArray(preview?.blockedReasons) ? preview.blockedReasons : [];
+ const thesis = Array.isArray(preview?.contractThesis) ? preview.contractThesis : [];
+ const settingsCopy = `Mode ${esc(preview?.entryMode || settings.entryMode || 'limit')} | Stop ${n(preview?.stopLossPct || settings.legStopLossPct || 30).toFixed(0)}% | Close ${n(settings.closeMinutesBeforeExpiry || 30)}m pre-expiry${settings.profileId ? ` | Profile ${esc(settings.profileId)}` : ''}`;
+ const baseReasons = [
+ score >= 85
+ ? { icon: '&#10003;', cls: 'profit', text: `Score ${score}/100 - premium and liquidity are aligned.` }
+ : score >= softGate
+ ? { icon: '&#9679;', cls: 'info', text: `Score ${score}/100 - above the advisory gate ${softGate}.` }
+ : { icon: '&#9888;', cls: 'warn', text: `Score ${score}/100 - below the advisory gate ${softGate}.` },
+ marketContext.recommendedSide === 'sell'
+ ? { icon: '&#10003;', cls: 'profit', text: `${marketContext.underlying || 'BTC'} score ${n(marketContext.sellPremiumScore).toFixed(0)}/100 supports selling premium.` }
+ : marketContext.recommendedSide === 'buy'
+ ? { icon: '&#10007;', cls: 'loss', text: `${marketContext.underlying || 'BTC'} score ${n(marketContext.sellPremiumScore).toFixed(0)}/100 favors buying volatility or skipping short premium.` }
+ : { icon: '&#9888;', cls: 'warn', text: `${marketContext.underlying || 'BTC'} score ${n(marketContext.sellPremiumScore).toFixed(0)}/100 says wait before selling premium.` },
+ n(active.strike) === n(sc.atmStrike)
+ ? { icon: '&#10003;', cls: 'profit', text: 'ATM strike selected for maximum theta capture.' }
+ : { icon: '&#9679;', cls: 'info', text: `${Math.abs(n(active.strike) - n(sc.atmStrike)).toFixed(0)} points away from ATM.` },
+ n(active.spreadPct) <= 2
+ ? { icon: '&#10003;', cls: 'profit', text: `Spread is tight at ${pct(n(active.spreadPct), 1)}.` }
+ : { icon: '&#9888;', cls: 'warn', text: `Spread is wider at ${pct(n(active.spreadPct), 1)}.` },
+ n(active.oiContracts) >= 1000
+ ? { icon: '&#10003;', cls: 'profit', text: `Liquidity looks usable with OI ${compact(active.oiContracts)} and vol ${compact(active.volume)}.` }
+ : { icon: '&#9888;', cls: 'warn', text: `Liquidity is thin with OI ${compact(active.oiContracts)} and vol ${compact(active.volume)}.` },
+ dte < 1
+ ? { icon: '&#9888;', cls: 'warn', text: `Short DTE ${days(dte)} means faster gamma and tighter management.` }
+ : { icon: '&#10003;', cls: 'profit', text: `DTE ${days(dte)} keeps theta attractive without same-hour pressure.` },
+ ];
+ const checkReasons = hardChecks.map(check => ({
+ icon: check?.passed ? '&#10003;' : '&#10007;',
+ cls: check?.passed ? 'profit' : 'loss',
+ text: `${check?.label || 'Check'}: ${check?.detail || (check?.passed ? 'passed' : 'failed')}`,
+ }));
+ const visibleReasons = isAdvanced
+ ? [...baseReasons, ...checkReasons]
+ : [
+ ...baseReasons.slice(0, 3),
+ ...checkReasons.filter(reason => reason.cls === 'loss').slice(0, 4),
+ ];
+ const reasonsHtml = visibleReasons.map(reason => `<div class="od-dt-reason ${reason.cls}"><span class="od-dt-icon">${reason.icon}</span> ${esc(reason.text)}</div>`).join('');
+ const automationBlocked = String(automation?.blockedReason || '').trim();
+ const railItems = [
+ {
+ label: 'Automation',
+ value: settings.straddleEnabled ? 'Enabled' : 'Disabled',
+ meta: automation?.monitorEnabled ? 'Monitor armed' : 'Idle',
+ tone: settings.straddleEnabled ? 'profit' : 'warn',
+ },
+ {
+ label: 'Profile',
+ value: settings.profileId || 'Default',
+ meta: settings.nativeStraddlePreferred ? 'Native straddle preferred' : 'Fallback off',
+ tone: 'info',
+ },
+ {
+ label: 'Daily Used',
+ value: `${n(automation?.dailyUsed, 0)}/${n(automation?.dailyLimit || settings.maxStrategiesPerDay || 0, 0) || '-'}`,
+ meta: automation?.lastPlacedSymbol ? `Last placed ${automation.lastPlacedSymbol}` : 'No placements yet',
+ tone: n(automation?.dailyLimit || settings.maxStrategiesPerDay || 0) > 0 && n(automation?.dailyUsed, 0) >= n(automation?.dailyLimit || settings.maxStrategiesPerDay || 0) ? 'warn' : 'info',
+ },
+ {
+ label: 'Concurrent',
+ value: `${n(automation?.concurrentUsed, 0)}/${n(automation?.concurrentLimit || settings.maxConcurrentStrategies || 0, 0) || '-'}`,
+ meta: Array.isArray(automation?.activeUnderlyings) && automation.activeUnderlyings.length ? automation.activeUnderlyings.join(', ') : 'No live underlyings',
+ tone: n(automation?.concurrentLimit || settings.maxConcurrentStrategies || 0) > 0 && n(automation?.concurrentUsed, 0) >= n(automation?.concurrentLimit || settings.maxConcurrentStrategies || 0) ? 'warn' : 'info',
+ },
+ {
+ label: 'Cooldown',
+ value: msShort(automation?.cooldownRemainingMs),
+ meta: automation?.nextRunAt ? `Next scan ${msShort(Math.max(0, n(automation.nextRunAt) - Date.now()))}` : 'No scan scheduled',
+ tone: n(automation?.cooldownRemainingMs, 0) > 0 ? 'warn' : 'profit',
+ },
+ {
+ label: 'Decision',
+ value: automation?.lastDecision || (canPlace ? 'ready' : 'blocked'),
+ meta: automationBlocked || (preview?.reason || 'No hard blockers'),
+ tone: automationBlocked || !canPlace ? 'loss' : 'profit',
+ },
+ ];
+ const automationRail = isAdvanced ? `<div class="od-straddle-rail">${railItems.map(item => `
+ <div class="od-straddle-rail-item ${toneClass(item.tone)}">
+ <span>${esc(item.label)}</span>
+ <strong>${esc(item.value)}</strong>
+ <small>${esc(item.meta)}</small>
+ </div>`).join('')}</div>` : '';
+ const overviewCards = [
+ { label: `${marketContext.underlying || 'BTC'} Score`, value: `${n(marketContext.sellPremiumScore).toFixed(0)}/100`, meta: marketContext.summary || sideRead, tone: toneClass(marketContext.tone) },
+ { label: 'Regime', value: regime.label || 'Watch', meta: regime.summary || 'Regime context is thin.', tone: toneClass(regime.tone) },
+ { label: 'Expiry Risk', value: expiryRisk.label || 'Watch', meta: expiryRisk.summary || 'Gamma state is neutral.', tone: toneClass(expiryRisk.tone) },
+ { label: '25D RR / BF', value: `${n(preview?.riskReversal25d).toFixed(1)} / ${n(preview?.butterfly25d).toFixed(1)}`, meta: preview?.skewVetoTriggered ? 'Downside skew veto is active.' : 'Skew is acceptable for entry.', tone: preview?.skewVetoTriggered ? 'loss' : 'info' },
+ { label: 'Account Impact', value: `${n(preview?.profileCapUsagePct).toFixed(0)}% cap`, meta: `${n(preview?.strategyBudgetUsagePct).toFixed(0)}% of strategy budget`, tone: n(preview?.profileCapUsagePct) >= 85 || n(preview?.strategyBudgetUsagePct) >= 85 ? 'warn' : 'profit' },
+ ];
+ const overviewHtml = `<div class="od-straddle-overview">${overviewCards.map(card => `
+ <div class="od-straddle-overview-card ${toneClass(card.tone)}">
+ <span>${esc(card.label)}</span>
+ <strong>${esc(card.value)}</strong>
+ <small>${esc(card.meta)}</small>
+ </div>`).join('')}</div>`;
+ const thesisHtml = isAdvanced && thesis.length ? `<div class="od-straddle-kpi-grid">${thesis.map(item => `
+ <div class="od-straddle-kpi">
+ <span>${esc(item.label || item.key || 'Metric')}</span>
+ <strong>${esc(item.value || '-')}</strong>
+ </div>`).join('')}</div>` : '';
+ const blockedHtml = blockedReasons.length
+ ? `<div class="od-dt-section">
+ <div class="od-dt-section-title">No-Trade Reasons</div>
+ ${blockedReasons.map(reason => `<div class="od-dt-reason loss"><span class="od-dt-icon">&#10007;</span> ${esc(reason)}</div>`).join('')}
+ </div>`
+ : '';
+ const hardStopSummary = `Static stop only. Premium capture closes at ${n(settings.premiumCapturePct || preview?.premiumCapturePct || 0).toFixed(0)}%.`;
+
+ const ticketHero = `<div class="od-straddle-ticket-hero ${verdictTone}">
+ <div>
+ <span>${esc(sideRead)}</span>
+ <strong>${esc(active.symbol)}</strong>
+ <small>${esc(marketContext.label || 'Market')} | ${esc(regime.label || 'Regime')} | ${canPlace ? 'Hard checks passed' : 'Hard block active'}</small>
+ </div>
+ <div>
+ <span>Credit</span>
+ <strong class="profit">${money(n(preview?.premiumUSD))}</strong>
+ <small>${qty} contract${qty === 1 ? '' : 's'} @ $${mark.toFixed(2)}</small>
+ </div>
+ <div>
+ <span>Stop Risk</span>
+ <strong class="loss">${money(n(preview?.stopLossUSD))}</strong>
+ <small>Stop $${n(preview?.stopPrice).toFixed(2)} | Capture ${n(settings.premiumCapturePct || preview?.premiumCapturePct || 0).toFixed(0)}%</small>
+ </div>
+ <div>
+ <span>Break-Evens</span>
+ <strong>$${n(preview?.breakEvenLow).toFixed(0)} / $${n(preview?.breakEvenHigh).toFixed(0)}</strong>
+ <small>Spot $${spot.toFixed(0)} | ${days(dte)} left</small>
+ </div>
+ </div>`;
+ const payoffPanel = renderStraddlePayoffPanel(preview, active, spot);
+ const compareCards = renderStraddleCompareCards(preview, active, scored, spot);
+ const timelinePanel = renderStraddleManagementTimeline(preview, activeEntries, settings);
+ const finderPanel = renderStraddleFinderPanel(scored, active, best, spot);
+ const topBar = renderStraddleTopBar(preview, active, spot, sc);
+ const executionPanel = renderStraddleExecutionPanel({ active, preview, settings, qty, mark, score, softGate, canPlace, warningRequired, spot });
+ const model = buildStraddleProbabilityModel(preview, active, spot);
+ const analysisDeepPanel = `<section class="od-straddle-analysis-grid">
+ ${[
+ { label: 'Downside Room', value: `$${model.low.toFixed(0)}`, meta: `${pct(spot > 0 ? Math.abs(spot - model.low) / spot * 100 : 0, 1)} below spot`, tone: 'info' },
+ { label: 'Upside Room', value: `$${model.high.toFixed(0)}`, meta: `${pct(spot > 0 ? Math.abs(model.high - spot) / spot * 100 : 0, 1)} above spot`, tone: 'info' },
+ { label: 'Theta / Margin', value: `${n(preview?.thetaMarginRatioPct).toFixed(2)}%`, meta: `${money(n(active.thetaPerContractUSD || Math.abs(n(active.theta))))} theta / ct`, tone: n(preview?.thetaMarginRatioPct) >= n(settings.minThetaMarginRatioPct || 0) ? 'profit' : 'warn' },
+ { label: 'Liquidity', value: `${compact(active.oiContracts)} OI`, meta: `${compact(active.volume)} vol | ${pct(n(active.spreadPct), 1)} spread`, tone: n(active.spreadPct) <= 2 ? 'profit' : 'warn' },
+ { label: 'Capital Use', value: `${n(preview?.profileCapUsagePct).toFixed(0)}%`, meta: `${money(n(preview?.estimatedMarginUSD))} margin`, tone: n(preview?.profileCapUsagePct) >= 85 ? 'warn' : 'profit' },
+ { label: 'Stop Risk', value: money(n(preview?.stopLossUSD)), meta: `Stop price ${money(n(preview?.stopPrice))}`, tone: n(preview?.stopLossUSD) > 0 ? 'warn' : 'info' },
+ ].map(card => `<div class="od-straddle-analysis-card ${toneClass(card.tone)}"><span>${esc(card.label)}</span><strong>${esc(card.value)}</strong><small>${esc(card.meta)}</small></div>`).join('')}
+ </section>`;
+ const deskFeatureBlock = deskTab === 'find'
+ ? `${payoffPanel}${compareCards}`
+ : deskTab === 'analyze'
+ ? `${payoffPanel}${overviewHtml}${thesisHtml}`
+ : deskTab === 'manage'
+ ? `${timelinePanel}${activeEntries.length ? '' : '<div class="od-empty od-straddle-compact-empty">No active position yet. Place a native straddle first, then manage stop, capture, and expiry here.</div>'}`
+ : `${timelinePanel}`;
+ const cockpitCenter = deskTab === 'analyze'
+ ? `${payoffPanel}${analysisDeepPanel}${overviewHtml}`
+ : deskTab === 'manage' || deskTab === 'history'
+ ? `${timelinePanel}${activeEntries.length ? '<div class="od-straddle-cockpit-note">Live positions and audit detail appear below the cockpit.</div>' : ''}`
+ : `${payoffPanel}${compareCards}${overviewHtml}`;
+ const cockpit = `<div class="od-straddle-cockpit">
+ ${finderPanel}
+ <main class="od-straddle-cockpit-main">${cockpitCenter}</main>
+ ${executionPanel}
+ </div>`;
+
+ decisionPanel = `<div class="od-dt-panel ${isAdvanced ? 'od-straddle-advanced' : 'od-straddle-simple'}">
+ ${deskNav}
+ ${topBar}
+ ${cockpit}
+ <details class="od-straddle-detail-drawer">
+ <summary>Advanced details, scoring, and safety checks</summary>
+ <div class="od-dt-header">
+ <div class="od-dt-symbol">${esc(active.symbol)}</div>
+ <div class="od-dt-verdict ${verdictTone}">${verdict} | ${score}/100</div>
+ </div>
+ <div class="od-dt-copy">${settingsCopy}</div>
+ ${ticketHero}
+ ${deskFeatureBlock}
+ ${automationRail}
+ ${deskTab === 'find' || deskTab === 'manage' || deskTab === 'history' ? overviewHtml : ''}
+ ${deskTab === 'find' || deskTab === 'manage' || deskTab === 'history' ? thesisHtml : ''}
+ <div class="od-dt-grid od-dt-grid-wide">
+ <div class="od-dt-section">
+ <div class="od-dt-section-title">Pre-Trade Ticket</div>
+ <div class="od-dt-row"><span>Net Credit</span><strong class="profit">${money(n(preview?.premiumUSD))}</strong></div>
+ <div class="od-dt-row"><span>Credit / Contract</span><strong class="profit">${money(n(preview?.premiumPerContract))}</strong></div>
+ <div class="od-dt-row"><span>Estimated Fees</span><strong>${money(n(preview?.estimatedFeesUSD))}</strong></div>
+ <div class="od-dt-row"><span>Estimated Margin</span><strong>${money(n(preview?.estimatedMarginUSD))}</strong></div>
+ <div class="od-dt-row"><span>Stop-Loss Risk</span><strong class="loss">${money(n(preview?.stopLossUSD))}</strong></div>
+ <div class="od-dt-row"><span>Break-Even Band</span><strong>$${n(preview?.breakEvenLow).toFixed(0)} - $${n(preview?.breakEvenHigh).toFixed(0)}</strong></div>
+ <div class="od-dt-row"><span>Expected Move Width</span><strong>$${n(preview?.expectedMoveWidth).toFixed(0)} (${spot > 0 ? ((n(preview?.expectedMoveWidth) / spot) * 100).toFixed(1) : '0.0'}%)</strong></div>
+ </div>
+ <div class="od-dt-section">
+ <div class="od-dt-section-title">Account Impact</div>
+ <div class="od-dt-row"><span>Cap Usage</span><strong>${n(preview?.profileCapUsagePct).toFixed(0)}%</strong></div>
+ <div class="od-dt-row"><span>Strategy Budget</span><strong>${money(n(preview?.strategyBudgetUSD))}</strong></div>
+ <div class="od-dt-row"><span>Budget Usage</span><strong>${n(preview?.strategyBudgetUsagePct).toFixed(0)}%</strong></div>
+ <div class="od-dt-row"><span>Max Size by Cap</span><strong>${n(preview?.maxContractsByProfileCap || 0) > 0 ? `${n(preview?.maxContractsByProfileCap || 0)} contracts` : 'No cap data'}</strong></div>
+ <div class="od-dt-row"><span>Theta / Margin</span><strong class="${n(preview?.thetaMarginRatioPct) >= n(settings.minThetaMarginRatioPct || 0) ? 'profit' : 'loss'}">${n(preview?.thetaMarginRatioPct).toFixed(2)}% / day</strong></div>
+ <div class="od-dt-row"><span>Credit / Spot</span><strong>${n(preview?.premiumToSpotPct).toFixed(2)}%</strong></div>
+ </div>
+ <div class="od-dt-section">
+ <div class="od-dt-section-title">Time &amp; Contract</div>
+ <div class="od-dt-row"><span>Time to Expiry</span><strong>${days(dte)} (${dteHours}h)</strong></div>
+ <div class="od-dt-row"><span>Theta / Day / Ct</span><strong class="profit">${money(n(active.thetaPerContractUSD || (Math.abs(n(active.theta)) * n(active.contractMultiplier || 1))))}</strong></div>
+ <div class="od-dt-row"><span>IV</span><strong>${pct(n(active.iv) * 100, 1)}</strong></div>
+ <div class="od-dt-row"><span>Delta</span><strong>${n(active.delta).toFixed(3)}</strong></div>
+ <div class="od-dt-row"><span>Gamma</span><strong>${n(active.gamma).toFixed(5)}</strong></div>
+ <div class="od-dt-row"><span>Contract Multiplier</span><strong>${n(active.contractMultiplier || 1)}</strong></div>
+ </div>
+ <div class="od-dt-section">
+ <div class="od-dt-section-title">Stop Health</div>
+ <div class="od-dt-row"><span>Protection Mode</span><strong class="warn">Static stop</strong></div>
+ <div class="od-dt-row"><span>Entry Stop</span><strong>${money(n(preview?.stopPrice))}</strong></div>
+ <div class="od-dt-row"><span>Premium Capture</span><strong>${n(settings.premiumCapturePct || preview?.premiumCapturePct || 0).toFixed(0)}%</strong></div>
+ <div class="od-dt-row"><span>Order Aging Cutoff</span><strong>${n(settings.entryOrderMaxAgeMinutes || 0)}m</strong></div>
+ <div class="od-dt-row"><span>Close Before Expiry</span><strong>${n(settings.closeMinutesBeforeExpiry || 0)}m</strong></div>
+ <div class="od-chain-copy">${esc(hardStopSummary)}</div>
+ </div>
+ </div>
+ <div class="od-dt-section">
+ <div class="od-dt-section-title">Decision Tree</div>
+ ${reasonsHtml}
+ </div>
+ ${blockedHtml}
+ <div class="od-dt-order-section">
+ <div class="od-dt-section-title">Sizing &amp; Execution</div>
+ <div class="od-dt-size-row">
+ <label>Target Credit ($)</label>
+ <input type="number" class="od-dt-input" id="odStraddleTarget" value="${n(state.straddleTargetUSD)}" min="1" max="1000000" step="10" data-straddle-action="set-target"/>
+ <span class="od-dt-arrow">&#8594;</span>
+ <div class="od-dt-calc">
+ <div class="od-dt-calc-item"><span>Est. Qty</span><strong>${qty}</strong></div>
+ <div class="od-dt-calc-item"><span>Credit / Ct</span><strong class="profit">${money(n(preview?.premiumPerContract))}</strong></div>
+ <div class="od-dt-calc-item"><span>Soft Gate</span><strong>${softGate}</strong></div>
+ <div class="od-dt-calc-item"><span>Preview</span><strong>${state.straddlePreviewLoading ? 'Updating...' : (canPlace ? 'Ready' : 'Blocked')}</strong></div>
+ </div>
+ </div>
+ ${warningRequired ? `<div class="od-top-error">Score ${score} is below the soft gate ${softGate}. One extra confirmation will be required, but the order stays available while the hard checks pass.</div>` : ''}
+ ${!canPlace && preview?.reason ? `<div class="od-top-error">${esc(preview.reason)}</div>` : ''}
+ <div class="od-dt-order-bar">
+ <div class="od-dt-order-summary">
+ <strong>SELL ${qty}x ${esc(active.symbol)}</strong>
+ <span>@ $${mark.toFixed(2)} | Stop: $${n(preview?.stopPrice).toFixed(2)} | Credit: ${money(n(preview?.premiumUSD))} | Capture: ${n(settings.premiumCapturePct || preview?.premiumCapturePct || 0).toFixed(0)}%</span>
+ </div>
+ <button type="button" class="od-ghost-btn" data-options-action="open-straddle-analyzer">Open in Analyzer</button>
+ <button type="button" class="od-straddle-sell-btn ${state.placing || !canPlace ? 'disabled' : ''}" data-options-action="place-straddle-order" data-side="${esc(preview?.orderSide || 'sell')}" data-symbol="${esc(active.symbol)}" data-product-id="${active.productId}" data-qty="${qty}" data-mark="${mark}" data-strike="${active.strike}" data-expiry-ts="${active.expiryTs}" data-expiry-key="${active.expiryKey || ''}" data-cm="${n(active.contractMultiplier || 1)}" data-score="${score}" data-underlying="${active.underlying || state.underlying}" data-spot="${spot}" ${state.placing || !canPlace ? 'disabled' : ''}>${state.placing ? 'Placing...' : `${String(preview?.orderSide || 'sell').toUpperCase()} ${qty} Straddle${qty > 1 ? 's' : ''}`}</button>
+ </div>
+ </div>
+ </details>
+ </div>`;
+ }
+
+ const auditRows = [
+ {
+ label: 'Last Decision',
+ value: automation?.lastDecision || 'not run',
+ meta: automation?.blockedReason || 'No current automation block recorded.',
+ tone: automation?.blockedReason ? 'loss' : 'info',
+ },
+ {
+ label: 'Monitor',
+ value: automation?.monitorEnabled ? 'active' : 'idle',
+ meta: automation?.nextRunAt ? `Next scan ${msShort(Math.max(0, n(automation.nextRunAt) - Date.now()))}` : 'No scheduled monitor run.',
+ tone: automation?.monitorEnabled ? 'profit' : 'warn',
+ },
+ {
+ label: 'Active Native',
+ value: `${activeEntries.length}`,
+ meta: activeEntries.length ? activeEntries.map(entry => entry.symbol || entry.sourceSymbol || entry.id).slice(0, 3).join(', ') : 'No active native straddles.',
+ tone: activeEntries.length ? 'info' : 'profit',
+ },
+ {
+ label: 'Protection Audit',
+ value: activeEntries.some(entry => ['unprotected', 'missing'].includes(String(entry.stopHealth || '').toLowerCase())) ? 'review' : 'clean',
+ meta: activeEntries.some(entry => String(entry.stopHealth || '').toLowerCase() === 'unprotected') ? 'At least one entry is unprotected.' : 'No unprotected live entry detected in dashboard.',
+ tone: activeEntries.some(entry => String(entry.stopHealth || '').toLowerCase() === 'unprotected') ? 'loss' : 'profit',
+ },
+ ];
+ const auditPanel = `<div class="od-straddle-audit-panel">
+ <div class="od-dt-section-title">Audit Trail</div>
+ <div class="od-straddle-audit-grid">${auditRows.map(row => `
+ <div class="od-straddle-audit-item ${toneClass(row.tone)}">
+ <span>${esc(row.label)}</span>
+ <strong>${esc(row.value)}</strong>
+ <small>${esc(row.meta)}</small>
+ </div>`).join('')}</div>
+ </div>`;
+
+ const activeStrip = `<div class="od-dt-section od-straddle-active-strip">
+ <div class="od-dt-section-title">Active ${esc(state.underlying)} Native Straddles</div>
+ ${state.straddleDashboardLoading
+ ? '<div class="od-loading">Refreshing active straddles...</div>'
+ : activeEntries.length
+ ? `<div class="od-straddle-active-list">${activeEntries.map(entry => `
+ <div class="od-straddle-active-row">
+ <div>
+ <strong>${esc(entry.symbol || entry.sourceSymbol || entry.id)}</strong>
+ <div class="od-chain-copy">Qty ${n(entry.qty, 1)} | Credit ${money(entry.premiumUSD)} | Re-entries ${n(entry.reentryCount, 0)}</div>
+ </div>
+ <div class="od-chain-copy">Live P&amp;L <strong class="${n(entry.totalPnlUSD) >= 0 ? 'profit' : 'loss'}">${money(n(entry.totalPnlUSD))}</strong></div>
+ <div class="od-chain-copy">Stop ${n(entry.stopPrice) > 0 ? `$${n(entry.stopPrice).toFixed(2)}` : '-'}</div>
+ <div class="od-chain-copy">${esc(entry.protectionSource === 'manual_native' ? 'Manual Native Stop' : (n(entry.stopPrice) > 0 ? 'Static Stop' : 'No Stop'))} | ${esc(entry.stopHealth || 'missing')}</div>
+ <div class="od-chain-copy">${entry.timeToExpiryMs > 0 ? days(entry.timeToExpiryMs / 86400000) : 'Expired'} | ${esc(entry.stopHealth === 'unprotected' ? 'Unprotected' : 'Protected')}</div>
+ <button type="button" class="od-ghost-btn" data-options-action="open-straddle-manage">View in Manage</button>
+ </div>`).join('')}</div>`
+ : '<div class="od-empty">No active native straddles for this underlying. Once one is live, its P&amp;L and stop status will appear here.</div>'}
+ </div>`;
+
+ return `<div class="od-straddle-mode">${header}${table}${decisionPanel}${auditPanel}${activeStrip}</div>`;
+ }
+
+ function renderSkewMode() {
+ const data = state.skewData;
+ const loading = state.skewLoading;
+ const error = state.skewError;
+ const regime = data?.regime || { key: 'flat', label: 'Flat Skew', tone: 'info', summary: '' };
+ const metrics = data?.metrics || {};
+ const points = Array.isArray(data?.points) ? data.points.slice().sort((a, b) => n(a.strike) - n(b.strike)) : [];
+ const summaries = Array.isArray(data?.expirySummaries) ? data.expirySummaries : [];
+ const quality = data?.quoteQuality || metrics.quoteQuality || {};
+ const view = SKEW_VIEWS.includes(state.skewView) ? state.skewView : 'snapshot';
+ const axis = SKEW_AXES.includes(state.skewAxis) ? state.skewAxis : 'moneyness';
+ const fallbackStrike = n(data?.atmStrike || state.chain?.atmStrike || 0);
+ const activePoint = points.reduce((best, point) => {
+ if (!best) return point;
+ return Math.abs(n(point.strike) - n(state.skewHoveredStrike || fallbackStrike)) < Math.abs(n(best.strike) - n(state.skewHoveredStrike || fallbackStrike))
+ ? point
+ : best;
+ }, points[0] || null);
+ const focusStrike = n(activePoint?.strike || fallbackStrike);
+ const focusIv = n(activePoint?.iv);
+ const focusDistance = n(activePoint?.moneynessPct);
+ const focusSide = String(activePoint?.side || 'atm');
+ const toneCls = regime.tone === 'loss' ? 'loss' : regime.tone === 'profit' ? 'profit' : regime.tone === 'warn' ? 'warn' : 'info';
+ const rr = n(metrics.riskReversal25d);
+ const bf = n(metrics.butterfly25d);
+ const dataAge = data?.fetchedAt ? msShort(Date.now() - n(data.fetchedAt)) : 'NA';
+
+ const tradeRead = (() => {
+ if (rr <= -6) return { title: 'Protect downside first', tone: 'loss', strategy: 'Prefer put spreads or defined-risk bearish structures.', avoid: 'Avoid blindly selling downside vol.', why: '25D puts are materially richer than calls.' };
+ if (rr >= 4) return { title: 'Upside convexity is rich', tone: 'profit', strategy: 'Prefer call spreads or controlled bullish structures.', avoid: 'Avoid overpaying for naked upside calls.', why: '25D calls are richer than puts.' };
+ if (bf >= 3) return { title: 'Wings are expensive', tone: 'warn', strategy: 'Prefer defined-risk premium structures after checking event risk.', avoid: 'Avoid cheap-looking short wings without stop logic.', why: 'Both tails trade above ATM vol.' };
+ return { title: 'Balanced smile', tone: 'info', strategy: 'Straddle or iron-fly review is reasonable if IV and liquidity support it.', avoid: 'Do not treat skew alone as an entry trigger.', why: '25D put/call premium is close to balanced.' };
+ })();
+ const qualityTone = quality.grade === 'good' ? 'profit' : quality.grade === 'poor' ? 'loss' : 'warn';
+ const confidence = quality.grade === 'good' && points.length >= 24 ? 'High' : quality.grade === 'poor' || points.length < 12 ? 'Low' : 'Medium';
+
+ if (loading && !data) return `<div class="od-skew-shell"><div class="od-loading">Loading volatility skew...</div></div>`;
+ if (error) return `<div class="od-skew-shell"><div class="od-top-error">${esc(error)}</div></div>`;
+ if (!points.length) {
+ return `<div class="od-skew-shell">
+ <div class="od-empty-chart">
+ <div>
+ <strong>Volatility skew is not available for this expiry yet.</strong>
+ <div class="od-chain-copy">Load a listed expiry with option IV data and the curve will render here.</div>
+ </div>
+ </div>
+ </div>`;
+ }
+
+ const chartWidth = 880;
+ const chartHeight = 380;
+ const padX = 58;
+ const padY = 28;
+ const axisValue = point => axis === 'delta' ? n(point.delta) * 100 : axis === 'strike' ? n(point.strike) : n(point.moneynessPct);
+ const axisLabel = axis === 'delta' ? 'Delta' : axis === 'strike' ? 'Strike' : '% from spot';
+ const chartPoints = points.map(point => ({ ...point, axisValue: axisValue(point) })).sort((a, b) => a.axisValue - b.axisValue);
+ const minX = Math.min(...chartPoints.map(point => n(point.axisValue)));
+ const maxX = Math.max(...chartPoints.map(point => n(point.axisValue)));
+ const minIvRaw = Math.min(...points.map(point => n(point.iv)));
+ const maxIvRaw = Math.max(...points.map(point => n(point.iv)));
+ const minIv = Math.max(0, Math.floor((minIvRaw - 2) / 2) * 2);
+ const maxIv = Math.ceil((maxIvRaw + 2) / 2) * 2;
+ const xRange = Math.max(1, maxX - minX);
+ const ivRange = Math.max(1, maxIv - minIv);
+ const xForValue = value => padX + (((n(value) - minX) / xRange) * (chartWidth - padX * 2));
+ const xFor = point => xForValue(axisValue(point));
+ const yFor = iv => chartHeight - padY - (((n(iv) - minIv) / ivRange) * (chartHeight - padY * 2));
+ const linePath = chartPoints.map((point, index) => `${index ? 'L' : 'M'} ${xFor(point).toFixed(2)} ${yFor(point.iv).toFixed(2)}`).join(' ');
+ const atmPoint = points.reduce((best, point) => !best || Math.abs(n(point.strike) - n(data?.atmStrike || fallbackStrike)) < Math.abs(n(best.strike) - n(data?.atmStrike || fallbackStrike)) ? point : best, points[0]);
+ const atmX = xFor(atmPoint || activePoint);
+ const atmLabelX = Math.min(chartWidth - 56, Math.max(18, atmX + 8));
+ const yTicks = Array.from({ length: 5 }, (_, index) => {
+ const iv = minIv + ((ivRange / 4) * index);
+ return {
+ value: iv,
+ y: yFor(iv),
+ };
+ });
+ const xTicks = [minX, minX + ((maxX - minX) / 2), maxX].map(value => ({ value, x: xForValue(value) }));
+ const formatAxisTick = value => axis === 'delta' || axis === 'moneyness' ? `${value.toFixed(0)}%` : value.toFixed(0);
+ const markerFor = strike => points.reduce((best, point) => {
+ if (!best) return point;
+ return Math.abs(n(point.strike) - n(strike)) < Math.abs(n(best.strike) - n(strike)) ? point : best;
+ }, null);
+ const putMarker = markerFor(metrics.put25dStrike);
+ const callMarker = markerFor(metrics.call25dStrike);
+ const focusX = activePoint ? xFor(activePoint) : atmX;
+ const focusY = yFor(focusIv);
+ const chartSvg = `<svg viewBox="0 0 ${chartWidth} ${chartHeight}" class="od-skew-svg" role="img" aria-label="Volatility skew curve">
+ <defs>
+ <linearGradient id="odSkewLine" x1="0%" y1="0%" x2="100%" y2="0%">
+ <stop offset="0%" stop-color="#ff8f5e"></stop>
+ <stop offset="48%" stop-color="#16e0c2"></stop>
+ <stop offset="100%" stop-color="#5ef2ff"></stop>
+ </linearGradient>
+ <linearGradient id="odSkewGlow" x1="0%" y1="0%" x2="0%" y2="100%">
+ <stop offset="0%" stop-color="rgba(22,224,194,0.22)"></stop>
+ <stop offset="100%" stop-color="rgba(22,224,194,0)"></stop>
+ </linearGradient>
+ </defs>
+ ${yTicks.map(tick => `<g class="od-skew-gridline"><line x1="${padX}" y1="${tick.y.toFixed(2)}" x2="${(chartWidth - padX).toFixed(2)}" y2="${tick.y.toFixed(2)}"></line><text x="${(padX - 10).toFixed(2)}" y="${(tick.y + 4).toFixed(2)}" text-anchor="end">${tick.value.toFixed(0)}</text></g>`).join('')}
+ ${xTicks.map(tick => `<g class="od-skew-axis-label"><text x="${tick.x.toFixed(2)}" y="${(chartHeight - 8).toFixed(2)}" text-anchor="middle">${formatAxisTick(tick.value)}</text></g>`).join('')}
+ <line class="od-skew-atm-line" x1="${atmX.toFixed(2)}" y1="${padY}" x2="${atmX.toFixed(2)}" y2="${(chartHeight - padY).toFixed(2)}"></line>
+ <text class="od-skew-atm-tag" x="${atmLabelX.toFixed(2)}" y="${(padY + 10).toFixed(2)}">ATM</text>
+ <path class="od-skew-line" d="${linePath}"></path>
+ ${chartPoints.map(point => {
+ const cx = xFor(point);
+ const cy = yFor(point.iv);
+ const pointCls = point.side === 'put' ? 'is-put' : point.side === 'call' ? 'is-call' : 'is-atm';
+ const focused = n(point.strike) === focusStrike ? 'is-focus' : '';
+ return `<circle class="od-skew-point ${pointCls} ${focused}" cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${focused ? 5.5 : 3.4}" data-skew-strike="${n(point.strike)}"></circle>`;
+ }).join('')}
+ ${putMarker ? `<g class="od-skew-marker od-skew-marker-put"><circle cx="${xFor(putMarker).toFixed(2)}" cy="${yFor(putMarker.iv).toFixed(2)}" r="6"></circle><text x="${(xFor(putMarker) - 8).toFixed(2)}" y="${(yFor(putMarker.iv) - 12).toFixed(2)}" text-anchor="end">25D Put</text></g>` : ''}
+ ${callMarker ? `<g class="od-skew-marker od-skew-marker-call"><circle cx="${xFor(callMarker).toFixed(2)}" cy="${yFor(callMarker.iv).toFixed(2)}" r="6"></circle><text x="${(xFor(callMarker) + 8).toFixed(2)}" y="${(yFor(callMarker.iv) - 12).toFixed(2)}">25D Call</text></g>` : ''}
+ <g class="od-skew-crosshair">
+ <line x1="${focusX.toFixed(2)}" y1="${padY}" x2="${focusX.toFixed(2)}" y2="${(chartHeight - padY).toFixed(2)}"></line>
+ <line x1="${padX}" y1="${focusY.toFixed(2)}" x2="${(chartWidth - padX).toFixed(2)}" y2="${focusY.toFixed(2)}"></line>
+ </g>
+ <text class="od-skew-axis-title" x="${(chartWidth - padX).toFixed(2)}" y="${(chartHeight - 28).toFixed(2)}" text-anchor="end">${esc(axisLabel)}</text>
+ </svg>`;
+
+ const notes = [
+ rr < 0
+ ? `Downside IV is richer by ${Math.abs(rr).toFixed(1)} vol points versus the 25-delta call.`
+ : `Upside IV is richer by ${rr.toFixed(1)} vol points versus the 25-delta put.`,
+ bf >= 0
+ ? `Both wings sit ${bf.toFixed(1)} vol points above ATM, so tail premium is elevated.`
+ : `Wings sit ${Math.abs(bf).toFixed(1)} vol points below ATM, keeping the smile flatter than usual.`,
+ focusStrike
+ ? `Focused strike ${focusStrike.toFixed(0)} is ${focusDistance >= 0 ? '+' : ''}${focusDistance.toFixed(1)}% from spot on the ${focusSide} wing.`
+ : 'Hover a strike to inspect its exact wing placement.',
+ ];
+ const skewNav = `<div class="od-skew-subnav">
+ ${SKEW_VIEWS.map(item => `<button type="button" class="${view === item ? 'active' : ''}" data-options-action="set-skew-view" data-view="${item}">${item === 'term' ? 'Term Structure' : item === 'trade' ? 'Trade Read' : 'Snapshot'}</button>`).join('')}
+ </div>`;
+ const axisNav = `<div class="od-skew-axis-nav">
+ ${SKEW_AXES.map(item => `<button type="button" class="${axis === item ? 'active' : ''}" data-options-action="set-skew-axis" data-axis="${item}">${item === 'moneyness' ? '% Spot' : item[0].toUpperCase() + item.slice(1)}</button>`).join('')}
+ </div>`;
+ const header = `<section class="od-skew-hero">
+ <div>
+ <div class="od-skew-eyebrow">Options Volatility Desk</div>
+ <h3>${esc(data?.underlying || state.underlying)} Volatility Skew</h3>
+ <p>${esc(data?.expiryLabel || data?.expiryKey || state.expiryKey || '')} | RR convention: 25D Call IV - 25D Put IV</p>
+ </div>
+ <div class="od-skew-hero-meta">
+ <span class="od-skew-pill ${toneCls}">${esc(regime.label)}</span>
+ <span class="od-skew-stat-chip">Spot ${money(n(data?.underlyingPrice), 0)}</span>
+ <span class="od-skew-stat-chip">ATM ${n(data?.atmStrike).toFixed(0)}</span>
+ <span class="od-skew-stat-chip ${qualityTone}">${esc(quality.label || 'Quote review')}</span>
+ <span class="od-skew-stat-chip">Age ${esc(dataAge)}</span>
+ </div>
+ </section>`;
+ const metricStrip = `<div class="od-skew-kpi-strip">
+ ${[
+ ['ATM IV', pct(metrics.atmIv, 1), 'Current at-the-money implied volatility', 'info'],
+ ['25D RR', `${rr >= 0 ? '+' : ''}${rr.toFixed(1)}`, rr < 0 ? 'Puts richer than calls' : 'Calls richer than puts', rr < 0 ? 'loss' : rr > 0 ? 'profit' : 'info'],
+ ['25D BF', `${bf >= 0 ? '+' : ''}${bf.toFixed(1)}`, bf >= 3 ? 'Wings rich versus ATM' : 'Wing premium controlled', bf >= 3 ? 'warn' : 'info'],
+ ['Quality', confidence, `${n(quality.usableStrikes, points.length).toFixed(0)} strikes | spread ${n(quality.avgSpreadPct).toFixed(1)}%`, qualityTone],
+ ].map(item => `<div class="od-skew-kpi ${toneClass(item[3])}"><span>${esc(item[0])}</span><strong>${esc(item[1])}</strong><small>${esc(item[2])}</small></div>`).join('')}
+ </div>`;
+ const snapshotView = `<div class="od-skew-grid">
+ <section class="od-skew-stage">
+ <div class="od-skew-stage-head">
+ <div><span>Smile Chart</span><strong>${esc(axisLabel)} vs IV</strong></div>
+ <div class="od-skew-stage-tags"><span>25D Put ${pct(metrics.put25dIv, 1)}</span><span>25D Call ${pct(metrics.call25dIv, 1)}</span><span>${points.length} strikes</span></div>
+ </div>
+ ${axisNav}
+ <div class="od-skew-chart-shell">${chartSvg}</div>
+ <div class="od-skew-focus-bar">
+ <div class="od-skew-focus-card"><span>Focused Strike</span><strong>${focusStrike ? focusStrike.toFixed(0) : '--'}</strong><small>${focusSide === 'atm' ? 'ATM anchor' : `${focusSide.toUpperCase()} wing`}</small></div>
+ <div class="od-skew-focus-card"><span>Focused IV</span><strong>${pct(focusIv, 1)}</strong><small>${focusDistance >= 0 ? '+' : ''}${focusDistance.toFixed(1)}% from spot | Delta ${(n(activePoint?.delta) * 100).toFixed(0)}%</small></div>
+ <div class="od-skew-focus-card"><span>Quote</span><strong>${n(activePoint?.spreadPct).toFixed(1)}%</strong><small>OI ${compact(activePoint?.openInterest)} | Volume ${compact(activePoint?.volume)}</small></div>
+ </div>
+ </section>
+ <aside class="od-skew-rail">
+ <div class="od-skew-trade-card ${toneClass(tradeRead.tone)}"><span>Decision Read</span><strong>${esc(tradeRead.title)}</strong><small>${esc(tradeRead.why)}</small></div>
+ <div class="od-skew-note-panel"><span>Execution Notes</span>${notes.map(note => `<div class="od-skew-note">${esc(note)}</div>`).join('')}</div>
+ <div class="od-skew-action-panel"><div><span>Next Step</span><strong>${esc(tradeRead.strategy)}</strong><small>${esc(tradeRead.avoid)}</small></div><button type="button" class="od-primary-btn" data-options-action="open-skew-builder">Open Strategy Builder</button><button type="button" class="od-ghost-btn" data-options-action="open-skew-straddle">Open Native Straddle Desk</button></div>
+ </aside>
+ </div>`;
+ const termView = `<section class="od-skew-stage">
+ <div class="od-skew-stage-head"><div><span>Term Structure</span><strong>Skew across expiries</strong></div><div class="od-skew-stage-tags"><span>${summaries.length || 0} expiries</span><span>Click row to load</span></div></div>
+ <div class="od-skew-term-table">
+ <div class="od-skew-term-row head"><span>Expiry</span><span>DTE</span><span>ATM IV</span><span>25D RR</span><span>25D BF</span><span>Quality</span><span>Trade Use</span></div>
+ ${(summaries.length ? summaries : [{ expiryKey: data?.expiryKey, expiryLabel: data?.expiryLabel, daysToExpiry: 0, atmIv: metrics.atmIv, riskReversal25d: rr, butterfly25d: bf, quoteQuality: quality, regime }]).map(row => {
+ const rowRr = n(row.riskReversal25d);
+ const rowBf = n(row.butterfly25d);
+ const rowQuality = row.quoteQuality || {};
+ const use = rowRr <= -6 ? 'Put spread / hedge focus' : rowRr >= 4 ? 'Call spread focus' : rowBf >= 3 ? 'Event wing review' : 'Neutral premium review';
+ return `<button type="button" class="od-skew-term-row ${row.expiryKey === data?.expiryKey ? 'active' : ''}" data-options-action="set-expiry" data-expiry-key="${esc(row.expiryKey || '')}"><span>${esc(row.expiryLabel || row.expiryKey || '-')}</span><span>${days(row.daysToExpiry || 0)}</span><span>${pct(row.atmIv, 1)}</span><span class="${rowRr < 0 ? 'loss' : rowRr > 0 ? 'profit' : ''}">${rowRr >= 0 ? '+' : ''}${rowRr.toFixed(1)}</span><span>${rowBf >= 0 ? '+' : ''}${rowBf.toFixed(1)}</span><span>${esc(rowQuality.label || '-')}</span><span>${esc(use)}</span></button>`;
+ }).join('')}
+ </div>
+ </section>`;
+ const tradeView = `<section class="od-skew-trade-layout">
+ <div class="od-skew-trade-card ${toneClass(tradeRead.tone)}"><span>Primary Read</span><strong>${esc(tradeRead.title)}</strong><small>${esc(tradeRead.why)}</small></div>
+ <div class="od-skew-trade-card"><span>Preferred Structure</span><strong>${esc(tradeRead.strategy)}</strong><small>Confirm premium, margin, and stop risk before order entry.</small></div>
+ <div class="od-skew-trade-card warn"><span>Avoid</span><strong>${esc(tradeRead.avoid)}</strong><small>Skew is a regime filter, not a standalone entry signal.</small></div>
+ <div class="od-skew-trade-card ${qualityTone}"><span>Confidence</span><strong>${esc(confidence)}</strong><small>${esc((quality.warnings || []).join(' | ') || 'Quote set looks usable.')}</small></div>
+ <div class="od-skew-action-panel wide"><div><span>Execution Handoff</span><strong>Use this expiry in your options workflow</strong><small>Open the builder for spreads or the native straddle desk for premium capture review.</small></div><button type="button" class="od-primary-btn" data-options-action="open-skew-builder">Open Strategy Builder</button><button type="button" class="od-ghost-btn" data-options-action="open-skew-straddle">Open Native Straddle Desk</button><button type="button" class="od-ghost-btn" data-options-action="use-skew-expiry" data-expiry-key="${esc(data?.expiryKey || '')}">Use This Expiry</button></div>
+ </section>`;
+
+ return `<div class="od-skew-shell">
+ ${header}
+ ${skewNav}
+ ${metricStrip}
+ ${view === 'term' ? termView : view === 'trade' ? tradeView : snapshotView}
+ </div>`;
+ }
+
+ /* ===================================================================
+ MAIN RENDER
+ =================================================================== */

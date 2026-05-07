@@ -1,0 +1,2373 @@
+body.chart-mode {
+ height: 100vh;
+ overflow: hidden;
+ background:
+ radial-gradient(circle at top right, rgba(76, 214, 255, 0.12), transparent 28%),
+ linear-gradient(180deg, #06111d, #020912 68%, #01060c);
+}
+
+body.chart-mode #app {
+ display: none !important;
+}
+
+#chartWorkspaceRoot[hidden] {
+ display: none !important;
+}
+
+.chart-pane-loading {
+ display: grid;
+ gap: 8px;
+ place-content: center;
+ min-height: 420px;
+ border: 1px solid rgba(121, 221, 255, 0.16);
+ border-radius: 8px;
+ background: rgba(4, 14, 26, 0.72);
+ color: rgba(222, 236, 255, 0.82);
+}
+
+.chart-pane-loading-title {
+ color: rgba(237, 246, 255, 0.96);
+ font-size: 15px;
+ font-weight: 800;
+ text-align: center;
+}
+
+.chart-pane-loading-copy {
+ color: rgba(172, 194, 225, 0.76);
+ font-size: 12px;
+ text-align: center;
+}
+
+body.chart-mode #chartWorkspaceRoot {
+ display: flex;
+ min-height: 100vh;
+ padding: 18px;
+ box-sizing: border-box;
+}
+
+.ds-chart-card-tab,
+.ds-chart-card-detached {
+ width: 100%;
+ margin: 0;
+}
+
+.ds-chart-card-detached {
+ min-height: calc(100vh - 36px);
+}
+
+.ds-chart-card-tab {
+ min-height: calc(100vh - 190px);
+}
+
+.ds-chart-review-overlay {
+ align-items: stretch;
+ justify-content: center;
+ padding: 10px;
+ background: rgba(0, 5, 12, 0.74);
+ backdrop-filter: blur(8px);
+}
+
+.ds-chart-review-modal {
+ width: min(1320px, calc(100vw - 20px));
+ max-width: min(1320px, calc(100vw - 20px));
+ height: calc(100vh - 20px);
+ max-height: calc(100vh - 20px);
+ margin: auto;
+ padding: 0;
+ overflow: hidden;
+ border-radius: 8px;
+ background: #06111d;
+}
+
+.ds-chart-review-root,
+.ds-chart-review-root .live-order-chart-card {
+ width: 100%;
+ height: 100%;
+ min-height: 0;
+}
+
+.ds-chart-card-review {
+ position: relative;
+ display: flex;
+ flex-direction: column;
+ border: 0;
+ border-radius: 0;
+}
+
+.ds-chart-card-review .live-order-chart-head {
+ align-items: center;
+ min-height: 0;
+ padding: 12px 16px 8px;
+ border-bottom: 1px solid rgba(121, 221, 255, 0.12);
+}
+
+.ds-chart-card-review .live-order-chart-actions {
+ justify-content: flex-end;
+ gap: 8px;
+ padding-right: 44px;
+}
+
+.ds-chart-review-presets,
+.ds-chart-review-controls,
+.ds-chart-review-tfs,
+.ds-chart-review-navs {
+ margin: 0;
+}
+
+.ds-chart-review-controls {
+ display: inline-flex;
+ align-items: center;
+ gap: 8px;
+}
+
+.ds-chart-review-tfs {
+ display: inline-flex;
+ align-items: center;
+ gap: 6px;
+}
+
+.ds-chart-review-navs {
+ display: inline-flex;
+ align-items: center;
+ gap: 4px;
+}
+
+.ds-chart-review-tf,
+.ds-chart-review-nav {
+ min-width: 34px;
+ height: 30px;
+ padding: 0 8px;
+ font-size: 11px;
+}
+
+.ds-chart-review-tf.active {
+ border-color: rgba(29, 233, 182, 0.46);
+ background: rgba(29, 233, 182, 0.14);
+ color: #5ff7d2;
+}
+
+.ds-chart-review-nav {
+ width: 30px;
+ min-width: 30px;
+ padding: 0;
+ font-size: 15px;
+ line-height: 1;
+}
+
+.ds-chart-review-detach {
+ width: 30px;
+ min-width: 30px;
+ height: 30px;
+ padding: 0;
+}
+
+.ds-chart-review-detach span {
+ display: block;
+ width: 12px;
+ height: 9px;
+ border: 2px solid currentColor;
+ border-radius: 2px;
+ box-shadow: 4px -4px 0 -2px rgba(121, 221, 255, 0.9);
+}
+
+.ds-chart-review-close-slot {
+ position: absolute;
+ top: 12px;
+ right: 16px;
+ display: inline-flex;
+}
+
+.ds-chart-review-symbol {
+ display: inline-flex;
+ align-items: center;
+ min-height: 34px;
+ padding: 0 10px;
+ border: 1px solid rgba(121, 221, 255, 0.18);
+ border-radius: 8px;
+ background: rgba(3, 12, 22, 0.68);
+ color: rgba(229, 243, 255, 0.94);
+ font-size: 12px;
+ font-weight: 900;
+ letter-spacing: 0;
+}
+
+.ds-chart-card-review .live-order-chart-wrap {
+ flex: 1 1 auto;
+ min-height: 0;
+ padding: 12px 16px 16px;
+}
+
+.ds-chart-card-review .live-order-chart-shell,
+.ds-chart-card-review .ds-lwc-chart {
+ min-height: 0;
+ height: 100%;
+}
+
+.ds-chart-card-review .live-order-study-legend,
+.ds-chart-card-review .ds-chart-meta-row,
+.ds-chart-card-review .live-order-chart-tags,
+.ds-chart-card-review .ds-lwc-attribution,
+.ds-chart-card-review .ds-lwc-readout {
+ display: none !important;
+}
+
+.ds-chart-card-review .live-order-chart-shell {
+ border-radius: 8px;
+ overflow: hidden;
+}
+
+.ds-chart-card-review .live-order-chart-head > div:first-child {
+ min-width: 0;
+ padding-right: 8px;
+}
+
+.ds-chart-card-review .ds-chart-review-close {
+ width: 30px;
+ min-width: 30px;
+ height: 30px;
+ font-size: 12px;
+}
+
+.ds-chart-card-review .mo-section {
+ white-space: nowrap;
+ overflow: hidden;
+ text-overflow: ellipsis;
+}
+
+.ds-chart-card-desk {
+ overflow: hidden;
+}
+
+.ds-chart-card-desk.ds-clean-chart-mode {
+ padding-bottom: 10px;
+}
+
+.ds-chart-card-desk.ds-chart-fullscreen-mode {
+ padding-bottom: 0;
+}
+
+.ds-chart-card-desk.ds-clean-chart-mode .live-order-chart-copy,
+.ds-chart-card-desk.ds-clean-chart-mode .ds-decision-badge-row,
+.ds-chart-card-desk.ds-clean-chart-mode .ds-desk-collapsed-bar {
+ display: none;
+}
+
+.ds-chart-fullscreen-mode {
+ position: fixed;
+ inset: 0;
+ z-index: 9999;
+ width: 100vw;
+ height: 100vh;
+ margin: 0;
+ padding: 0;
+ border: 0;
+ border-radius: 0;
+ background: #050a0f;
+}
+
+.ds-chart-fullscreen-mode .live-order-chart-head {
+ position: absolute;
+ top: 8px;
+ right: 10px;
+ z-index: 20;
+ width: min(520px, calc(100vw - 20px));
+ min-height: 0;
+ padding: 0;
+ background: transparent;
+ border: 0;
+}
+
+.ds-chart-fullscreen-mode .live-order-chart-head > div:first-child,
+.ds-chart-fullscreen-mode #dsChartStatus,
+.ds-chart-fullscreen-mode .ds-desk-collapsed-bar,
+.ds-chart-fullscreen-mode .ds-desk-panel-head,
+.ds-chart-fullscreen-mode .ds-lwc-readout {
+ display: none;
+}
+
+.ds-chart-fullscreen-mode .live-order-chart-actions {
+ display: flex;
+ align-items: center;
+ justify-content: flex-end;
+ gap: 6px;
+ flex-wrap: nowrap;
+ opacity: 1;
+ transition: opacity 0.16s ease;
+}
+
+.ds-chart-fullscreen-mode .live-order-chart-actions > * {
+ display: none;
+}
+
+.ds-chart-fullscreen-mode .live-order-chart-actions .ds-fullscreen-control-group {
+ display: inline-flex;
+ margin: 0;
+ padding: 0;
+}
+
+.ds-chart-fullscreen-mode [data-ds-chart-fullscreen] {
+ display: inline-flex;
+ align-items: center;
+ justify-content: center;
+ box-sizing: border-box;
+ min-width: 124px;
+ min-height: 32px;
+ padding: 7px 12px;
+ border-color: rgba(121, 221, 255, 0.58);
+ border-radius: 999px;
+ background: rgba(5, 12, 20, 0.86);
+ box-shadow: 0 0 0 1px rgba(121, 221, 255, 0.14), 0 10px 24px rgba(0, 0, 0, 0.34);
+ color: rgba(236, 248, 255, 0.95);
+ font-size: 11px;
+ line-height: 1;
+ white-space: nowrap;
+}
+
+.ds-chart-fullscreen-mode .ds-chart-tab-picker {
+ display: none;
+}
+
+.ds-chart-review-close {
+ display: inline-flex;
+ align-items: center;
+ justify-content: center;
+ flex: 0 0 34px;
+ width: 34px;
+ min-width: 34px;
+ height: 34px;
+ padding: 0;
+ border-color: rgba(255, 93, 122, 0.48);
+ color: #ff9aac;
+ font-size: 13px;
+ font-weight: 900;
+}
+
+.ds-chart-review-close:hover {
+ background: rgba(255, 93, 122, 0.16);
+ color: #ff9aac;
+}
+
+.ds-chart-fullscreen-mode .ds-chart-symbol-form {
+ justify-content: flex-end;
+ min-width: 0;
+ width: 100%;
+}
+
+.ds-chart-fullscreen-mode .ds-chart-symbol-form .si {
+ min-width: min(320px, calc(100vw - 270px));
+ width: min(320px, calc(100vw - 270px));
+}
+
+.ds-chart-command-strip {
+ display: inline-flex;
+ align-items: center;
+ justify-content: flex-end;
+ gap: 8px;
+ flex-wrap: wrap;
+ min-width: 0;
+}
+
+.ds-chart-command-strip > .live-order-chart-timeframes {
+ margin: 0;
+}
+
+.ds-chart-command-strip.is-fullscreen .ds-chart-command-presets,
+.ds-chart-command-strip.is-fullscreen .ds-chart-command-tools {
+ display: none;
+}
+
+.ds-chart-card-tab .live-order-chart-head,
+.ds-chart-card-detached .live-order-chart-head {
+ gap: 12px;
+ align-items: flex-start;
+}
+
+.ds-chart-card-tab .live-order-chart-actions,
+.ds-chart-card-detached .live-order-chart-actions {
+ justify-content: flex-end;
+}
+
+.ds-chart-trade-controls {
+ gap: 6px;
+ align-items: center;
+ flex-wrap: wrap;
+}
+
+.bsm.ds-chart-trade-btn {
+ min-width: 88px;
+ font-weight: 900;
+}
+
+.bsm.ds-chart-trade-btn.buy {
+ border-color: rgba(29, 233, 182, 0.52);
+ background: rgba(29, 233, 182, 0.12);
+ color: #57f3ca;
+}
+
+.bsm.ds-chart-trade-btn.sell {
+ border-color: rgba(255, 93, 122, 0.52);
+ background: rgba(255, 93, 122, 0.12);
+ color: #ff8ba1;
+}
+
+.bsm.ds-chart-trade-btn:hover {
+ filter: brightness(1.08);
+}
+
+.ds-chart-tools-menu,
+.ds-chart-settings-menu,
+.ds-indicator-menu,
+.ds-preset-menu {
+ position: relative;
+}
+
+.ds-chart-tools-panel {
+ position: absolute;
+ top: calc(100% + 8px);
+ right: 0;
+ z-index: 80;
+ display: grid;
+ gap: 10px;
+ width: min(360px, calc(100vw - 48px));
+ padding: 12px;
+ border: 1px solid rgba(145, 168, 198, 0.20);
+ border-radius: 7px;
+ background: rgba(12, 17, 24, 0.98);
+ box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42);
+}
+
+.ds-chart-tools-section {
+ display: grid;
+ gap: 7px;
+}
+
+.ds-chart-tools-title {
+ color: rgba(172, 194, 225, 0.74);
+ font-size: 10px;
+ font-weight: 800;
+ text-transform: uppercase;
+}
+
+.ds-chart-tools-options {
+ display: flex;
+ flex-wrap: wrap;
+ gap: 6px;
+}
+
+.ds-chart-tools-options .bsm {
+ min-height: 27px;
+ padding-inline: 9px;
+}
+
+.ds-chart-card-tab .ds-chart-wrap,
+.ds-chart-card-detached .ds-chart-wrap {
+ flex: 1 1 auto;
+}
+
+.ds-chart-card-tab .live-order-chart-copy,
+.ds-chart-card-detached .live-order-chart-copy {
+ max-width: 760px;
+}
+
+.ds-chart-card-preview .ds-chart-wrap {
+ min-height: 420px;
+}
+
+.ds-chart-meta-row {
+ display: flex;
+ flex-wrap: wrap;
+ gap: 8px;
+ margin-top: 8px;
+}
+
+.ds-chart-meta-row span {
+ display: inline-flex;
+ align-items: center;
+ min-height: 24px;
+ padding: 4px 9px;
+ border-radius: 999px;
+ border: 1px solid rgba(255, 255, 255, 0.08);
+ background: rgba(255, 255, 255, 0.04);
+ color: rgba(222, 236, 255, 0.82);
+ font-size: 10px;
+ letter-spacing: 0.04em;
+ text-transform: uppercase;
+}
+
+.ds-chart-replay {
+ display: flex;
+ align-items: center;
+ gap: 8px;
+ flex-wrap: wrap;
+ margin-top: 10px;
+}
+
+.ds-chart-replay-speed {
+ min-height: 28px;
+ width: 74px;
+ padding-inline: 8px;
+}
+
+.ds-chart-draft-summary {
+ display: flex;
+ align-items: center;
+ flex-wrap: wrap;
+ gap: 7px;
+ margin-top: 8px;
+ color: rgba(210, 231, 255, 0.82);
+}
+
+.ds-chart-draft-summary span {
+ min-height: 24px;
+ padding: 4px 8px;
+ border: 1px solid rgba(90, 170, 255, 0.20);
+ border-radius: 999px;
+ background: rgba(64, 145, 255, 0.08);
+ font-size: 10px;
+ font-weight: 800;
+ text-transform: uppercase;
+}
+
+.ds-chart-draft-summary .draft {
+ border-color: rgba(87, 243, 202, 0.42);
+ color: #57f3ca;
+}
+
+.ds-chart-wrap {
+ min-height: 420px;
+}
+
+.ds-chart-shell {
+ cursor: crosshair;
+ position: relative;
+}
+
+.ds-lwc-shell {
+ overflow: hidden;
+ min-height: 460px;
+ border-radius: 8px;
+}
+
+.ds-lwc-chart {
+ position: relative;
+ z-index: 1;
+ width: 100%;
+ min-height: 460px;
+ height: clamp(460px, 62vh, 780px);
+}
+
+.ds-chart-card-preview .ds-lwc-chart {
+ height: 460px;
+}
+
+.ds-chart-card-tab .ds-lwc-chart {
+ height: clamp(560px, calc(100vh - 270px), 820px);
+ min-height: 520px;
+}
+
+.ds-chart-card-desk .ds-lwc-chart {
+ height: 100%;
+ min-height: 0;
+}
+
+.ds-desk-head {
+ flex: 0 0 auto;
+}
+
+.ds-chart-desk {
+ --ds-primary: 38fr;
+ --ds-execution: 32fr;
+ --ds-context: 30fr;
+ display: grid;
+ grid-template-columns: minmax(260px, var(--ds-primary)) 6px minmax(240px, var(--ds-execution)) 6px minmax(260px, var(--ds-context));
+ gap: 0;
+ overflow: hidden;
+ min-height: 560px;
+ height: clamp(590px, calc(100vh - 270px), 880px);
+ margin-top: 10px;
+ border: 1px solid rgba(121, 221, 255, 0.16);
+ border-radius: 8px;
+ background: rgba(2, 10, 18, 0.72);
+}
+
+.ds-chart-desk.is-single-clean {
+ grid-template-columns: minmax(0, 1fr);
+ height: clamp(600px, calc(100vh - 220px), 940px);
+}
+
+.ds-chart-fullscreen-mode .ds-chart-desk.is-single-clean {
+ height: 100vh;
+ min-height: 100vh;
+ margin: 0;
+ border: 0;
+ border-radius: 0;
+}
+
+.ds-chart-fullscreen-mode .ds-desk-chart-panel {
+ height: 100vh;
+ min-height: 100vh;
+ display: grid;
+ grid-template-rows: minmax(0, 1fr);
+}
+
+.ds-chart-fullscreen-mode .ds-lwc-shell,
+.ds-chart-fullscreen-mode .ds-lwc-chart {
+ height: 100vh !important;
+ min-height: 100vh !important;
+ border-radius: 0;
+}
+
+.ds-chart-fullscreen-mode .ds-lwc-chart {
+ padding-right: 88px;
+ box-sizing: border-box;
+}
+
+.ds-chart-fullscreen-mode .ds-lwc-attribution {
+ bottom: 10px;
+}
+
+.ds-chart-desk.is-single-clean .ds-desk-chart-panel {
+ border-right: 0;
+}
+
+.ds-chart-desk.is-single-clean .ds-lwc-shell {
+ border-radius: 0;
+}
+
+.ds-chart-desk.is-maximized {
+ grid-template-columns: minmax(0, 1fr);
+}
+
+.ds-chart-desk.is-primary-collapsed {
+ grid-template-columns: minmax(240px, var(--ds-execution)) 6px minmax(260px, var(--ds-context));
+}
+
+.ds-chart-desk.is-execution-collapsed {
+ grid-template-columns: minmax(260px, var(--ds-primary)) minmax(260px, var(--ds-context));
+}
+
+.ds-chart-desk.is-context-collapsed {
+ grid-template-columns: minmax(260px, var(--ds-primary)) 6px minmax(240px, var(--ds-execution));
+}
+
+.ds-chart-desk.is-primary-collapsed.is-context-collapsed,
+.ds-chart-desk.is-execution-collapsed.is-context-collapsed,
+.ds-chart-desk.is-primary-collapsed.is-execution-collapsed {
+ grid-template-columns: minmax(0, 1fr);
+}
+
+.ds-desk-panel {
+ min-width: 0;
+ min-height: 0;
+ overflow: hidden;
+ border-right: 1px solid rgba(255, 255, 255, 0.08);
+ background: rgba(4, 13, 23, 0.82);
+}
+
+.ds-desk-panel:last-child {
+ border-right: 0;
+}
+
+.ds-desk-chart-panel {
+ display: grid;
+ grid-template-rows: auto minmax(0, 1fr);
+}
+
+.ds-desk-chart-panel .ds-lwc-shell {
+ min-height: 0;
+ height: 100%;
+ border-radius: 0;
+}
+
+.ds-desk-panel-head {
+ display: flex;
+ align-items: center;
+ justify-content: space-between;
+ gap: 8px;
+ min-height: 42px;
+ padding: 8px 10px;
+ border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+ background: rgba(255, 255, 255, 0.025);
+}
+
+.ds-desk-panel-head strong {
+ display: block;
+ color: rgba(237, 246, 255, 0.95);
+ font-size: 12px;
+ font-weight: 850;
+}
+
+.ds-desk-panel-head span {
+ display: block;
+ overflow: hidden;
+ max-width: 260px;
+ margin-top: 2px;
+ color: rgba(172, 194, 225, 0.74);
+ font-size: 10px;
+ text-overflow: ellipsis;
+ white-space: nowrap;
+}
+
+.ds-desk-panel-actions {
+ display: inline-flex;
+ align-items: center;
+ gap: 5px;
+ flex: 0 0 auto;
+}
+
+.ds-desk-panel-actions button,
+.ds-desk-panel-actions select,
+.ds-desk-collapsed-bar button {
+ min-height: 26px;
+ padding: 4px 8px;
+ border: 1px solid rgba(121, 221, 255, 0.18);
+ border-radius: 7px;
+ background: rgba(9, 24, 40, 0.94);
+ color: rgba(222, 236, 255, 0.86);
+ font-size: 10px;
+ font-weight: 800;
+}
+
+.ds-desk-panel-actions button {
+ min-width: 28px;
+}
+
+.ds-desk-splitter {
+ cursor: col-resize;
+ background: rgba(121, 221, 255, 0.08);
+ border-inline: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.ds-desk-splitter:hover {
+ background: rgba(121, 221, 255, 0.20);
+}
+
+.ds-desk-context-panel {
+ display: grid;
+ grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.ds-context-tabs,
+.ds-context-watch-tabs {
+ display: flex;
+ gap: 5px;
+ padding: 8px;
+ border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+ background: rgba(255, 255, 255, 0.018);
+}
+
+.ds-context-tabs button,
+.ds-context-watch-tabs button {
+ min-height: 28px;
+ padding: 4px 9px;
+ border: 1px solid rgba(255, 255, 255, 0.09);
+ border-radius: 7px;
+ background: rgba(255, 255, 255, 0.035);
+ color: rgba(172, 194, 225, 0.86);
+ font-size: 10px;
+ font-weight: 850;
+}
+
+.ds-context-tabs button.active,
+.ds-context-watch-tabs button.active {
+ border-color: rgba(29, 233, 182, 0.34);
+ background: rgba(29, 233, 182, 0.10);
+ color: rgba(87, 243, 202, 0.96);
+}
+
+.ds-context-body {
+ min-height: 0;
+ overflow: auto;
+ padding: 10px;
+}
+
+.ds-context-section {
+ display: grid;
+ gap: 7px;
+ margin-top: 10px;
+}
+
+.ds-context-section h4 {
+ margin: 0;
+ color: rgba(121, 221, 255, 0.82);
+ font-size: 10px;
+ font-weight: 850;
+ letter-spacing: 0.06em;
+ text-transform: uppercase;
+}
+
+.ds-context-section p,
+.ds-context-empty {
+ margin: 0;
+ padding: 8px;
+ border-radius: 7px;
+ background: rgba(121, 221, 255, 0.06);
+ color: rgba(222, 236, 255, 0.84);
+ font-size: 11px;
+ line-height: 1.35;
+}
+
+.ds-context-list-row {
+ display: grid;
+ grid-template-columns: 8px minmax(0, 1fr);
+ gap: 8px;
+ align-items: start;
+ padding: 4px 0;
+}
+
+.ds-context-list-row span {
+ width: 7px;
+ height: 7px;
+ margin-top: 5px;
+ border-radius: 999px;
+ background: rgba(172, 194, 225, 0.72);
+}
+
+.ds-context-list-row.good span {
+ background: rgba(29, 233, 182, 0.95);
+}
+
+.ds-context-list-row.watch span {
+ background: rgba(255, 210, 119, 0.95);
+}
+
+.ds-context-list-row.danger span {
+ background: rgba(255, 93, 122, 0.95);
+}
+
+.ds-context-list-row strong {
+ color: rgba(222, 236, 255, 0.86);
+ font-size: 11px;
+ line-height: 1.3;
+}
+
+.ds-context-watch-table {
+ display: grid;
+ gap: 2px;
+}
+
+.ds-context-watch-head,
+.ds-context-watch-row {
+ display: grid;
+ grid-template-columns: minmax(82px, 1fr) 70px 64px 38px;
+ gap: 8px;
+ align-items: center;
+}
+
+.ds-context-watch-head {
+ padding: 7px 8px;
+ color: rgba(172, 194, 225, 0.70);
+ font-size: 9px;
+ font-weight: 850;
+ letter-spacing: 0.05em;
+ text-transform: uppercase;
+}
+
+.ds-context-watch-row {
+ width: 100%;
+ padding: 8px;
+ border: 0;
+ border-radius: 7px;
+ background: transparent;
+ color: rgba(222, 236, 255, 0.86);
+ font-size: 11px;
+ text-align: left;
+}
+
+.ds-context-watch-row:hover,
+.ds-context-watch-row.active {
+ background: rgba(121, 221, 255, 0.08);
+}
+
+.ds-context-watch-row strong {
+ color: rgba(121, 221, 255, 0.95);
+}
+
+.ds-context-watch-row .good {
+ color: rgba(87, 243, 202, 0.95);
+}
+
+.ds-context-watch-row .danger {
+ color: rgba(255, 139, 161, 0.95);
+}
+
+.ds-desk-collapsed-bar {
+ display: flex;
+ flex-wrap: wrap;
+ gap: 6px;
+ margin-top: 8px;
+}
+
+body.chart-mode .ds-lwc-chart {
+ height: calc(100vh - 250px);
+ min-height: 560px;
+}
+
+.ds-advanced-chart-stage {
+ display: grid;
+ grid-template-columns: minmax(0, 1fr) 300px;
+ gap: 12px;
+ align-items: stretch;
+ min-height: 520px;
+}
+
+.ds-advanced-chart-main {
+ min-width: 0;
+}
+
+.ds-trade-read-panel {
+ display: flex;
+ flex-direction: column;
+ gap: 12px;
+ min-height: 0;
+ padding: 14px;
+ border: 1px solid rgba(121, 221, 255, 0.18);
+ border-radius: 8px;
+ background: linear-gradient(180deg, rgba(7, 22, 38, 0.96), rgba(3, 12, 22, 0.98));
+ box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.ds-trade-read-panel.good {
+ border-color: rgba(29, 233, 182, 0.30);
+}
+
+.ds-trade-read-panel.watch {
+ border-color: rgba(255, 210, 119, 0.30);
+}
+
+.ds-trade-read-panel.weak,
+.ds-trade-read-panel.danger {
+ border-color: rgba(255, 93, 122, 0.30);
+}
+
+.ds-trade-read-title {
+ display: flex;
+ flex-direction: column;
+ gap: 4px;
+}
+
+.ds-trade-read-title span,
+.ds-trade-read-kicker,
+.ds-trade-read-metric span,
+.ds-trade-read-row span {
+ color: rgba(172, 194, 225, 0.76);
+ font-size: 10px;
+ font-weight: 700;
+ letter-spacing: 0.06em;
+ text-transform: uppercase;
+}
+
+.ds-trade-read-title strong {
+ color: rgba(237, 246, 255, 0.96);
+ font-size: 15px;
+ line-height: 1.25;
+}
+
+.ds-trade-read-grid {
+ display: grid;
+ grid-template-columns: 1fr 1fr;
+ gap: 8px;
+}
+
+.ds-trade-read-metric {
+ min-width: 0;
+ padding: 9px;
+ border: 1px solid rgba(255, 255, 255, 0.08);
+ border-radius: 7px;
+ background: rgba(255, 255, 255, 0.035);
+}
+
+.ds-trade-read-metric strong {
+ display: block;
+ overflow: hidden;
+ margin-top: 4px;
+ color: rgba(235, 244, 255, 0.95);
+ font-size: 12px;
+ text-overflow: ellipsis;
+ white-space: nowrap;
+}
+
+.ds-trade-read-block {
+ display: flex;
+ flex-direction: column;
+ gap: 7px;
+}
+
+.ds-trade-read-row {
+ display: flex;
+ align-items: center;
+ justify-content: space-between;
+ gap: 10px;
+ min-height: 26px;
+ padding-bottom: 6px;
+ border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.ds-trade-read-row strong {
+ color: rgba(235, 244, 255, 0.92);
+ font-size: 11px;
+ text-align: right;
+}
+
+.ds-trade-read-row.good strong {
+ color: rgba(87, 243, 202, 0.95);
+}
+
+.ds-trade-read-row.danger strong {
+ color: rgba(255, 139, 161, 0.95);
+}
+
+.ds-trade-read-row em {
+ color: rgba(172, 194, 225, 0.72);
+ font-style: normal;
+}
+
+.ds-trade-read-block p {
+ margin: 0;
+ padding: 7px 8px;
+ border-radius: 7px;
+ background: rgba(121, 221, 255, 0.06);
+ color: rgba(222, 236, 255, 0.84);
+ font-size: 11px;
+ line-height: 1.35;
+}
+
+.ds-decision-card {
+ display: grid;
+ gap: 8px;
+ padding: 11px;
+ border: 1px solid rgba(255, 255, 255, 0.10);
+ border-radius: 8px;
+ background: rgba(255, 255, 255, 0.04);
+}
+
+.ds-decision-card.ready {
+ border-color: rgba(29, 233, 182, 0.34);
+ background: rgba(29, 233, 182, 0.08);
+}
+
+.ds-decision-card.wait {
+ border-color: rgba(255, 210, 119, 0.34);
+ background: rgba(255, 210, 119, 0.07);
+}
+
+.ds-decision-card.invalid {
+ border-color: rgba(255, 93, 122, 0.38);
+ background: rgba(255, 93, 122, 0.08);
+}
+
+.ds-decision-head {
+ display: flex;
+ align-items: center;
+ justify-content: space-between;
+ gap: 10px;
+}
+
+.ds-decision-head span {
+ display: inline-flex;
+ align-items: center;
+ min-height: 22px;
+ padding: 3px 8px;
+ border-radius: 999px;
+ background: rgba(255, 255, 255, 0.08);
+ color: rgba(235, 244, 255, 0.94);
+ font-size: 10px;
+ font-weight: 800;
+ letter-spacing: 0.06em;
+ text-transform: uppercase;
+}
+
+.ds-decision-head strong {
+ color: rgba(235, 244, 255, 0.95);
+ font-size: 12px;
+ text-align: right;
+}
+
+.ds-decision-confidence {
+ overflow: hidden;
+ height: 7px;
+ border-radius: 999px;
+ background: rgba(255, 255, 255, 0.08);
+}
+
+.ds-decision-confidence i {
+ display: block;
+ height: 100%;
+ border-radius: inherit;
+ background: linear-gradient(90deg, #ff5d7a, #ffd277, #1de9b6);
+}
+
+.ds-decision-meta {
+ display: flex;
+ justify-content: space-between;
+ gap: 8px;
+ color: rgba(172, 194, 225, 0.78);
+ font-size: 10px;
+}
+
+.ds-decision-meta em {
+ overflow: hidden;
+ font-style: normal;
+ text-align: right;
+ text-overflow: ellipsis;
+ white-space: nowrap;
+}
+
+.ds-decision-card p {
+ margin: 0;
+ color: rgba(222, 236, 255, 0.88);
+ font-size: 11px;
+ line-height: 1.35;
+}
+
+.ds-decision-list {
+ gap: 6px;
+}
+
+.ds-decision-item {
+ display: grid;
+ grid-template-columns: 8px minmax(0, 1fr);
+ gap: 8px;
+ align-items: start;
+}
+
+.ds-decision-item span {
+ width: 7px;
+ height: 7px;
+ margin-top: 5px;
+ border-radius: 999px;
+ background: rgba(172, 194, 225, 0.70);
+}
+
+.ds-decision-item.good span {
+ background: rgba(29, 233, 182, 0.95);
+}
+
+.ds-decision-item.watch span {
+ background: rgba(255, 210, 119, 0.95);
+}
+
+.ds-decision-item.danger span {
+ background: rgba(255, 93, 122, 0.95);
+}
+
+.ds-decision-item strong {
+ color: rgba(222, 236, 255, 0.84);
+ font-size: 11px;
+ font-weight: 650;
+ line-height: 1.3;
+}
+
+.ds-decision-badge-row span.ready {
+ color: rgba(87, 243, 202, 0.95);
+ border-color: rgba(29, 233, 182, 0.36);
+ background: rgba(29, 233, 182, 0.10);
+}
+
+.ds-decision-badge-row span.wait {
+ color: rgba(255, 210, 119, 0.95);
+ border-color: rgba(255, 210, 119, 0.34);
+ background: rgba(255, 210, 119, 0.08);
+}
+
+.ds-decision-badge-row span.invalid {
+ color: rgba(255, 139, 161, 0.95);
+ border-color: rgba(255, 93, 122, 0.36);
+ background: rgba(255, 93, 122, 0.10);
+}
+
+.ds-mtf-stack {
+ display: grid;
+ gap: 7px;
+}
+
+.ds-mtf-row {
+ display: grid;
+ grid-template-columns: 36px minmax(0, 1fr);
+ gap: 4px 8px;
+ padding: 8px;
+ border: 1px solid rgba(255, 255, 255, 0.07);
+ border-radius: 7px;
+ background: rgba(255, 255, 255, 0.03);
+}
+
+.ds-mtf-row span {
+ color: rgba(172, 194, 225, 0.72);
+ font-size: 10px;
+ font-weight: 800;
+}
+
+.ds-mtf-row strong {
+ overflow: hidden;
+ color: rgba(235, 244, 255, 0.92);
+ font-size: 11px;
+ text-overflow: ellipsis;
+ white-space: nowrap;
+}
+
+.ds-mtf-row em {
+ grid-column: 2;
+ overflow: hidden;
+ color: rgba(172, 194, 225, 0.70);
+ font-size: 10px;
+ font-style: normal;
+ text-overflow: ellipsis;
+ white-space: nowrap;
+}
+
+.ds-mtf-row.good {
+ border-color: rgba(29, 233, 182, 0.18);
+}
+
+.ds-mtf-row.danger {
+ border-color: rgba(255, 93, 122, 0.20);
+}
+
+.ds-execution-pulse {
+ display: grid;
+ grid-template-columns: repeat(6, minmax(92px, 1fr));
+ gap: 8px;
+ margin-top: 10px;
+}
+
+.ds-execution-pulse span {
+ min-width: 0;
+ padding: 8px 9px;
+ border: 1px solid rgba(255, 255, 255, 0.08);
+ border-radius: 8px;
+ background: rgba(255, 255, 255, 0.035);
+}
+
+.ds-execution-pulse em,
+.ds-lwc-readout em {
+ display: block;
+ color: rgba(172, 194, 225, 0.70);
+ font-size: 9px;
+ font-style: normal;
+ font-weight: 800;
+ letter-spacing: 0.06em;
+ text-transform: uppercase;
+}
+
+.ds-execution-pulse strong {
+ display: block;
+ overflow: hidden;
+ margin-top: 3px;
+ color: rgba(235, 244, 255, 0.92);
+ font-size: 12px;
+ text-overflow: ellipsis;
+ white-space: nowrap;
+}
+
+.ds-execution-pulse .good strong,
+.ds-lwc-readout .up strong {
+ color: rgba(87, 243, 202, 0.95);
+}
+
+.ds-execution-pulse .watch strong {
+ color: rgba(255, 210, 119, 0.95);
+}
+
+.ds-execution-pulse .danger strong,
+.ds-lwc-readout .down strong {
+ color: rgba(255, 139, 161, 0.95);
+}
+
+.ds-active-indicator-row {
+ display: flex;
+ flex-wrap: wrap;
+ gap: 6px;
+ margin-bottom: 8px;
+}
+
+.ds-active-indicator-row span {
+ display: inline-flex;
+ align-items: center;
+ min-height: 22px;
+ padding: 3px 8px;
+ border-radius: 999px;
+ border: 1px solid rgba(121, 221, 255, 0.18);
+ background: rgba(121, 221, 255, 0.06);
+ color: rgba(218, 231, 250, 0.78);
+ font-size: 10px;
+ font-weight: 700;
+ letter-spacing: 0.04em;
+ text-transform: uppercase;
+}
+
+.ds-chart-indicator-legend {
+ position: absolute;
+ top: 12px;
+ left: 30px;
+ z-index: 35;
+ display: flex;
+ flex-direction: column;
+ align-items: flex-start;
+ gap: 3px;
+ max-width: min(330px, calc(100% - 150px));
+ pointer-events: auto;
+}
+
+.ds-chart-indicator-legend.is-collapsed {
+ left: 14px;
+ max-width: none;
+}
+
+.ds-chart-legend-toggle {
+ align-self: flex-start;
+ min-height: 20px;
+ padding: 2px 7px;
+ border: 1px solid rgba(121, 221, 255, 0.22);
+ border-radius: 5px;
+ background: rgba(3, 10, 18, 0.72);
+ color: rgba(218, 231, 250, 0.76);
+ font-size: 10px;
+ font-weight: 800;
+ line-height: 1.2;
+ cursor: pointer;
+ text-shadow: 0 1px 2px rgba(0, 0, 0, 0.72);
+}
+
+.ds-chart-legend-toggle:hover,
+.ds-chart-legend-toggle:focus-visible {
+ border-color: rgba(121, 221, 255, 0.46);
+ color: rgba(236, 248, 255, 0.96);
+ outline: none;
+}
+
+.ds-chart-indicator-row {
+ display: inline-grid;
+ grid-template-columns: 8px auto auto auto auto auto;
+ align-items: center;
+ gap: 5px;
+ min-height: 19px;
+ padding: 0 2px;
+ border: 0;
+ border-radius: 3px;
+ background: transparent;
+ color: rgba(220, 230, 242, 0.84);
+ font-size: 11px;
+ line-height: 1.2;
+ text-shadow: 0 1px 2px rgba(0, 0, 0, 0.80);
+}
+
+.ds-chart-indicator-row.ema9 {
+ --ds-indicator-color: #57f3ca;
+}
+
+.ds-chart-indicator-row.ema30 {
+ --ds-indicator-color: #ffd277;
+ font-size: 11.5px;
+}
+
+.ds-chart-indicator-row.ema100 {
+ --ds-indicator-color: #4fd1ff;
+ font-size: 12px;
+}
+
+.ds-chart-indicator-row.vwap {
+ --ds-indicator-color: #ff9c33;
+}
+
+.ds-chart-indicator-row strong,
+.ds-chart-indicator-row em {
+ overflow: hidden;
+ text-overflow: ellipsis;
+ white-space: nowrap;
+}
+
+.ds-chart-indicator-row strong {
+ max-width: 150px;
+ font-weight: 800;
+ color: var(--ds-indicator-color, rgba(235, 244, 255, 0.92));
+}
+
+.ds-chart-indicator-row em {
+ max-width: 96px;
+ color: var(--ds-indicator-color, rgba(121, 221, 255, 0.92));
+ font-style: normal;
+ font-weight: 800;
+}
+
+.ds-chart-indicator-row.ema30 strong,
+.ds-chart-indicator-row.ema30 em {
+ font-weight: 850;
+}
+
+.ds-chart-indicator-row.ema100 strong,
+.ds-chart-indicator-row.ema100 em {
+ font-weight: 900;
+}
+
+.ds-indicator-swatch {
+ width: 6px;
+ height: 6px;
+ border-radius: 50%;
+ background: rgba(218, 231, 250, 0.72);
+ box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.32);
+}
+
+.ds-indicator-swatch.ema9 { background: #57f3ca; }
+.ds-indicator-swatch.ema30 { background: #ffd277; }
+.ds-indicator-swatch.ema100 { background: #4fd1ff; }
+.ds-indicator-swatch.volume { background: rgba(29, 233, 182, 0.75); }
+.ds-indicator-swatch.sma20 { background: #c8a8ff; }
+.ds-indicator-swatch.vwap { background: #ff9c33; }
+.ds-indicator-swatch.bollinger { background: #9bb6ff; }
+.ds-indicator-swatch.supertrend { background: #1de9b6; }
+.ds-indicator-swatch.rsi { background: #79ddff; }
+.ds-indicator-swatch.macd { background: #57f3ca; }
+.ds-indicator-swatch.obv { background: #c8a8ff; }
+.ds-indicator-swatch.atr { background: #f2a65a; }
+
+.ds-chart-indicator-row button,
+.ds-chart-indicator-settings summary {
+ min-width: 24px;
+ height: 18px;
+ padding: 0 6px;
+ border: 1px solid rgba(145, 168, 198, 0.18);
+ border-radius: 5px;
+ background: rgba(8, 16, 24, 0.70);
+ color: rgba(235, 244, 255, 0.72);
+ font-size: 10px;
+ font-weight: 800;
+ cursor: pointer;
+ opacity: 0;
+ pointer-events: none;
+ transition: opacity 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.ds-chart-indicator-row:hover button,
+.ds-chart-indicator-row:focus-within button,
+.ds-chart-indicator-row:hover .ds-chart-indicator-settings summary,
+.ds-chart-indicator-row:focus-within .ds-chart-indicator-settings summary,
+.ds-chart-indicator-settings[open] summary {
+ opacity: 1;
+ pointer-events: auto;
+}
+
+.ds-chart-indicator-row button:hover,
+.ds-chart-indicator-settings summary:hover {
+ border-color: rgba(121, 221, 255, 0.58);
+ color: #fff;
+}
+
+.ds-chart-indicator-settings {
+ position: relative;
+}
+
+.ds-chart-indicator-settings summary {
+ display: inline-flex;
+ align-items: center;
+ justify-content: center;
+ list-style: none;
+}
+
+.ds-chart-indicator-settings summary::-webkit-details-marker {
+ display: none;
+}
+
+.ds-chart-indicator-settings-panel {
+ position: absolute;
+ top: 24px;
+ left: 0;
+ z-index: 60;
+ min-width: 210px;
+ padding: 10px;
+ border: 1px solid rgba(145, 168, 198, 0.28);
+ border-radius: 8px;
+ background: rgba(8, 16, 28, 0.98);
+ box-shadow: 0 18px 42px rgba(0, 0, 0, 0.42);
+}
+
+.ds-chart-indicator-settings-panel .ds-chart-settings-options {
+ margin-top: 8px;
+}
+
+.ds-indicator-number {
+ display: flex;
+ align-items: center;
+ justify-content: space-between;
+ gap: 8px;
+ margin-top: 10px;
+ color: rgba(218, 231, 250, 0.80);
+ font-size: 11px;
+ font-weight: 800;
+}
+
+.ds-indicator-number input {
+ width: 72px;
+ height: 28px;
+ border: 1px solid rgba(145, 168, 198, 0.28);
+ border-radius: 6px;
+ background: rgba(2, 12, 22, 0.92);
+ color: rgba(235, 244, 255, 0.94);
+ padding: 0 8px;
+}
+
+.ds-intel-badge-row span.good {
+ color: rgba(87, 243, 202, 0.95);
+ border-color: rgba(29, 233, 182, 0.30);
+ background: rgba(29, 233, 182, 0.08);
+}
+
+.ds-intel-badge-row span.watch {
+ color: rgba(255, 210, 119, 0.95);
+ border-color: rgba(255, 210, 119, 0.30);
+ background: rgba(255, 210, 119, 0.08);
+}
+
+.ds-intel-badge-row span.danger,
+.ds-intel-badge-row span.weak {
+ color: rgba(255, 139, 161, 0.95);
+ border-color: rgba(255, 93, 122, 0.30);
+ background: rgba(255, 93, 122, 0.08);
+}
+
+.ds-chart-intel-layer {
+ position: absolute;
+ inset: 0 70px 0 0;
+ z-index: 3;
+ pointer-events: none;
+}
+
+.ds-key-level-layer {
+ position: absolute;
+ inset: 0 70px 0 0;
+ z-index: 2;
+ pointer-events: none;
+}
+
+.ds-chart-nav-controls {
+ position: absolute;
+ left: 50%;
+ bottom: 18px;
+ z-index: 30;
+ display: inline-flex;
+ align-items: center;
+ gap: 5px;
+ padding: 4px;
+ border-radius: 8px;
+ border: 1px solid rgba(145, 168, 198, 0.22);
+ background: rgba(7, 15, 26, 0.96);
+ box-shadow: 0 12px 30px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(79, 209, 255, 0.10);
+ transform: translateX(-50%);
+ opacity: 1;
+ transition: opacity 0.14s ease, background 0.14s ease;
+}
+
+.ds-chart-nav-controls:hover,
+.ds-chart-nav-controls:focus-within {
+ opacity: 1;
+ background: rgba(9, 19, 32, 0.94);
+}
+
+.ds-chart-nav-controls button {
+ display: inline-flex;
+ align-items: center;
+ justify-content: center;
+ width: 27px;
+ height: 24px;
+ border: 1px solid rgba(145, 168, 198, 0.20);
+ border-radius: 6px;
+ background: rgba(255, 255, 255, 0.04);
+ color: rgba(229, 239, 252, 0.92);
+ font-size: 15px;
+ font-weight: 900;
+ line-height: 1;
+ cursor: pointer;
+}
+
+.ds-chart-nav-controls button:hover {
+ border-color: rgba(79, 209, 255, 0.42);
+ background: rgba(79, 209, 255, 0.12);
+ color: #f5fbff;
+}
+
+.ds-key-zone-band,
+.ds-key-pivot-dot,
+.ds-key-reaction-marker {
+ position: absolute;
+}
+
+.ds-key-zone-band {
+ left: 0;
+ right: 0;
+ min-height: 5px;
+ border-top: 0;
+ border-bottom: 0;
+ opacity: 0.9;
+}
+
+.ds-key-zone-band::before {
+ content: "";
+ position: absolute;
+ inset: 0;
+ background: currentColor;
+ opacity: 0.055;
+}
+
+.ds-key-zone-band.is-glow {
+ box-shadow: 0 0 8px color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.ds-key-zone-band.is-far {
+ opacity: 0.38;
+}
+
+.ds-key-zone-band.is-far:hover {
+ opacity: 0.82;
+}
+
+.ds-key-zone-center {
+ position: absolute;
+ left: 0;
+ right: 0;
+ height: 2px;
+ transform: translateY(-50%);
+ background: currentColor;
+ box-shadow: 0 0 8px color-mix(in srgb, currentColor 36%, transparent);
+}
+
+.ds-key-zone-badge {
+ position: absolute;
+ right: 6px;
+ display: inline-grid;
+ grid-template-columns: auto auto;
+ column-gap: 5px;
+ align-items: center;
+ min-width: 34px;
+ padding: 3px 5px;
+ border-radius: 5px;
+ background: currentColor;
+ color: #07111d;
+ font-size: 10px;
+ font-weight: 900;
+ line-height: 1;
+ transform: translateY(-50%);
+ box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
+ pointer-events: auto;
+}
+
+.ds-key-zone-badge em,
+.ds-key-zone-badge small {
+ font-style: normal;
+}
+
+.ds-key-zone-badge small {
+ display: none;
+}
+
+.ds-key-zone-badge.is-muted {
+ opacity: 0;
+ transform: translateY(-50%) translateX(10px);
+}
+
+.ds-key-zone-band:hover .ds-key-zone-badge.is-muted {
+ opacity: 0.78;
+}
+
+.ds-key-zone-tooltip {
+ position: absolute;
+ right: 0;
+ top: calc(100% + 7px);
+ z-index: 8;
+ display: none;
+ min-width: 210px;
+ max-width: 280px;
+ padding: 7px 9px;
+ border-radius: 6px;
+ border: 1px solid rgba(255, 255, 255, 0.14);
+ background: rgba(5, 13, 22, 0.96);
+ color: rgba(235, 244, 255, 0.92);
+ font-size: 10px;
+ font-weight: 700;
+ line-height: 1.35;
+ white-space: normal;
+ box-shadow: 0 14px 30px rgba(0, 0, 0, 0.38);
+}
+
+.ds-key-zone-badge:hover .ds-key-zone-tooltip {
+ display: block;
+}
+
+.ds-key-zone-band.day-resistance {
+ color: #ff4757;
+}
+
+.ds-key-zone-band.resistance-major {
+ color: #ff4757;
+}
+
+.ds-key-zone-band.m15-resistance,
+.ds-key-zone-band.combined-resistance,
+.ds-key-zone-band.resistance-minor {
+ color: #ff9c33;
+}
+
+.ds-key-zone-band.day-support {
+ color: #ffd84e;
+}
+
+.ds-key-zone-band.support-deep {
+ color: #ffd84e;
+}
+
+.ds-key-zone-band.m15-support,
+.ds-key-zone-band.combined-support,
+.ds-key-zone-band.support-near {
+ color: #00c3ff;
+}
+
+.ds-key-pivot-dot {
+ width: 9px;
+ height: 9px;
+ border-radius: 999px;
+ background: currentColor;
+ border: 1px solid rgba(255, 255, 255, 0.24);
+ box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 16%, transparent);
+ transform: translate(-50%, -50%);
+ opacity: 0.48;
+}
+
+.ds-key-reaction-marker {
+ width: 10px;
+ height: 10px;
+ border-radius: 3px;
+ border: 1px solid rgba(255, 255, 255, 0.35);
+ background: currentColor;
+ transform: translate(-50%, -50%) rotate(45deg);
+ opacity: 0;
+ box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 16%, transparent);
+}
+
+.ds-key-zone-band:hover ~ .ds-key-reaction-marker,
+.ds-key-reaction-marker:hover {
+ opacity: 0.62;
+}
+
+.ds-key-reaction-marker.breakout,
+.ds-key-reaction-marker.breakdown {
+ border-radius: 999px;
+ transform: translate(-50%, -50%);
+}
+
+.ds-key-reaction-marker.bounce,
+.ds-key-reaction-marker.rejection {
+ width: 12px;
+ height: 12px;
+}
+
+.ds-key-pivot-dot.day-resistance { color: #ff4757; }
+.ds-key-pivot-dot.resistance-major { color: #ff4757; }
+.ds-key-pivot-dot.m15-resistance { color: #ff9c33; }
+.ds-key-pivot-dot.resistance-minor { color: #ff9c33; }
+.ds-key-pivot-dot.day-support { color: #ffd84e; }
+.ds-key-pivot-dot.support-deep { color: #ffd84e; }
+.ds-key-pivot-dot.m15-support { color: #00c3ff; }
+.ds-key-pivot-dot.support-near { color: #00c3ff; }
+.ds-key-reaction-marker.day-resistance,
+.ds-key-reaction-marker.resistance-major { color: #ff4757; }
+.ds-key-reaction-marker.m15-resistance,
+.ds-key-reaction-marker.resistance-minor { color: #ff9c33; }
+.ds-key-reaction-marker.day-support,
+.ds-key-reaction-marker.support-deep { color: #ffd84e; }
+.ds-key-reaction-marker.m15-support,
+.ds-key-reaction-marker.support-near { color: #00c3ff; }
+
+.ds-key-nearest-row span.good {
+ color: rgba(87, 243, 202, 0.96);
+ border-color: rgba(29, 233, 182, 0.30);
+ background: rgba(29, 233, 182, 0.08);
+}
+
+.ds-key-nearest-row span.watch {
+ color: rgba(255, 210, 119, 0.96);
+ border-color: rgba(255, 210, 119, 0.30);
+ background: rgba(255, 210, 119, 0.08);
+}
+
+.ds-key-nearest-row span.danger {
+ color: rgba(255, 139, 161, 0.96);
+ border-color: rgba(255, 93, 122, 0.30);
+ background: rgba(255, 93, 122, 0.08);
+}
+
+.ds-intel-zone-badge,
+.ds-intel-marker {
+ position: absolute;
+ display: inline-flex;
+ align-items: center;
+ gap: 5px;
+ max-width: 220px;
+ min-height: 22px;
+ padding: 3px 8px;
+ border-radius: 6px;
+ border: 1px solid rgba(255, 255, 255, 0.12);
+ background: rgba(3, 11, 20, 0.84);
+ color: rgba(235, 244, 255, 0.88);
+ font-size: 10px;
+ font-weight: 700;
+ line-height: 1.2;
+ white-space: nowrap;
+ box-shadow: 0 8px 22px rgba(0, 0, 0, 0.25);
+}
+
+.ds-intel-zone-badge {
+ right: 4px;
+ transform: translateY(-50%);
+}
+
+.ds-intel-zone-badge.support {
+ border-color: rgba(29, 233, 182, 0.34);
+ color: rgba(87, 243, 202, 0.95);
+}
+
+.ds-intel-zone-badge.resistance {
+ border-color: rgba(255, 93, 122, 0.34);
+ color: rgba(255, 139, 161, 0.95);
+}
+
+.ds-intel-zone-badge span,
+.ds-intel-zone-badge em {
+ color: rgba(218, 231, 250, 0.76);
+ font-style: normal;
+ font-weight: 600;
+}
+
+.ds-intel-marker {
+ transform: translate(-50%, -115%);
+}
+
+.ds-decision-line {
+ position: absolute;
+ left: 0;
+ right: 0;
+ height: 1px;
+ border-top: 1px dashed rgba(235, 244, 255, 0.32);
+}
+
+.ds-decision-line span {
+ position: absolute;
+ right: 4px;
+ top: -11px;
+ padding: 2px 7px;
+ border-radius: 5px;
+ background: rgba(3, 11, 20, 0.86);
+ color: rgba(235, 244, 255, 0.84);
+ font-size: 10px;
+ font-weight: 800;
+}
+
+.ds-decision-line.danger {
+ border-color: rgba(255, 93, 122, 0.72);
+}
+
+.ds-decision-line.danger span {
+ color: rgba(255, 139, 161, 0.95);
+}
+
+.ds-decision-line.watch {
+ border-color: rgba(255, 210, 119, 0.62);
+}
+
+.ds-decision-line.watch span {
+ color: rgba(255, 210, 119, 0.95);
+}
+
+.ds-intel-marker.good {
+ border-color: rgba(29, 233, 182, 0.34);
+ color: rgba(87, 243, 202, 0.95);
+}
+
+.ds-intel-marker.watch {
+ border-color: rgba(255, 210, 119, 0.34);
+ color: rgba(255, 210, 119, 0.95);
+}
+
+.ds-intel-marker.danger {
+ border-color: rgba(255, 93, 122, 0.34);
+ color: rgba(255, 139, 161, 0.95);
+}
+
+.ds-lwc-attribution {
+ position: absolute;
+ left: 10px;
+ bottom: 8px;
+ z-index: 4;
+ padding: 3px 7px;
+ border-radius: 5px;
+ background: rgba(3, 10, 18, 0.74);
+ color: rgba(218, 231, 250, 0.56);
+ font-size: 10px;
+ line-height: 1.2;
+ pointer-events: auto;
+}
+
+.ds-lwc-readout {
+ position: absolute;
+ top: 10px;
+ left: 10px;
+ right: 74px;
+ z-index: 5;
+ display: flex;
+ flex-wrap: wrap;
+ gap: 5px;
+ pointer-events: none;
+}
+
+.ds-lwc-readout span {
+ display: inline-flex;
+ align-items: center;
+ gap: 5px;
+ min-height: 24px;
+ padding: 3px 7px;
+ border: 1px solid rgba(255, 255, 255, 0.09);
+ border-radius: 6px;
+ background: rgba(3, 10, 18, 0.72);
+ color: rgba(235, 244, 255, 0.88);
+ box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+}
+
+.ds-lwc-readout strong {
+ color: rgba(235, 244, 255, 0.92);
+ font-size: 10px;
+ white-space: nowrap;
+}
+
+.ds-lwc-attribution a {
+ color: rgba(121, 221, 255, 0.86);
+ text-decoration: none;
+}
+
+.ds-preset-menu {
+ position: relative;
+}
+
+.ds-preset-menu summary {
+ list-style: none;
+ cursor: pointer;
+}
+
+.ds-preset-menu summary::-webkit-details-marker {
+ display: none;
+}
+
+.ds-preset-menu summary span {
+ margin-left: 6px;
+ color: rgba(87, 243, 202, 0.95);
+}
+
+.ds-preset-menu-panel {
+ position: absolute;
+ left: 0;
+ right: auto;
+ top: calc(100% + 8px);
+ z-index: 24;
+ display: grid;
+ gap: 10px;
+ width: min(280px, calc(100vw - 42px));
+ max-height: min(340px, calc(100vh - 165px));
+ overflow: auto;
+ padding: 12px;
+ border: 1px solid rgba(255, 255, 255, 0.12);
+ border-radius: 8px;
+ background: rgba(4, 14, 26, 0.98);
+ box-shadow: 0 18px 46px rgba(0, 0, 0, 0.38);
+}
+
+.ds-preset-menu-group {
+ display: grid;
+ gap: 6px;
+}
+
+.ds-preset-menu-title {
+ color: rgba(172, 194, 225, 0.76);
+ font-size: 10px;
+ font-weight: 800;
+ letter-spacing: 0.06em;
+ text-transform: uppercase;
+}
+
+.ds-preset-menu-options {
+ display: grid;
+ grid-template-columns: 1fr;
+ gap: 6px;
+}
+
+.ds-preset-menu-options .bsm {
+ justify-content: center;
+}
+
+.ds-chart-settings-menu {
+ position: relative;
+}
+
+.ds-chart-settings-menu summary {
+ list-style: none;
+ cursor: pointer;
+}
+
+.ds-chart-settings-menu summary::-webkit-details-marker {
+ display: none;
+}
+
+.ds-chart-settings-menu summary span {
+ margin-left: 6px;
+ color: rgba(87, 243, 202, 0.95);
+}
+
+.ds-chart-settings-panel {
+ position: absolute;
+ right: 0;
+ top: calc(100% + 8px);
+ z-index: 28;
+ display: grid;
+ gap: 12px;
+ width: min(320px, 86vw);
+ padding: 14px;
+ border: 1px solid rgba(93, 165, 255, 0.24);
+ border-radius: 8px;
+ background: rgba(7, 19, 32, 0.98);
+ box-shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
+}
+
+.ds-chart-settings-section {
+ display: grid;
+ gap: 8px;
+}
+
+.ds-chart-settings-title {
+ color: rgba(172, 194, 225, 0.76);
+ font-size: 10px;
+ font-weight: 800;
+ letter-spacing: 0.06em;
+ text-transform: uppercase;
+}
+
+.ds-chart-settings-options {
+ display: grid;
+ grid-template-columns: repeat(2, minmax(0, 1fr));
+ gap: 6px;
+}
+
+.ds-chart-settings-options .bsm,
+.ds-chart-settings-section > .bsm {
+ justify-content: center;
+}
+
+.ds-active-preset-chip {
+ display: inline-flex;
+ align-items: center;
+ min-height: 30px;
+ padding: 5px 10px;
+ border: 1px solid rgba(87, 243, 202, 0.22);
+ border-radius: 999px;
+ background: rgba(29, 233, 182, 0.08);
+ color: rgba(87, 243, 202, 0.95);
+ font-size: 11px;
+ font-weight: 800;
+}
+
+.ds-chart-tab-picker {
+ display: flex;
+ align-items: center;
+ justify-content: flex-end;
+ gap: 12px;
+ margin-top: 10px;
+ padding: 10px 12px;
+ border: 1px solid rgba(121, 221, 255, 0.18);
+ border-radius: 8px;
+ background: rgba(121, 221, 255, 0.06);
+}
+
+.ds-chart-tab-picker.is-loaded {
+ margin-top: 8px;
+ padding: 10px 12px;
+ background: rgba(6, 16, 29, 0.76);
+}
+
+.ds-chart-tab-picker strong {
+ display: block;
+ color: rgba(237, 246, 255, 0.95);
+ font-size: 13px;
+}
+
+.ds-chart-tab-picker span {
+ display: block;
+ margin-top: 4px;
+ color: rgba(172, 194, 225, 0.76);
+ font-size: 11px;
+}
+
+.ds-chart-symbol-form {
+ display: flex;
+ align-items: center;
+ gap: 8px;
+ flex-wrap: nowrap;
+ justify-content: flex-end;
+ min-width: 0;
+ flex: 1 1 auto;
+ width: auto;
+}
+
+.ds-chart-symbol-form .si {
+ min-width: min(320px, calc(100% - 86px));
+ width: min(320px, calc(100% - 86px));
+ height: 34px;
+ border-color: rgba(0, 229, 192, 0.28);
+ font-size: 12px;
+}
+
+.ds-indicator-menu {
+ position: relative;
+}
+
+.ds-indicator-menu summary {
+ list-style: none;
+ cursor: pointer;
+}
+
+.ds-indicator-menu summary::-webkit-details-marker {
+ display: none;
+}
+
+.ds-indicator-grid {
+ position: absolute;
+ right: 0;
+ top: calc(100% + 8px);
+ z-index: 20;
+ display: grid;
+ grid-template-columns: repeat(2, minmax(96px, 1fr));
+ gap: 6px;
+ width: min(260px, 78vw);
+ padding: 10px;
+ border: 1px solid rgba(255, 255, 255, 0.12);
+ border-radius: 8px;
+ background: rgba(4, 14, 26, 0.98);
+ box-shadow: 0 18px 46px rgba(0, 0, 0, 0.38);
+}
+
+.ds-indicator-grid .bsm {
+ justify-content: center;
+}
+
+body.chart-mode .live-order-chart-card {
+ display: flex;
+ flex-direction: column;
+}
+
+body.chart-mode .live-order-chart-wrap {
+ flex: 1 1 auto;
+}
+
+body.chart-mode .live-order-chart-shell {
+ min-height: calc(100vh - 250px);
+}
+
+/* -- Volume bars -- */
+.live-order-vol-bar {
+ opacity: 0.18;
+}
+.live-order-vol-bar.up {
+ fill: rgba(29, 233, 182, 0.6);
+}
+.live-order-vol-bar.down {
+ fill: rgba(255, 93, 122, 0.6);
+}
+
+/* -- Last price line tag -- */
+.ds-last-price-tag {
+ font-weight: 600;
+ border-left: 3px solid currentColor;
+}
+.ds-last-price-tag.up {
+ color: rgba(29, 233, 182, 0.95);
+}
+.ds-last-price-tag.down {
+ color: rgba(255, 93, 122, 0.95);
+}
+
+.ds-last-price-axis {
+ font-weight: 700;
+ padding: 2px 6px;
+ border-radius: 4px;
+}
+.ds-last-price-axis.up {
+ background: rgba(29, 233, 182, 0.18);
+ color: rgba(29, 233, 182, 0.95);
+}
+.ds-last-price-axis.down {
+ background: rgba(255, 93, 122, 0.18);
+ color: rgba(255, 93, 122, 0.95);
+}
+
+/* -- Crosshair -- */
+.ds-chart-crosshair-lines {
+ position: absolute;
+ inset: 0;
+ pointer-events: none;
+ z-index: 5;
+}
+
+.ds-chart-crosshair-h {
+ position: absolute;
+ left: 0;
+ right: 0;
+ height: 1px;
+ background: rgba(235, 244, 255, 0.28);
+ pointer-events: none;
+}
+
+.ds-chart-crosshair-v {
+ position: absolute;
+ top: 0;
+ bottom: 0;
+ width: 1px;
+ background: rgba(235, 244, 255, 0.28);
+ pointer-events: none;
+}
+
+.ds-chart-crosshair-tooltip {
+ position: absolute;
+ padding: 4px 8px;
+ border-radius: 6px;
+ background: rgba(4, 14, 26, 0.94);
+ border: 1px solid rgba(255, 255, 255, 0.12);
+ color: rgba(235, 244, 255, 0.92);
+ font-size: 10px;
+ letter-spacing: 0.02em;
+ white-space: nowrap;
+ pointer-events: none;
+ z-index: 6;
+}
+
+/* -- Risk-Reward badges -- */
+.ds-chart-rr-row {
+ gap: 6px;
+}
+
+.ds-rr-badge {
+ font-weight: 600;
+ letter-spacing: 0.03em;
+}
+
+.ds-rr-badge.stop {
+ color: rgba(255, 139, 161, 0.95);
+ border-color: rgba(255, 93, 122, 0.3);
+ background: rgba(255, 93, 122, 0.08);
+}
+
+.ds-rr-badge.target {
+ color: rgba(87, 243, 202, 0.95);
+ border-color: rgba(29, 233, 182, 0.3);
+ background: rgba(29, 233, 182, 0.08);
+}
+
+.ds-rr-badge.good {
+ color: rgba(29, 233, 182, 0.95);
+ border-color: rgba(29, 233, 182, 0.4);
+ background: rgba(29, 233, 182, 0.12);
+}
+
+.ds-rr-badge.neutral {
+ color: rgba(255, 206, 84, 0.95);
+ border-color: rgba(255, 206, 84, 0.3);
+ background: rgba(255, 206, 84, 0.08);
+}
+
+.ds-rr-badge.bad {
+ color: rgba(255, 93, 122, 0.95);
+ border-color: rgba(255, 93, 122, 0.4);
+ background: rgba(255, 93, 122, 0.12);
+}
+
+.ds-instrument-note {
+ display: flex;
+ align-items: center;
+ justify-content: space-between;
+ gap: 10px;
+ margin-top: 8px;
+}
+
+.ds-instrument-note strong {
+ color: var(--text);
+}
+
+.ds-instrument-note span {
+ color: var(--text-muted);
+ font-weight: 650;
+}
+
+@media (max-width: 900px) {
+ body.chart-mode #chartWorkspaceRoot {
+ padding: 12px;
+ }
+
+ .ds-chart-card-tab .live-order-chart-head,
+ .ds-chart-card-detached .live-order-chart-head {
+ flex-direction: column;
+ }
+
+ .ds-chart-card-tab .live-order-chart-actions,
+ .ds-chart-card-detached .live-order-chart-actions {
+ justify-content: flex-start;
+ }
+
+ .ds-chart-tab-picker,
+ .ds-chart-symbol-form {
+ align-items: stretch;
+ flex-direction: column;
+ }
+
+ .ds-chart-symbol-form .si {
+ width: 100%;
+ }
+
+ body.chart-mode .live-order-chart-shell {
+ min-height: calc(100vh - 290px);
+ }
+
+ .ds-advanced-chart-stage {
+ grid-template-columns: 1fr;
+ }
+
+ .ds-chart-desk,
+ .ds-chart-desk.is-primary-collapsed,
+ .ds-chart-desk.is-execution-collapsed,
+ .ds-chart-desk.is-context-collapsed {
+ grid-template-columns: 1fr;
+ height: auto;
+ min-height: 0;
+ }
+
+ .ds-desk-chart-panel {
+ min-height: 520px;
+ }
+
+ .ds-desk-splitter {
+ display: none;
+ }
+
+ .ds-trade-read-panel {
+ max-height: none;
+ }
+
+ .ds-execution-pulse {
+ grid-template-columns: repeat(2, minmax(0, 1fr));
+ }
+
+ .ds-chart-intel-layer {
+ right: 54px;
+ }
+
+ .ds-lwc-readout {
+ right: 48px;
+ }
+
+ .ds-intel-zone-badge,
+ .ds-intel-marker {
+ max-width: 160px;
+ font-size: 9px;
+ }
+}

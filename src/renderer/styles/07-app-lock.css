@@ -1,0 +1,253 @@
+body.app-is-locked {
+ overflow: hidden;
+}
+
+.app-lock-overlay {
+ position: fixed;
+ inset: 0;
+ z-index: 9999;
+ display: grid;
+ align-items: center;
+ justify-items: center;
+ padding: 28px 18px;
+ background:
+ linear-gradient(135deg, rgba(0, 213, 255, 0.10), transparent 36%),
+ linear-gradient(180deg, rgba(3, 9, 16, 0.98), rgba(1, 6, 12, 0.98));
+ backdrop-filter: blur(14px);
+}
+
+.app-lock-overlay[hidden] {
+ display: none;
+}
+
+.app-lock-card {
+ width: min(560px, 100%);
+ max-height: calc(100vh - 56px);
+ border: 1px solid rgba(55, 174, 214, 0.42);
+ border-radius: 8px;
+ background:
+ linear-gradient(180deg, rgba(9, 23, 37, 0.98), rgba(5, 13, 24, 0.99));
+ box-shadow: 0 28px 90px rgba(0, 0, 0, 0.56), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+ color: #eaf7ff;
+ overflow-y: auto;
+ scrollbar-color: rgba(8, 217, 255, .55) rgba(255,255,255,.06);
+}
+
+.app-lock-head {
+ padding: 24px 28px 18px;
+ border-bottom: 1px solid rgba(95, 179, 213, 0.18);
+}
+
+.app-lock-kicker {
+ color: #08d9ff;
+ font-size: 11px;
+ font-weight: 800;
+ letter-spacing: 1px;
+ text-transform: uppercase;
+}
+
+.app-lock-title {
+ margin-top: 6px;
+ font-size: 26px;
+ line-height: 1.2;
+ font-weight: 900;
+}
+
+.app-lock-copy {
+ margin-top: 8px;
+ color: #9fc4d8;
+ font-size: 13px;
+ line-height: 1.55;
+}
+
+.app-lock-status-row {
+ display: flex;
+ gap: 8px;
+ flex-wrap: wrap;
+ margin-top: 16px;
+}
+
+.app-lock-status-row span {
+ display: inline-flex;
+ align-items: center;
+ min-height: 28px;
+ padding: 6px 9px;
+ border: 1px solid rgba(8, 217, 255, 0.16);
+ border-radius: 999px;
+ background: rgba(8, 217, 255, 0.06);
+ color: #b7dcef;
+ font-size: 10px;
+ font-weight: 900;
+ letter-spacing: .4px;
+ text-transform: uppercase;
+}
+
+.app-lock-section {
+ padding: 18px 28px 22px;
+}
+
+.app-lock-section[hidden] {
+ display: none;
+}
+
+.app-lock-field {
+ display: grid;
+ gap: 7px;
+ margin-bottom: 10px;
+ color: #9fc4d8;
+ font-size: 11px;
+ font-weight: 800;
+ text-transform: uppercase;
+ letter-spacing: .7px;
+}
+
+.app-lock-field input {
+ width: 100%;
+ min-height: 46px;
+ border: 1px solid rgba(82, 150, 184, 0.42);
+ border-radius: 8px;
+ background: #081b2b;
+ color: #f4fbff;
+ padding: 0 12px;
+ font-size: 15px;
+ font-weight: 700;
+ outline: none;
+}
+
+.app-lock-field input:focus {
+ border-color: #07d6f2;
+ box-shadow: 0 0 0 3px rgba(7, 214, 242, 0.14);
+}
+
+.app-lock-check {
+ display: flex;
+ gap: 10px;
+ align-items: flex-start;
+ margin: 4px 0 12px;
+ color: #d9f1ff;
+ font-size: 12px;
+ line-height: 1.45;
+}
+
+.app-lock-check input {
+ margin-top: 2px;
+}
+
+.app-lock-actions {
+ display: grid;
+ grid-template-columns: minmax(0, 1fr) auto;
+ gap: 10px;
+ align-items: center;
+}
+
+.app-lock-primary,
+.app-lock-secondary {
+ border: 1px solid rgba(90, 176, 212, 0.38);
+ border-radius: 8px;
+ min-height: 42px;
+ padding: 0 16px;
+ font-size: 12px;
+ font-weight: 900;
+ letter-spacing: .4px;
+ cursor: pointer;
+}
+
+.app-lock-primary {
+ background: #05d4eb;
+ color: #03121b;
+ box-shadow: inset 0 1px 0 rgba(255,255,255,.28);
+}
+
+.app-lock-secondary {
+ background: #10263a;
+ color: #d9f4ff;
+}
+
+.app-lock-message {
+ min-height: 18px;
+ margin: 0 28px 16px;
+ color: #9fc4d8;
+ font-size: 12px;
+ line-height: 1.4;
+}
+
+@media (max-width: 640px) {
+ .app-lock-overlay {
+ padding: 14px;
+ align-items: stretch;
+ }
+ .app-lock-card {
+ max-height: calc(100vh - 28px);
+ }
+ .app-lock-actions {
+ grid-template-columns: 1fr;
+ }
+ .app-lock-secondary {
+ width: 100%;
+ }
+}
+
+.app-lock-message.good {
+ color: #27e6a3;
+}
+
+.app-lock-message.bad {
+ color: #ff6f8e;
+}
+
+.app-lock-secret {
+ border: 1px solid rgba(6, 214, 242, 0.24);
+ border-radius: 8px;
+ background: rgba(6, 214, 242, 0.07);
+ padding: 10px 12px;
+ margin-bottom: 10px;
+}
+
+.app-lock-qr {
+ display: grid;
+ place-items: center;
+ margin: 0 auto 12px;
+ width: 220px;
+ height: 220px;
+ border-radius: 8px;
+ background: #ffffff;
+ padding: 10px;
+}
+
+.app-lock-qr[hidden] {
+ display: none;
+}
+
+.app-lock-qr img,
+.app-lock-qr svg {
+ display: block;
+ width: 100%;
+ height: 100%;
+ image-rendering: pixelated;
+}
+
+.app-lock-secret span {
+ display: block;
+ color: #9fc4d8;
+ font-size: 10px;
+ font-weight: 900;
+ letter-spacing: .7px;
+ text-transform: uppercase;
+ margin-bottom: 8px;
+}
+
+.app-lock-secret code {
+ display: block;
+ color: #ffffff;
+ font-size: 15px;
+ font-weight: 900;
+ letter-spacing: 1.6px;
+ word-break: break-all;
+}
+
+.app-lock-uri {
+ min-height: 40px;
+ resize: vertical;
+ font-size: 11px;
+ line-height: 1.45;
+}

@@ -1,0 +1,954 @@
+// State, shared helpers, review summaries and notification feed
+// State, shared helpers, journal and private socket setup
+'use strict';
+
+const {
+ ACCOUNT_CAPABILITIES,
+ createAccountProfile,
+ createDefaultAccountState,
+ getAccountCapabilityMeta,
+ getMarketRegimeMeta,
+ getRegimeThresholds,
+ normalizePositionSide,
+ resolveVarPositionCaps,
+ resolveBracketProtectionLevels,
+ sanitizeAccountCapability,
+ sanitizeAccountId,
+ sanitizeAccountMetadata,
+ sanitizeAccountSecrets,
+ sanitizeBlockedSymbolList,
+ sanitizeAutoTradeSettings,
+ sanitizeKillSwitchState,
+ sanitizeMarketDataMode,
+ sanitizeRiskTemplates: v16SanitizeRiskTemplates,
+ resolveDecisionAction,
+ resolveEntryTrigger,
+ resolveRiskQualityGate,
+ buildSetupPerformance,
+ sanitizeText,
+ manageStoreCleanup,
+ manageStoreGet,
+ manageStoreGetMany,
+ manageStoreSet,
+ resolveRiskTemplateForSymbol: v16ResolveRiskTemplateForSymbol,
+} = globalThis.FWDTradeDeskShared;
+const {
+ V16_ACCOUNT_METADATA_KEY,
+ V16_ACCOUNT_SECRETS_KEY,
+ V16_STORAGE_DEP_KEYS,
+ V16_LIVE_SNAPSHOT_KEY,
+ V16_LIVE_EQUITY_HISTORY_KEY,
+ V16_LIVE_JOURNAL_NOTES_KEY,
+ V16_LIVE_ANALYTICS_VIEW_KEY,
+ V16_LIVE_ORDER_CHART_STORE_KEY,
+ V16_MANAGE_STORE_KEYS,
+ V16_MANAGE_REVIEW_CHECKS,
+ V16_PRIVATE_SOCKET_TIMEOUT_MS,
+ V16_PRIVATE_VIEW_CACHE_TTL_MS,
+ V16_LIVE_ORDER_CHART_CACHE_TTL_MS,
+ V16_PRIVATE_SOCKET_URLS,
+ V16_PRODUCT_DEFINITION_TTL_MS,
+ clonePlain,
+ v16DecorateDisplaySizing,
+ v16DisplayQuantity,
+ v16DisplayUnit,
+ v16Esc,
+ v16FmtNumber,
+ v16FmtPrice,
+ v16FmtSigned,
+ v16FmtSignedPct,
+ v16FormatDurationShort,
+ v16FormatSignedCash,
+ v16GetCachedProductDefinition,
+ v16NormalizeProductDefinition,
+ v16NormalizeSymbol,
+ v16NumericField,
+ v16ProductDefinitionCache,
+ v16ReadableCapabilityLabel,
+ v16ShortBaseUrl,
+ v16StartOfToday,
+ v16TextField,
+ v16UniqueTextParts,
+} = globalThis.FWDTradeDeskV16CapabilitiesCore;
+
+const V16_MANAGE_STORE_CLEANUP_KEY = 'v16ManageStoreCleanupAt';
+const V16_MANAGE_STORE_CLEANUP_INTERVAL_MS = 12 * 60 * 60 * 1000;
+const V16_MANAGE_STORE_MAX_AGE_MS = 0;
+const V16_AUTO_TRADE_MANUAL_CONTROLS_KEY = 'v16AutoTradeManualControlsV17';
+const V16_NOTIFICATION_FEED_KEY = 'v16NotificationFeedV17';
+const V16_UX_HINT_DISMISSALS_KEY = 'v16UxHintDismissalsV1';
+const V16_SHADOW_TRADE_LEDGER_KEY = 'v16ShadowTradeLedgerV1';
+const V16_SETUP_PERFORMANCE_KEY = 'v16SetupPerformanceV1';
+let v16AccountState = createDefaultAccountState({});
+let v16RiskBridge = null;
+let v16ApiHealthState = {
+ status: 'idle',
+ data: null,
+ error: '',
+};
+let v16NativeCredentialState = {
+ checkedAt: 0,
+ available: false,
+ error: '',
+};
+let v16LiveAccountView = {
+ status: 'idle',
+ data: null,
+ error: '',
+ fetchedAt: 0,
+ rateLimit: null,
+ filter: 'all',
+ activeJournalId: '',
+ orderSignal: null,
+ protectionOrder: null,
+ activeOpenOrder: null,
+ positionAction: null,
+ preview: null,
+ lastOrderAction: null,
+ orderChart: null,
+ previewRefresh: null,
+ orderSignalMeta: null,
+ submitInFlight: false,
+ // Position Desk view state
+positionsView: 'table',
+positionsSort: 'default',
+ positionsFundingHorizon: '24h',
+positionsFilter: 'all',
+ positionsSearch: '',
+ straddleStatusFilter: 'active',
+ straddleUnderlyingFilter: 'all',
+  bulkFlattenConfirmUntil: 0,
+  bulkCloseStraddlesConfirmUntil: 0,
+  lastPositionMetrics: null,
+  positionAlertState: {},
+  positionNotificationsEnabled: false,
+  uxHintDismissals: {},
+};
+let v16LiveAnalyticsView = {
+ rangeDays: 7,
+ range: '7d',
+ instrument: 'all',
+ setupMode: 'all',
+ setupSort: 'impact',
+ autoRefresh: false,
+ legend: {
+ deposits: true,
+ withdrawals: true,
+ liquidationFees: true,
+ },
+};
+let v16LiveAnalyticsViewLoaded = false;
+let v16LiveAnalyticsSetupCache = null;
+let v16LiveAnalyticsRenderCache = {
+ key: '',
+ builtAt: 0,
+ analyticsModel: null,
+ manageModel: null,
+ setupRows: [],
+ history: [],
+};
+let v16PrivateAccountRefreshPromise = null;
+let v16BindingsReady = false;
+let v16StorageListenerReady = false;
+let v16InitPromise = null;
+let v16PositionsSearchRefreshTimer = null;
+
+
+function v16JoinUniqueParts(parts = [], separator = ' | ') {
+ return v16UniqueTextParts(parts).join(separator);
+}
+
+function v16SchedulePositionsSearchRefresh(delay = 200) {
+ if (v16PositionsSearchRefreshTimer) clearTimeout(v16PositionsSearchRefreshTimer);
+ v16PositionsSearchRefreshTimer = setTimeout(() => {
+ v16PositionsSearchRefreshTimer = null;
+ v16RefreshPositionsView();
+ }, delay);
+}
+
+function v16FormatTs(value) {
+ const ts = v16ToEpochMs(value);
+ if (!ts) return '-';
+ return new Date(ts).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+}
+
+function v16NormalizeUxHintDismissals(raw = {}) {
+ if (!raw || typeof raw !== 'object') return {};
+ return Object.entries(raw).reduce((acc, [key, value]) => {
+ if (!String(key || '').trim()) return acc;
+ if (!value) return acc;
+ acc[String(key).trim()] = Number(value || Date.now());
+ return acc;
+ }, {});
+}
+
+async function v16LoadUxHintDismissals() {
+ const store = await storeGet(V16_UX_HINT_DISMISSALS_KEY);
+ const dismissals = v16NormalizeUxHintDismissals(store?.[V16_UX_HINT_DISMISSALS_KEY] || {});
+ v16LiveAccountView.uxHintDismissals = dismissals;
+ return dismissals;
+}
+
+async function v16DismissUxHint(key = '') {
+ const hintKey = String(key || '').trim();
+ if (!hintKey) return {};
+ const dismissals = {
+ ...(await v16LoadUxHintDismissals()),
+ [hintKey]: Date.now(),
+ };
+ v16LiveAccountView.uxHintDismissals = dismissals;
+ await storeSet({ [V16_UX_HINT_DISMISSALS_KEY]: dismissals });
+ return dismissals;
+}
+
+function v16BuildInlineHelpHtml(title = '', body = '') {
+ const heading = String(title || '').trim();
+ const copy = String(body || '').trim();
+ if (!heading && !copy) return '';
+ return `
+ <details class="v16-inline-help">
+ <summary aria-label="${v16Esc(heading || 'More help')}" title="${v16Esc(heading || 'More help')}">i</summary>
+ <div class="v16-inline-help-body">
+ ${heading ? `<strong>${v16Esc(heading)}</strong>` : ''}
+ ${copy ? `<span>${v16Esc(copy)}</span>` : ''}
+ </div>
+ </details>`;
+}
+
+function v16BuildFirstUseHintHtml({
+ key = '',
+ title = '',
+ body = '',
+ dismissLabel = 'Hide hint',
+ dismissals = {},
+ tone = 'info',
+} = {}) {
+ const hintKey = String(key || '').trim();
+ if (!hintKey || dismissals?.[hintKey]) return '';
+ return `
+ <div class="v16-first-use-hint v16-first-use-hint--${v16Esc(tone)}" data-v16-hint-card="${v16Esc(hintKey)}">
+ <div>
+ <strong>${v16Esc(title || 'Quick help')}</strong>
+ <span>${v16Esc(body || '')}</span>
+ </div>
+ <button class="bsm" type="button" data-v16-dismiss-hint="${v16Esc(hintKey)}">${v16Esc(dismissLabel)}</button>
+ </div>`;
+}
+
+function v16BindUxHintDismissButtons(scope = document) {
+ if (!scope?.querySelectorAll) return;
+ scope.querySelectorAll('[data-v16-dismiss-hint]').forEach(button => {
+ if (button.dataset.v16HintBound === '1') return;
+ button.dataset.v16HintBound = '1';
+ button.addEventListener('click', async () => {
+ const hintKey = String(button.dataset.v16DismissHint || '').trim();
+ if (!hintKey) return;
+ button.disabled = true;
+ try {
+ await v16DismissUxHint(hintKey);
+ button.closest('[data-v16-hint-card]')?.remove();
+ } finally {
+ button.disabled = false;
+ }
+ });
+ });
+}
+
+function v16ToEpochMs(value) {
+ if (typeof value === 'string') {
+ const text = value.trim();
+ if (!text) return 0;
+ const parsedDate = Date.parse(text);
+ if (Number.isFinite(parsedDate) && parsedDate > 0) return Math.round(parsedDate);
+ }
+ const raw = Number(value || 0);
+ if (!Number.isFinite(raw) || raw <= 0) return 0;
+ if (raw > 1e15) return Math.round(raw / 1000);
+ if (raw > 1e12) return Math.round(raw);
+ if (raw > 1e9) return Math.round(raw * 1000);
+ return Math.round(raw * 1000);
+}
+
+function v16ResolveWalletPct(value = 0, walletBalance = 0) {
+ const wallet = Number(walletBalance || 0);
+ if (!(wallet > 0)) return null;
+ return (Number(value || 0) / wallet) * 100;
+}
+
+function v16FormatWalletPct(value = 0, walletBalance = 0, digits = 1, { abs = false } = {}) {
+ const pct = v16ResolveWalletPct(value, walletBalance);
+ if (!Number.isFinite(pct)) return '';
+ const display = abs ? Math.abs(pct) : pct;
+ return `${display >= 0 ? '+' : ''}${v16FmtNumber(display, digits)}%`;
+}
+
+function v16FormatSignedWithWalletPct(value = 0, walletBalance = 0, digits = 1) {
+ const pct = v16FormatWalletPct(value, walletBalance, digits);
+ return pct ? `${v16FmtSigned(Number(value || 0))} (${pct})` : v16FmtSigned(Number(value || 0));
+}
+
+function v16StartOfNextDay(now = Date.now()) {
+ const next = new Date(Number(now || Date.now()));
+ next.setUTCHours(24, 0, 0, 0);
+ return next.getTime();
+}
+
+function v16SanitizeManualControls(state = {}, now = Date.now()) {
+ const safeState = state && typeof state === 'object' ? state : {};
+ const rawSymbols = safeState.symbols && typeof safeState.symbols === 'object' ? safeState.symbols : {};
+ const symbols = Object.entries(rawSymbols).reduce((acc, [symbol, entry]) => {
+ const normalizedSymbol = v16NormalizeSymbol(symbol);
+ if (!normalizedSymbol || !entry || typeof entry !== 'object') return acc;
+ const next = {
+ symbol: normalizedSymbol,
+ pausedUntil: Math.max(0, Number(entry.pausedUntil || 0)),
+ reentryBlockedUntil: Math.max(0, Number(entry.reentryBlockedUntil || 0)),
+ ignoreFundingUntil: Math.max(0, Number(entry.ignoreFundingUntil || 0)),
+ reservedSlotUntil: Math.max(0, Number(entry.reservedSlotUntil || 0)),
+ blockedTodayUntil: Math.max(0, Number(entry.blockedTodayUntil || 0)),
+ note: String(entry.note || '').trim(),
+ updatedAt: Math.max(0, Number(entry.updatedAt || 0)),
+ };
+ if (
+ next.pausedUntil > now
+ || next.reentryBlockedUntil > now
+ || next.ignoreFundingUntil > now
+ || next.reservedSlotUntil > now
+ || next.blockedTodayUntil > now
+ ) {
+ acc[normalizedSymbol] = next;
+ }
+ return acc;
+ }, {});
+ return { symbols, updatedAt: Math.max(0, Number(safeState.updatedAt || now)) };
+}
+
+function v16ResolveManualControlRecord(state = {}, symbol = '', now = Date.now()) {
+ const normalizedSymbol = v16NormalizeSymbol(symbol);
+ const record = normalizedSymbol ? (state?.symbols?.[normalizedSymbol] || null) : null;
+ return {
+ symbol: normalizedSymbol,
+ record,
+ paused: Number(record?.pausedUntil || 0) > now,
+ reentryBlocked: Number(record?.reentryBlockedUntil || 0) > now,
+ ignoreFunding: Number(record?.ignoreFundingUntil || 0) > now,
+ reservedSlot: Number(record?.reservedSlotUntil || 0) > now,
+ blockedToday: Number(record?.blockedTodayUntil || 0) > now,
+ };
+}
+
+function v16CountReservedSlotsFromControls(manualControls = {}, occupiedSymbols = new Set(), now = Date.now()) {
+ return Object.values(manualControls?.symbols || {}).reduce((count, entry) => {
+ const symbol = v16NormalizeSymbol(entry?.symbol || '');
+ if (!symbol || !(Number(entry?.reservedSlotUntil || 0) > now)) return count;
+ if (occupiedSymbols.has(symbol)) return count;
+ return count + 1;
+ }, 0);
+}
+
+function v16ResolveExposureTone(notionalValue = 0, walletBalance = 0, warningPct = 50, dangerPct = 80) {
+ const pct = Math.abs(Number(v16ResolveWalletPct(notionalValue, walletBalance) || 0));
+ if (!(pct > 0)) return { pct: 0, tone: '' };
+ if (pct >= dangerPct) return { pct, tone: 'bad' };
+ if (pct >= warningPct) return { pct, tone: 'warn' };
+ return { pct, tone: 'good' };
+}
+
+function v16NormalizeRateLimitMeta(meta = null) {
+ const until = Number(meta?.until || 0);
+ if (!until || until <= Date.now()) return null;
+ return {
+ ...meta,
+ active: true,
+ waitMs: Math.max(1000, until - Date.now()),
+ };
+}
+
+function v16UpdateRateLimitBanner(meta = null, sourceLabel = '') {
+ const banner = document.getElementById('apiRateLimitBanner');
+ const textEl = document.getElementById('apiRateLimitBannerText');
+ if (!banner || !textEl) return null;
+ const active = v16NormalizeRateLimitMeta(meta);
+ if (!active) {
+ banner.hidden = true;
+ banner.setAttribute('aria-hidden', 'true');
+ textEl.textContent = '';
+ return null;
+ }
+ const label = String(sourceLabel || '').trim();
+ const prefix = label ? `${label}: ` : '';
+ const baseMessage = String(active.message || 'Private Delta API cooling down').replace(/\.$/, '');
+ textEl.textContent = `${prefix}${baseMessage}. Retry in ${v16FormatDurationShort(active.waitMs)}. Cached data will be used when available.`;
+ banner.hidden = false;
+ banner.setAttribute('aria-hidden', 'false');
+ return active;
+}
+
+function v16IsLiveAccountSyncEnabled() {
+ return globalThis.v16LiveAccountSyncEnabled !== false;
+}
+
+function v16IsLiveAnalyticsAutoRefreshEnabled() {
+ return v16LiveAnalyticsView?.autoRefresh === true;
+}
+
+async function v16GetMarketDataMode(force = false) {
+ if (!force && globalThis.deltaMarketDataMode) {
+ return sanitizeMarketDataMode(globalThis.deltaMarketDataMode);
+ }
+ const existing = await storeGet(['strategy']);
+ const mode = sanitizeMarketDataMode(existing?.strategy?.marketDataMode);
+ globalThis.deltaMarketDataMode = mode;
+ return mode;
+}
+
+function v16MarketDataModeLabel(mode = '') {
+ if (typeof globalThis.getMarketDataModeLabel === 'function') return globalThis.getMarketDataModeLabel(mode);
+ return String(mode || 'auto');
+}
+
+function v16MarketDataSourceLabel(source = '') {
+ if (typeof globalThis.getMarketDataSourceLabel === 'function') return globalThis.getMarketDataSourceLabel(source);
+ return String(source || 'unknown');
+}
+
+function v16FormatFeedAge(timestamp = 0) {
+ if (typeof globalThis.formatUiAge === 'function') return globalThis.formatUiAge(timestamp);
+ return 'Not yet';
+}
+
+function v16SyncLiveAccountSyncButtons() {
+ const enabled = v16IsLiveAccountSyncEnabled();
+ document.querySelectorAll('[data-live-account-sync-toggle]').forEach(button => {
+ button.textContent = enabled ? 'Auto Sync On' : 'Auto Sync Off';
+ button.classList.toggle('warn', !enabled);
+ button.title = enabled
+ ? 'Disable automatic live Delta account refresh for Analytics and Positions'
+ : 'Enable automatic live Delta account refresh for Analytics and Positions';
+ });
+}
+
+function v16SyncLiveAnalyticsAutoRefreshButtons() {
+ const enabled = v16IsLiveAnalyticsAutoRefreshEnabled();
+ document.querySelectorAll('[data-live-analytics-auto-refresh-toggle]').forEach(button => {
+ button.textContent = enabled ? 'Analytics Auto On' : 'Analytics Auto Off';
+ button.classList.toggle('warn', !enabled);
+ button.title = enabled
+ ? 'Analytics will refresh automatically while the Analytics tab is active.'
+ : 'Analytics uses cached data until you open the tab or click Refresh.';
+ });
+}
+
+function v16ResolveBlockedSymbols(profile = null) {
+ return sanitizeBlockedSymbolList(profile?.blockedSymbols || []);
+}
+
+function v16ResolveTradeEntryBlockReason({ symbol = '', preview = null, profile = null, draft = null } = {}) {
+ const activeProfile = profile || getV16ActiveAccountProfile();
+ const resolvedSymbol = String(symbol || preview?.symbol || '').trim().toUpperCase();
+ if (!resolvedSymbol) return '';
+ if (draft?.manualOverride === true) return '';
+ const blockedSymbols = new Set(v16ResolveBlockedSymbols(activeProfile));
+ if (blockedSymbols.has(resolvedSymbol)) {
+ return `${resolvedSymbol} is blocked for live trading in the active profile.`;
+ }
+ if (preview && !preview.reduceOnly) {
+ const profileCapUSD = Number(activeProfile?.maxOrderSizeUSD || 60);
+ const requestedCapUSD = Number(draft?.sizeMode === 'usd' ? draft?.sizeInput || 0 : 0);
+ const maxOrderUSD = requestedCapUSD > 0
+ ? Math.min(profileCapUSD, requestedCapUSD)
+ : profileCapUSD;
+ const estimatedNotional = Number(preview?.estimatedNotional || 0);
+ // Allow 5% rounding buffer so contract-size rounding never hard-blocks an order
+ if (estimatedNotional > maxOrderUSD * 1.05) {
+ return `Order blocked: actual notional $${v16FmtNumber(estimatedNotional, 2)} exceeds the allowed cap of $${v16FmtNumber(maxOrderUSD, 2)} after contract rounding.`;
+ }
+ }
+ return '';
+}
+
+async function v16SetLiveAccountSyncEnabled(enabled) {
+ const next = !!enabled;
+ globalThis.v16LiveAccountSyncEnabled = next;
+ const existing = await storeGet(['strategy']);
+ await storeSet({
+ strategy: {
+ ...(existing?.strategy || {}),
+ liveAccountSync: next,
+ },
+ });
+ const settingsToggle = document.getElementById('sLiveAccountSync');
+ if (settingsToggle) settingsToggle.checked = next;
+ v16SyncLiveAccountSyncButtons();
+}
+
+async function v16SetLiveAnalyticsAutoRefreshEnabled(enabled) {
+ await v16LoadLiveAnalyticsView();
+ v16LiveAnalyticsView = await v16PersistLiveAnalyticsView({ autoRefresh: !!enabled });
+ v16SyncLiveAnalyticsAutoRefreshButtons();
+ return v16LiveAnalyticsView;
+}
+
+async function v16FetchProductDefinition(symbol = '', baseUrl = '') {
+ const normalizedSymbol = v16NormalizeSymbol(symbol);
+ if (!normalizedSymbol) return null;
+ const cached = v16GetCachedProductDefinition(normalizedSymbol);
+ if (cached) return cached;
+ const resolvedBaseUrl = String(baseUrl || v16LiveAccountView.data?.baseUrl || 'https://api.india.delta.exchange/v2').trim();
+ try {
+ const response = await fetch(`${resolvedBaseUrl}/products/${encodeURIComponent(normalizedSymbol)}`);
+ const payload = await response.json();
+ if (!response.ok) return null;
+ const definition = v16NormalizeProductDefinition(payload?.result || payload?.data || payload || { symbol: normalizedSymbol });
+ if (!definition.symbol) return null;
+ v16ProductDefinitionCache.set(definition.symbol, definition);
+ return definition;
+ } catch (_) {
+ return null;
+ }
+}
+
+async function v16EnsureProductDefinitions(symbols = [], baseUrl = '') {
+ const uniqueSymbols = Array.from(new Set((symbols || []).map(v16NormalizeSymbol).filter(Boolean)));
+ const definitions = new Map();
+ const missingSymbols = [];
+ uniqueSymbols.forEach(symbol => {
+ const cached = v16GetCachedProductDefinition(symbol);
+ if (cached) definitions.set(symbol, cached);
+ else missingSymbols.push(symbol);
+ });
+ if (missingSymbols.length) {
+ const fetched = await Promise.all(missingSymbols.map(symbol => v16FetchProductDefinition(symbol, baseUrl)));
+ fetched.filter(Boolean).forEach(definition => definitions.set(definition.symbol, definition));
+ }
+ return definitions;
+}
+
+async function v16BuildProductDefinitionsForSnapshot(snapshot = {}) {
+ const productSymbols = Array.from(new Set([
+ ...(snapshot.marginedPositions || []),
+ ...(snapshot.positions || []),
+ ...(snapshot.fills || []),
+ ...(snapshot.orderHistory || []),
+ ...(snapshot.openOrders || []),
+ ].map(item => v16NormalizeSymbol(item?.product_symbol || item?.symbol || '')).filter(Boolean)));
+ return v16EnsureProductDefinitions(productSymbols, snapshot?.baseUrl || '');
+}
+
+function v16NormalizeJournalRecord(value = null) {
+ if (value && typeof value === 'object' && !Array.isArray(value)) {
+ return {
+ notes: sanitizeText(value.notes || '', '', 500),
+ entryReason: sanitizeText(value.entryReason || '', '', 180),
+ exitReason: sanitizeText(value.exitReason || '', '', 180),
+ chartSnapshot: sanitizeText(value.chartSnapshot || '', '', 180),
+ setupTag: sanitizeText(value.setupTag || '', '', 32),
+ mistakeTag: sanitizeText(value.mistakeTag || '', '', 32),
+ type: sanitizeText(value.type || 'unknown', '', 32),
+ confidence: Math.max(1, Math.min(5, Math.round(Number(value.confidence || 3)))),
+ checklist: {
+ followedPlan: !!value?.checklist?.followedPlan,
+ respectedRisk: !!value?.checklist?.respectedRisk,
+ cleanExecution: !!value?.checklist?.cleanExecution,
+ },
+ updatedAt: Number(value.updatedAt || 0) || Date.now(),
+ };
+ }
+ const notes = sanitizeText(value || '', '', 500);
+ return {
+ notes,
+ entryReason: '',
+ exitReason: '',
+ chartSnapshot: '',
+ setupTag: '',
+ mistakeTag: '',
+ type: 'unknown',
+ confidence: 3,
+ checklist: {
+ followedPlan: false,
+ respectedRisk: false,
+ cleanExecution: false,
+ },
+ updatedAt: Date.now(),
+ };
+}
+
+function v16JournalNotesText(value = null) {
+ return v16NormalizeJournalRecord(value).notes;
+}
+
+function v16BuildJournalSummary(record = null) {
+ const normalized = v16NormalizeJournalRecord(record);
+ return v16JoinUniqueParts([
+ normalized.entryReason ? `Entry ${normalized.entryReason}` : '',
+ normalized.exitReason ? `Exit ${normalized.exitReason}` : '',
+ normalized.setupTag ? `Setup ${normalized.setupTag}` : '',
+ normalized.mistakeTag ? `Mistake ${normalized.mistakeTag}` : '',
+ normalized.notes,
+ ]);
+}
+
+function v16HumanizeSetupFamily(value = '') {
+ const raw = String(value || '').trim();
+ if (!raw) return '';
+ if (/\s/.test(raw)) return raw;
+ return raw
+ .replace(/_/g, ' ')
+ .replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function v16ResolveTradeSetupFamilyMeta(trade = {}, review = null) {
+ const normalizedReview = v16NormalizeJournalRecord(review || trade.review || trade.notes || '');
+ const rawFamily = String(trade.setupFamily || '').trim();
+ const rawLabel = String(trade.setupFamilyLabel || '').trim();
+ const rawSetupTag = String(trade.setupTag || '').trim();
+ const reviewSetupTag = String(normalizedReview.setupTag || '').trim();
+ const preferredTag = rawLabel || rawFamily || rawSetupTag || reviewSetupTag;
+ const label = rawLabel
+ || (rawFamily ? v16HumanizeSetupFamily(rawFamily) : '')
+ || (rawSetupTag ? v16HumanizeSetupFamily(rawSetupTag) : '')
+ || (reviewSetupTag ? v16HumanizeSetupFamily(reviewSetupTag) : '');
+ const key = String(rawFamily || preferredTag || '')
+ .trim()
+ .toLowerCase()
+ .replace(/\s+/g, '_');
+ return {
+ key,
+ label: label || 'Untagged',
+ };
+}
+
+function v16BuildJournalTradeStory(trade = {}, review = null) {
+ const normalizedReview = v16NormalizeJournalRecord(review || trade.review || trade.notes || '');
+ const mode = v16ResolveTradeModeLabel(trade);
+ const side = String(trade.side || '').trim().toLowerCase() === 'short' ? 'short' : 'long';
+ const closeReason = v16HumanizeCloseReasonLabel(trade.closeReasonLabel || 'closed on exchange');
+ const holdMinutes = Number(trade.holdMinutes || 0);
+ const shiftEvents = Array.isArray(trade.targetShiftEvents) ? trade.targetShiftEvents : [];
+ const parts = [
+ `${mode} ${side} trade`,
+ closeReason ? closeReason.toLowerCase() : '',
+ holdMinutes > 0 ? `after ${holdMinutes}m` : '',
+ shiftEvents.length ? `${shiftEvents.length} target shift${shiftEvents.length === 1 ? '' : 's'} recorded` : '',
+ normalizedReview.setupTag ? `worked best as ${normalizedReview.setupTag}` : '',
+ ].filter(Boolean);
+ const text = parts.join(' ');
+ return text ? `${text.charAt(0).toUpperCase()}${text.slice(1)}.` : 'Trade story will become clearer after more tracked context is available.';
+}
+
+function v16BuildJournalLessonsPlaceholder(trade = {}, review = null) {
+ const normalizedReview = v16NormalizeJournalRecord(review || trade.review || trade.notes || '');
+ const systemActions = v16BuildAutoTradeSystemActions(trade);
+ const story = v16BuildJournalTradeStory(trade, normalizedReview);
+ const wentWellSeed = normalizedReview.setupTag ? `- ${normalizedReview.setupTag}` : '- ';
+ const improveSeed = normalizedReview.mistakeTag ? `- ${normalizedReview.mistakeTag}` : '- ';
+ return [
+ 'What system did:',
+ `- ${story}`,
+ ...(systemActions.length ? systemActions.slice(0, 2).map(action => `- ${action}`) : ['- ']),
+ '',
+ 'What trader learned:',
+ '- ',
+ '',
+ 'What went well:',
+ wentWellSeed,
+ '',
+ 'What to improve next time:',
+ improveSeed,
+ ].join('\n');
+}
+
+function v16BuildJournalLessonStatus(review = null) {
+ const normalized = v16NormalizeJournalRecord(review || '');
+ if (String(normalized.notes || '').trim()) return 'Lessons saved';
+ return 'Add lessons from this trade';
+}
+
+function v16ResolveJournalEntryReason(trade = {}, review = null) {
+ const normalizedReview = v16NormalizeJournalRecord(review || trade.review || trade.notes || '');
+ return v16JoinUniqueParts([
+ normalizedReview.entryReason,
+ trade.shortlistAction ? `Signal action: ${trade.shortlistAction}` : '',
+ trade.setupFamilyLabel || trade.setupFamily ? `Setup: ${trade.setupFamilyLabel || trade.setupFamily}` : '',
+ trade.score ? `Score ${v16FmtNumber(Number(trade.score || 0), 0)}` : '',
+ ]) || 'Entry reason not written yet.';
+}
+
+function v16ResolveJournalExitReason(trade = {}, review = null) {
+ const normalizedReview = v16NormalizeJournalRecord(review || trade.review || trade.notes || '');
+ return v16JoinUniqueParts([
+ normalizedReview.exitReason,
+ v16HumanizeCloseReasonLabel(trade.closeReasonLabel || 'closed on exchange'),
+ trade.rMultiple != null && Number.isFinite(Number(trade.rMultiple)) ? `${Number(trade.rMultiple).toFixed(2)}R result` : '',
+ ]) || 'Exit reason not written yet.';
+}
+
+function v16FindJournalSetupPerformanceRow(trade = {}, review = null) {
+ const setupMeta = v16ResolveTradeSetupFamilyMeta(trade, review);
+ const rows = Array.isArray(v16LiveAnalyticsSetupCache?.rows) ? v16LiveAnalyticsSetupCache.rows : [];
+ const candidates = [
+ setupMeta.key,
+ setupMeta.label,
+ trade.setupFamilyKey,
+ trade.setupFamily,
+ trade.setupFamilyLabel,
+ ].map(value => String(value || '').trim().toLowerCase()).filter(Boolean);
+ return rows.find(row => {
+ const rowValues = [
+ row.familyKey,
+ row.family,
+ String(row.family || '').split('|')[0],
+ ].map(value => String(value || '').trim().toLowerCase());
+ return candidates.some(candidate => rowValues.some(value => value === candidate || value.startsWith(`${candidate}|`) || value.includes(candidate)));
+ }) || null;
+}
+
+function v16BuildJournalTimelineHtml(trade = {}, review = null) {
+ const normalizedReview = v16NormalizeJournalRecord(review || trade.review || trade.notes || '');
+ const steps = [
+ {
+ label: 'Entry',
+ value: v16FormatTs(trade.openedAt),
+ copy: v16ResolveJournalEntryReason(trade, normalizedReview),
+ },
+ {
+ label: 'Manage',
+ value: Number(trade.holdMinutes || 0) > 0 ? `${Number(trade.holdMinutes || 0)}m hold` : 'Hold time pending',
+ copy: Array.isArray(trade.targetShiftEvents) && trade.targetShiftEvents.length
+ ? `${trade.targetShiftEvents.length} target shift${trade.targetShiftEvents.length === 1 ? '' : 's'} recorded.`
+ : 'No target shifts recorded.',
+ },
+ {
+ label: 'Exit',
+ value: v16FormatTs(trade.closedAt),
+ copy: v16ResolveJournalExitReason(trade, normalizedReview),
+ },
+ {
+ label: 'Review',
+ value: v16BuildJournalLessonStatus(normalizedReview),
+ copy: normalizedReview.mistakeTag ? `Mistake tag: ${normalizedReview.mistakeTag}` : 'Add mistake tag and lesson after replay.',
+ },
+ ];
+ return `<div class="journal-replay-timeline">${steps.map(step => `
+ <div class="journal-replay-step">
+ <span>${v16Esc(step.label)}</span>
+ <strong>${v16Esc(step.value || '-')}</strong>
+ <small>${v16Esc(step.copy || '')}</small>
+ </div>`).join('')}</div>`;
+}
+
+function v16BuildJournalSetupPerformanceHtml(trade = {}, review = null, trades = []) {
+ const setupMeta = v16ResolveTradeSetupFamilyMeta(trade, review);
+ const row = v16FindJournalSetupPerformanceRow(trade, review);
+ if (!row) {
+ const peerTrades = (Array.isArray(trades) ? trades : []).filter(item => {
+ const peerMeta = v16ResolveTradeSetupFamilyMeta(item, item.review || item.notes || '');
+ return peerMeta.key && setupMeta.key && peerMeta.key === setupMeta.key;
+ });
+ if (peerTrades.length) {
+ const pnl = peerTrades.reduce((sum, item) => sum + Number(item.pnl || 0), 0);
+ const wins = peerTrades.filter(item => Number(item.pnl || 0) > 0).length;
+ const winRate = peerTrades.length ? Math.round((wins / peerTrades.length) * 100) : 0;
+ return `
+ <div class="journal-replay-metric">
+ <span>Setup Performance</span>
+ <strong>${v16Esc(setupMeta.label || 'Untagged')}</strong>
+ <small>${peerTrades.length} trade${peerTrades.length === 1 ? '' : 's'} in this view | ${v16FmtSigned(pnl)} P&L | ${winRate}% win</small>
+ </div>`;
+ }
+ return `
+ <div class="journal-replay-metric">
+ <span>Setup Performance</span>
+ <strong>${v16Esc(setupMeta.label || 'Untagged')}</strong>
+ <small>No setup-family history loaded yet.</small>
+ </div>`;
+ }
+ const status = v16ResolveSetupPromotion(row);
+ return `
+ <div class="journal-replay-metric">
+ <span>Setup Performance</span>
+ <strong>${v16Esc(setupMeta.label || row.family || 'Untagged')}</strong>
+ <small>${Number(row.trades || 0)} trades | ${v16FmtSigned(Number(row.pnl || 0))} P&L | ${v16FmtNumber(Number(row.winRate || 0), 0)}% win | ${v16Esc(status.label)}</small>
+ </div>`;
+}
+
+function v16RenderJournalReplayPanel(trades = []) {
+ const panel = document.getElementById('liveJournalReplayPanel');
+ if (!panel) return;
+ const items = Array.isArray(trades) ? trades : [];
+ if (!items.length) {
+ panel.innerHTML = `<div class="empty"><div class="ei">--</div><div class="eh">Replay workflow waiting</div><div class="es">Closed trades will show a timeline, entry reason, exit reason, mistake tags, and setup performance.</div></div>`;
+ return;
+ }
+ const selectedId = String(v16LiveAccountView.activeJournalId || '');
+ const trade = items.find(item => String(item.id || '') === selectedId) || items[items.length - 1] || items[0];
+ const review = v16NormalizeJournalRecord(trade.review || trade.notes || '');
+ const pnl = Number(trade.pnl || 0);
+ const chartSnapshot = review.chartSnapshot || `${v16FormatOptionalPrice(trade.entryPrice || 0)} entry | ${v16FormatOptionalPrice(trade.stopLoss || 0)} stop | ${v16FormatOptionalPrice(trade.exitPrice || 0)} exit`;
+ panel.innerHTML = `
+ <div class="journal-replay-head">
+ <div>
+ <div class="live-card-kicker">REPLAY WORKFLOW</div>
+ <div class="live-card-title">${v16Esc(trade.symbol || 'Selected Trade')} ${v16Esc(String(trade.side || '').toUpperCase())}</div>
+ <div class="live-card-meta">${v16Esc(v16BuildJournalTradeStory(trade, review))}</div>
+ </div>
+ <button class="bsm" type="button" data-open-journal-replay="${v16Esc(trade.id || '')}">Open Replay</button>
+ </div>
+ ${v16BuildJournalTimelineHtml(trade, review)}
+ <div class="journal-replay-grid">
+ <div class="journal-replay-metric">
+ <span>Entry Reason</span>
+ <strong>${v16Esc(v16ResolveJournalEntryReason(trade, review))}</strong>
+ <small>${v16Esc(v16ResolveTradeModeLabel(trade))} | ${v16Esc(v16ResolveTradeSetupFamilyMeta(trade, review).label)}</small>
+ </div>
+ <div class="journal-replay-metric">
+ <span>Chart Snapshot</span>
+ <strong>${v16Esc(chartSnapshot)}</strong>
+ <small>Open replay for the candle-level chart view.</small>
+ </div>
+ <div class="journal-replay-metric">
+ <span>Exit Reason</span>
+ <strong class="${pnl >= 0 ? 'good' : 'bad'}">${v16Esc(v16ResolveJournalExitReason(trade, review))}</strong>
+ <small>${v16Esc(v16FmtSigned(pnl))} realized.</small>
+ </div>
+ <div class="journal-replay-metric">
+ <span>Mistake Tags</span>
+ <strong>${review.mistakeTag ? v16Esc(review.mistakeTag) : 'Not tagged'}</strong>
+ <small>${review.notes ? 'Lesson note saved.' : 'Add lesson after replay.'}</small>
+ </div>
+ ${v16BuildJournalSetupPerformanceHtml(trade, review, items)}
+ </div>`;
+ panel.querySelector('[data-open-journal-replay]')?.addEventListener('click', () => openV16JournalDetail(trade));
+}
+
+function v16RenderJournal(trades = []) {
+ const wrap = document.getElementById('liveJournalRows');
+ const meta = document.getElementById('liveJournalMeta');
+ if (!wrap || !meta) return;
+ const items = Array.isArray(trades) ? trades : [];
+ v16RenderJournalReplayPanel(items);
+ meta.textContent = items.length
+ ? `${items.length} closed trade${items.length === 1 ? '' : 's'} in the loaded review window.`
+ : 'Closed live trades will appear here.';
+ if (!items.length) {
+ wrap.innerHTML = `<div class="empty"><div class="ei">--</div><div class="eh">No journal trades yet</div><div class="es">Closed positions detected from Delta history will appear here.</div></div>`;
+ return;
+ }
+ wrap.innerHTML = items.slice(0, 40).map(trade => {
+ const review = v16NormalizeJournalRecord(trade.review || trade.notes || '');
+ const tradeMode = v16ResolveTradeModeLabel(trade);
+ const reverseMeta = v16ResolveReverseTradeMeta(trade);
+ const diagnosticSummary = v16BuildTradeDiagnosticSummary({ ...trade, review });
+ const tradeStory = v16BuildJournalTradeStory(trade, review);
+ return `
+ <button class="live-journal-row ${review.notes ? '' : 'pending'}" data-live-journal-id="${v16Esc(trade.id)}">
+ <div class="live-journal-top">
+ <strong>${v16Esc(trade.symbol)}</strong>
+ <span class="${Number(trade.pnl || 0) >= 0 ? 'good' : 'bad'}">${v16FmtSigned(Number(trade.pnl || 0))}</span>
+ </div>
+ <div class="live-journal-meta">${v16Esc(String(trade.side || '').toUpperCase())} | ${v16FmtNumber(Number(trade.size || 0), 4).replace(/\.?0+$/, '')} contracts | ${v16Esc(tradeMode)} | Closed ${v16Esc(v16FormatTs(trade.closedAt))}</div>
+ <div class="live-journal-tags"><span class="live-journal-tag ${tradeMode === 'Auto' ? '' : 'warn'}">${v16Esc(tradeMode)}</span>${reverseMeta.enabled ? `<span class="live-journal-tag reverse" title="${v16Esc(reverseMeta.detail)}">Reversed</span>` : ''}<span class="live-journal-tag">${v16Esc(v16HumanizeCloseReasonLabel(trade.closeReasonLabel || 'closed on exchange'))}</span>${V16_MANAGE_REVIEW_CHECKS.filter(check => review.checklist?.[check.key]).map(check => `<span class="live-journal-tag">${v16Esc(check.label)}</span>`).join('')}${review.setupTag ? `<span class="live-journal-tag">${v16Esc(review.setupTag)}</span>` : ''}${review.mistakeTag ? `<span class="live-journal-tag warn">${v16Esc(review.mistakeTag)}</span>` : ''}</div>
+ <div class="live-journal-meta">${v16Esc(tradeStory)}</div>
+ <div class="live-journal-meta">${v16Esc(diagnosticSummary || 'Trade summary will become richer after more tracked closes.')}</div>
+ <div class="live-journal-meta">${review.notes ? v16Esc(v16BuildJournalSummary(review)) : v16Esc(v16BuildJournalLessonStatus(review))}</div>
+ </button>`;
+ }).join('');
+ wrap.querySelectorAll('[data-live-journal-id]').forEach(button => {
+ button.addEventListener('click', () => {
+ const trade = items.find(item => String(item.id || '') === String(button.dataset.liveJournalId || ''));
+ if (trade) {
+ v16LiveAccountView.activeJournalId = String(trade.id || '');
+ v16RenderJournalReplayPanel(items);
+ openV16JournalDetail(trade);
+ }
+ });
+ });
+ // Wire CSV export button
+ const csvBtn = document.getElementById('btnExportJournalCSV');
+ if (csvBtn) {
+ csvBtn.onclick = () => v16ExportJournalCSV(items);
+ }
+}
+
+function v16ExportJournalCSV(trades = []) {
+ const csvEsc = v => `"${String(v ?? '').replace(/"/g, '""').replace(/\n/g, ' ')}"`;
+ const headers = ['Symbol', 'Side', 'ReverseTrade', 'OriginalSide', 'ExecutionSide', 'Size', 'EntryPrice', 'ExitPrice', 'PnL', 'GrossPnL', 'Fees', 'OpenedAt', 'ClosedAt', 'EntryReason', 'ExitReason', 'ChartSnapshot', 'SetupTag', 'MistakeTag', 'Confidence', 'FollowedPlan', 'RespectedRisk', 'CleanExecution', 'Notes'];
+ const rows = (trades || []).map(trade => {
+ const review = v16NormalizeJournalRecord(trade.review || trade.notes || '');
+ const reverseMeta = v16ResolveReverseTradeMeta(trade);
+ return [
+ trade.symbol,
+ String(trade.side || '').toUpperCase(),
+ reverseMeta.enabled ? 'Yes' : 'No',
+ String(reverseMeta.originalSide || '').toUpperCase(),
+ String(reverseMeta.executionSide || '').toUpperCase(),
+ Number(trade.size || 0),
+ Number(trade.entryPrice || 0),
+ Number(trade.exitPrice || 0),
+ Number(trade.pnl || 0),
+ Number(trade.grossPnl || trade.grossMovePnl || 0),
+ Number(trade.fees || trade.commission || 0),
+ trade.openedAt ? new Date(trade.openedAt).toISOString() : '',
+ trade.closedAt ? new Date(trade.closedAt).toISOString() : '',
+ review.entryReason,
+ review.exitReason,
+ review.chartSnapshot,
+ review.setupTag,
+ review.mistakeTag,
+ review.confidence,
+ review.checklist?.followedPlan ? 'Yes' : 'No',
+ review.checklist?.respectedRisk ? 'Yes' : 'No',
+ review.checklist?.cleanExecution ? 'Yes' : 'No',
+ review.notes,
+ ].map(csvEsc).join(',');
+ });
+ const csv = [headers.join(','), ...rows].join('\n');
+ const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+ const url = URL.createObjectURL(blob);
+ const a = document.createElement('a');
+ a.href = url;
+ a.download = `fwd_tradedesk_pro_journal_${new Date().toISOString().slice(0, 10)}.csv`;
+ document.body.appendChild(a);
+ a.click();
+ document.body.removeChild(a);
+ URL.revokeObjectURL(url);
+}
+
+function v16RenderTradeHistory(fills = [], orderHistory = [], rawFills = [], rawOrderHistory = []) {
+ const wrap = document.getElementById('liveTradeHistoryRows');
+ const meta = document.getElementById('liveTradeHistoryMeta');
+ if (!wrap || !meta) return;
+ const normalizedFills = Array.isArray(fills) ? fills : [];
+ const normalizedOrders = Array.isArray(orderHistory) ? orderHistory : [];
+ const feed = normalizedFills.length ? normalizedFills : normalizedOrders;
+ const usingOrders = !normalizedFills.length && normalizedOrders.length > 0;
+ const rawCopy = usingOrders
+ ? `${Array.isArray(rawOrderHistory) ? rawOrderHistory.length : 0} raw orders`
+ : `${Array.isArray(rawFills) ? rawFills.length : 0} raw fills`;
+ meta.textContent = feed.length
+ ? `${feed.length} activity record${feed.length === 1 ? '' : 's'} loaded | ${rawCopy}`
+ : 'Waiting for Delta order history.';
+ if (!feed.length) {
+ wrap.innerHTML = `<div class="empty"><div class="ei">--</div><div class="eh">No trade activity loaded</div><div class="es">Refresh live data to load fills and order history from Delta Exchange.</div></div>`;
+ return;
+ }
+ wrap.innerHTML = `<div class="live-trade-history-table-wrap"><table class="live-trade-history-table">
+ <thead><tr><th>Symbol</th><th>Side</th><th>Size</th><th>Price</th><th>Fee / reason</th><th>State</th><th>Time</th></tr></thead>
+ <tbody>${feed.slice(0, 80).map(item => {
+ const side = String(item.side || '').toUpperCase();
+ const price = Number(item.price || item.limitPrice || 0);
+ const feeOrReason = usingOrders
+ ? String(item.explanation || item.reason || 'Order history fallback')
+ : `Fee -$${Math.abs(Number(item.commission || 0)).toFixed(4)}`;
+ return `<tr class="${usingOrders ? 'is-order-row' : ''}">
+ <td><strong>${v16Esc(item.symbol || '')}</strong></td>
+ <td>${v16Esc(side || '-')}</td>
+ <td>${v16FmtNumber(Number(item.size || 0), 4).replace(/\.?0+$/, '')}</td>
+ <td>${price > 0 ? `$${v16FmtPrice(price)}` : '-'}</td>
+ <td>${v16Esc(feeOrReason)}</td>
+ <td>${usingOrders ? v16Esc(String(item.state || '').toUpperCase() || '-') : 'FILL'}</td>
+ <td>${v16Esc(v16FormatTs(item.createdAt || item.closedAt || 0))}</td>
+ </tr>`;
+ }).join('')}</tbody>
+ </table></div>`;
+}

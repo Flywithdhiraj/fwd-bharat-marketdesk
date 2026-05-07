@@ -1,0 +1,1557 @@
+// Live analytics charts, setup report and equity visualization
+ URL.revokeObjectURL(url);
+}
+
+function v16ExportSetupPerformanceReport() {
+ const rows = Array.isArray(v16LiveAnalyticsSetupCache?.rows) ? v16LiveAnalyticsSetupCache.rows : [];
+ const headers = ['Setup', 'Stage', 'Closed Trades', 'Paper Trades', 'Live Trades', 'Win Rate', 'Expectancy', 'Avg R', 'Max Drawdown', 'Live Now', 'Regime Fit'];
+ const csvRows = rows.map(row => {
+ const stage = v16ResolveSetupPromotion(row);
+ return [
+ row.family,
+ stage.label,
+ Number(row.trades || 0),
+ Number(row.paperTrades || 0),
+ Number(row.liveTrades || 0),
+ Number(row.winRate || 0),
+ Number(row.expectancy || 0),
+ row.avgR == null ? '' : Number(row.avgR || 0),
+ Number(row.maxDrawdown || 0),
+ Number(row.liveCount || 0),
+ `${Number(row.regimeFitCount || 0)}/${Number(row.liveCount || 0)}`,
+ ];
+ });
+ v16DownloadCsv(`fwd_tradedesk_setup_performance_${new Date().toISOString().slice(0, 10)}.csv`, headers, csvRows);
+}
+
+async function v16LoadLiveAnalyticsView(force = false) {
+ if (!force && v16LiveAnalyticsViewLoaded) return v16LiveAnalyticsView;
+ const stored = await storeGet(V16_LIVE_ANALYTICS_VIEW_KEY);
+ v16LiveAnalyticsView = v16NormalizeLiveAnalyticsView(stored?.[V16_LIVE_ANALYTICS_VIEW_KEY] || {});
+ v16LiveAnalyticsViewLoaded = true;
+ return v16LiveAnalyticsView;
+}
+
+async function v16PersistLiveAnalyticsView(patch = {}) {
+ v16LiveAnalyticsView = v16NormalizeLiveAnalyticsView({
+ ...v16LiveAnalyticsView,
+ ...(patch && typeof patch === 'object' ? patch : {}),
+ legend: {
+ ...(v16LiveAnalyticsView?.legend || {}),
+ ...(patch?.legend || {}),
+ },
+ });
+ v16LiveAnalyticsViewLoaded = true;
+ await storeSet({ [V16_LIVE_ANALYTICS_VIEW_KEY]: v16LiveAnalyticsView });
+ return v16LiveAnalyticsView;
+}
+
+function v16AnalyticsStartOfDay(ts = 0) {
+ const date = new Date(Number(ts || 0) || Date.now());
+ date.setUTCHours(0, 0, 0, 0);
+ return date.getTime();
+}
+
+function v16LocalStartOfDay(ts = 0) {
+ const date = new Date(Number(ts || 0) || Date.now());
+ date.setHours(0, 0, 0, 0);
+ return date.getTime();
+}
+
+function v16AnalyticsFormatDay(ts = 0) {
+ return new Date(Number(ts || 0) || Date.now()).toLocaleDateString(undefined, {
+ day: '2-digit',
+ month: 'short',
+ });
+}
+
+function v16AnalyticsRangeStart(range = '7d') {
+ const now = Date.now();
+ const parsed = typeof range === 'number'
+ ? Number(range)
+ : Number(String(range || '').match(/^(\d{1,3})d$/i)?.[1] || 7);
+ const days = Math.min(365, Math.max(1, Number.isFinite(parsed) ? Math.round(parsed) : 7));
+ return now - (days * 24 * 60 * 60 * 1000);
+}
+
+function v16AnalyticsRangeLabel(days = 7) {
+ const safeDays = Math.min(365, Math.max(1, Number(days || 7) || 7));
+ return `Last ${safeDays} day${safeDays === 1 ? '' : 's'}`;
+}
+
+function v16AnalyticsProductType(symbol = '', productDefinitions = new Map()) {
+ const definition = productDefinitions.get(v16NormalizeSymbol(symbol));
+ if (definition?.productType === 'options') return 'options';
+ if (definition?.productType === 'futures') return 'futures';
+ const normalizedSymbol = v16NormalizeSymbol(symbol);
+ if (/-\d{1,2}[A-Z]{3}\d{2,4}-/i.test(normalizedSymbol) || /(?:-C|-P)$/i.test(normalizedSymbol)) return 'options';
+ return 'futures';
+}
+
+function v16AnalyticsMatchesInstrument(symbol = '', productDefinitions = new Map(), instrument = 'all') {
+ if (instrument === 'all') return true;
+ return v16AnalyticsProductType(symbol, productDefinitions) === instrument;
+}
+
+function v16AnalyticsCanUseTradeRecord(trade = {}, productDefinitions = new Map()) {
+ const productType = v16AnalyticsProductType(trade.symbol || '', productDefinitions);
+ if (productType !== 'options') return true;
+ const pnlSource = String(trade?.pnlSource || trade?.source || '').toLowerCase();
+ if (pnlSource === 'delta_order' || pnlSource === 'delta') return true;
+ const matchedCloseOrderIds = Array.isArray(trade?.matchedCloseOrderIds) ? trade.matchedCloseOrderIds.filter(Boolean) : [];
+ if (matchedCloseOrderIds.length) return true;
+ const closeReason = String(trade?.closeReason || '').toLowerCase();
+ return (
+ closeReason.includes('expire')
+ || closeReason.includes('assign')
+ || closeReason.includes('exercise')
+ || closeReason.includes('settlement')
+ );
+}
+
+function v16AnalyticsDisplaySize(record = {}, productDefinitions = new Map()) {
+ const definition = productDefinitions.get(v16NormalizeSymbol(record.symbol || '')) || null;
+ return Math.abs(v16DisplayQuantity(
+ Number(record.displaySize || 0) > 0 && Number(record.size || 0) > 0
+ ? (Number(record.displaySize || 0) / Math.max(1e-12, Number(record.size || 0)))
+ : Number(record.size || 0),
+ definition
+ ));
+}
+
+function v16AnalyticsFillNotional(fill = {}, productDefinitions = new Map()) {
+ const definition = productDefinitions.get(v16NormalizeSymbol(fill.symbol || '')) || null;
+ const multiplier = Number(definition?.displayMultiplier || 1);
+ const size = Math.abs(Number(fill.size || 0)) * (multiplier > 0 ? multiplier : 1);
+ const price = Math.abs(Number(fill.price || 0));
+ return +(size * price).toFixed(4);
+}
+
+function v16AnalyticsBucketFactory(ts = 0) {
+ return {
+ ts,
+ label: v16AnalyticsFormatDay(ts),
+ realized: 0,
+ volume: 0,
+ fees: 0,
+ rebates: 0,
+ funding: 0,
+ deposits: 0,
+ withdrawals: 0,
+ liquidationFees: 0,
+ trades: 0,
+ wins: 0,
+ losses: 0,
+ };
+}
+
+function v16AnalyticsBuildBucketMap(startTs = 0, endTs = Date.now()) {
+ const buckets = [];
+ const byTs = new Map();
+ let cursor = v16AnalyticsStartOfDay(startTs);
+ const end = v16AnalyticsStartOfDay(endTs);
+ while (cursor <= end) {
+ const bucket = v16AnalyticsBucketFactory(cursor);
+ buckets.push(bucket);
+ byTs.set(cursor, bucket);
+ cursor += 24 * 60 * 60 * 1000;
+ }
+ if (!buckets.length) {
+ const bucket = v16AnalyticsBucketFactory(v16AnalyticsStartOfDay(Date.now()));
+ buckets.push(bucket);
+ byTs.set(bucket.ts, bucket);
+ }
+ return { buckets, byTs };
+}
+
+function v16AnalyticsWalletAdjustmentValue(tx = {}) {
+ return Number(tx.amount || tx.commission || 0);
+}
+
+function v16AnalyticsOrderLiquidationFee(order = {}) {
+ const text = `${order.explanation || ''} ${order.reason || ''} ${order.role || ''}`.toLowerCase();
+ if (!text.includes('liquid')) return 0;
+ return Math.max(0, Math.abs(Number(order.commission || 0)));
+}
+
+function v16AnalyticsIsClosedOrder(order = {}) {
+ return v16IsClosedRealizedOrder(order);
+}
+
+function v16BuildAnalyticsClosedRecords(metrics = {}, productDefinitions = new Map(), rangeStart = 0, instrument = 'all') {
+ const tradeRecords = (metrics.trades || [])
+ .filter(trade => Number(trade.closedAt || 0) >= rangeStart)
+ .filter(trade => v16AnalyticsMatchesInstrument(trade.symbol, productDefinitions, instrument))
+ .filter(trade => v16AnalyticsCanUseTradeRecord(trade, productDefinitions))
+ .map(trade => ({
+ id: String(trade.id || `${trade.symbol}_${trade.closedAt}`),
+ symbol: trade.symbol,
+ side: trade.side,
+ size: Number(trade.size || 0),
+ pnl: +Number(trade.pnl || 0).toFixed(6),
+ commission: +Math.abs(Number(trade.commission || 0)).toFixed(6),
+ closedAt: Number(trade.closedAt || 0),
+ explanation: '',
+ source: String(trade.source || 'reconstructed'),
+ raw: trade,
+ }));
+ if (tradeRecords.length) return tradeRecords.sort((a, b) => Number(b.closedAt || 0) - Number(a.closedAt || 0));
+ const orderRecords = (metrics.orderHistory || [])
+ .filter(order => Number(order.createdAt || 0) >= rangeStart)
+ .filter(order => v16AnalyticsMatchesInstrument(order.symbol, productDefinitions, instrument))
+ .filter(v16AnalyticsIsClosedOrder)
+ .map(order => ({
+ id: `delta_order_${String(order.id || order.orderId || `${order.symbol}_${order.createdAt}`)}`,
+ symbol: order.symbol,
+ side: String(order.side || '').toLowerCase() === 'sell' ? 'short' : 'long',
+ size: Number(order.size || 0),
+ pnl: +Number(v16ResolveOrderRealizedPnl(order) || 0).toFixed(6),
+ commission: +Math.abs(Number(order.commission || 0)).toFixed(6),
+ closedAt: Number(order.createdAt || 0),
+ explanation: String(order.explanation || ''),
+ source: 'delta_order',
+ raw: order,
+ }));
+ if (orderRecords.length) return orderRecords.sort((a, b) => Number(b.closedAt || 0) - Number(a.closedAt || 0));
+ return [];
+}
+
+function v16BuildLiveAnalyticsModel(metrics = {}, productDefinitions = new Map(), view = {}) {
+ const normalizedView = v16NormalizeLiveAnalyticsView(view);
+ const rangeStart = v16AnalyticsRangeStart(normalizedView.rangeDays);
+ const now = Date.now();
+ const { buckets, byTs } = v16AnalyticsBuildBucketMap(rangeStart, now);
+ const bucketForTs = (ts) => byTs.get(v16AnalyticsStartOfDay(ts)) || buckets[buckets.length - 1];
+ const closedRecords = v16BuildAnalyticsClosedRecords(metrics, productDefinitions, rangeStart, normalizedView.instrument);
+ const fills = (metrics.fills || [])
+ .filter(fill => Number(fill.createdAt || 0) >= rangeStart)
+ .filter(fill => v16AnalyticsMatchesInstrument(fill.symbol, productDefinitions, normalizedView.instrument));
+ const positions = (metrics.positions || [])
+ .filter(position => v16AnalyticsMatchesInstrument(position.symbol, productDefinitions, normalizedView.instrument));
+ const orderHistory = (metrics.orderHistory || [])
+ .filter(order => Number(order.createdAt || 0) >= rangeStart)
+ .filter(order => v16AnalyticsMatchesInstrument(order.symbol, productDefinitions, normalizedView.instrument));
+ const walletTransactions = (metrics.walletTransactions || [])
+ .filter(item => Number(item.createdAt || 0) >= rangeStart);
+
+ closedRecords.forEach(record => {
+ const bucket = bucketForTs(record.closedAt);
+ const pnl = Number(record.pnl || 0);
+ bucket.realized += pnl;
+ bucket.trades += 1;
+ if (pnl > 0) bucket.wins += 1;
+ else if (pnl < 0) bucket.losses += 1;
+ });
+
+ fills.forEach(fill => {
+ const bucket = bucketForTs(fill.createdAt);
+ bucket.volume += v16AnalyticsFillNotional(fill, productDefinitions);
+ const commission = Number(fill.commission || 0);
+ if (commission >= 0) bucket.fees += Math.abs(commission);
+ else bucket.rebates += Math.abs(commission);
+ });
+
+ walletTransactions.forEach(tx => {
+ const bucket = bucketForTs(tx.createdAt);
+ const role = v16WalletTransactionRole(tx);
+ const amount = v16AnalyticsWalletAdjustmentValue(tx);
+ if (role === 'funding' && normalizedView.instrument !== 'options') bucket.funding += amount;
+ if (role === 'deposit') bucket.deposits += Math.abs(amount);
+ if (role === 'withdrawal') bucket.withdrawals += Math.abs(amount);
+ if (role === 'liquidation_fee') bucket.liquidationFees += Math.abs(amount);
+ if (role === 'fee' && normalizedView.instrument === 'all' && !fills.length) bucket.fees += Math.abs(amount);
+ if (role === 'rebate' && normalizedView.instrument === 'all' && !fills.length) bucket.rebates += Math.abs(amount);
+ });
+
+ orderHistory.forEach(order => {
+ const liquidationFee = v16AnalyticsOrderLiquidationFee(order);
+ if (!liquidationFee) return;
+ const bucket = bucketForTs(order.createdAt);
+ bucket.liquidationFees += liquidationFee;
+ });
+
+ const wins = closedRecords.filter(record => Number(record.pnl || 0) > 0);
+ const losses = closedRecords.filter(record => Number(record.pnl || 0) < 0);
+ const totalRealized = closedRecords.reduce((sum, record) => sum + Number(record.pnl || 0), 0);
+ const totalVolume = buckets.reduce((sum, bucket) => sum + Number(bucket.volume || 0), 0);
+ const totalFees = buckets.reduce((sum, bucket) => sum + Number(bucket.fees || 0), 0);
+ const totalRebates = buckets.reduce((sum, bucket) => sum + Number(bucket.rebates || 0), 0);
+ const totalFunding = buckets.reduce((sum, bucket) => sum + Number(bucket.funding || 0), 0);
+ const totalDeposits = buckets.reduce((sum, bucket) => sum + Number(bucket.deposits || 0), 0);
+ const totalWithdrawals = buckets.reduce((sum, bucket) => sum + Number(bucket.withdrawals || 0), 0);
+ const totalLiquidationFees = buckets.reduce((sum, bucket) => sum + Number(bucket.liquidationFees || 0), 0);
+ const selectedUnrealized = positions.reduce((sum, position) => sum + Number(position.unrealized || 0), 0);
+ const hasOpenOptionExposure = normalizedView.instrument === 'options' && positions.length > 0;
+ const totalTradingChange = buckets.reduce((sum, bucket) => (
+ sum
+ + Number(bucket.realized || 0)
+ - Number(bucket.fees || 0)
+ + Number(bucket.rebates || 0)
+ + Number(bucket.funding || 0)
+ - Number(bucket.liquidationFees || 0)
+ ), 0);
+ const absoluteMode = normalizedView.instrument === 'all';
+ const baseEquity = absoluteMode
+ ? Number(metrics.walletBalance || 0) - (totalDeposits - totalWithdrawals) - totalTradingChange - selectedUnrealized
+ : 0;
+
+ let runningEquity = baseEquity;
+ const equitySeries = buckets.map((bucket, index) => {
+ runningEquity += Number(bucket.realized || 0) - Number(bucket.fees || 0) + Number(bucket.rebates || 0) + Number(bucket.funding || 0) - Number(bucket.liquidationFees || 0);
+ const equity = runningEquity + (index === buckets.length - 1 ? selectedUnrealized : 0);
+ return {
+ ts: bucket.ts,
+ label: bucket.label,
+ equity: +equity.toFixed(4),
+ realized: +Number(bucket.realized || 0).toFixed(4),
+ volume: +Number(bucket.volume || 0).toFixed(4),
+ fees: +Number(bucket.fees || 0).toFixed(4),
+ funding: +Number(bucket.funding || 0).toFixed(4),
+ deposits: +Number(bucket.deposits || 0).toFixed(4),
+ withdrawals: +Number(bucket.withdrawals || 0).toFixed(4),
+ liquidationFees: +Number(bucket.liquidationFees || 0).toFixed(4),
+ trades: bucket.trades,
+ };
+ });
+
+ return {
+ view: normalizedView,
+ rangeStart,
+ instrumentLabel: normalizedView.instrument === 'all'
+ ? 'All instruments'
+ : normalizedView.instrument === 'options'
+ ? 'Options only'
+ : 'Futures only',
+ equityMode: absoluteMode ? 'absolute' : 'relative',
+ equitySeries,
+ realizedPnlSeries: buckets.map(bucket => ({ ts: bucket.ts, label: bucket.label, value: +Number(bucket.realized || 0).toFixed(4) })),
+ volumeSeries: buckets.map(bucket => ({ ts: bucket.ts, label: bucket.label, value: +Number(bucket.volume || 0).toFixed(4) })),
+ feesSeries: buckets.map(bucket => ({ ts: bucket.ts, label: bucket.label, value: +Number(bucket.fees || 0).toFixed(4) })),
+ fundingSeries: buckets.map(bucket => ({ ts: bucket.ts, label: bucket.label, value: +Number(bucket.funding || 0).toFixed(4) })),
+ depositSeries: buckets.map(bucket => ({ ts: bucket.ts, label: bucket.label, value: +Number(bucket.deposits || 0).toFixed(4) })),
+ withdrawalSeries: buckets.map(bucket => ({ ts: bucket.ts, label: bucket.label, value: +Number(bucket.withdrawals || 0).toFixed(4) })),
+ liquidationFeeSeries: buckets.map(bucket => ({ ts: bucket.ts, label: bucket.label, value: +Number(bucket.liquidationFees || 0).toFixed(4) })),
+ positions,
+ fills,
+ orderHistory,
+ closedRecords: closedRecords.sort((a, b) => Number(b.closedAt || 0) - Number(a.closedAt || 0)),
+ trades: closedRecords.sort((a, b) => Number(b.closedAt || 0) - Number(a.closedAt || 0)),
+ tradeCount: closedRecords.length,
+ primaryPnlLabel: hasOpenOptionExposure ? 'OPEN P&L' : 'REALIZED P&L',
+ primaryPnlValue: hasOpenOptionExposure ? selectedUnrealized : totalRealized,
+ primaryPnlMeta: hasOpenOptionExposure
+ ? `Mark-to-market across ${positions.length} live option position${positions.length === 1 ? '' : 's'} from Delta positions.`
+ : `${closedRecords.length} closed trade${closedRecords.length === 1 ? '' : 's'} in range.`,
+ usesDeltaOptionMtM: hasOpenOptionExposure,
+ realized: totalRealized,
+ winRate: closedRecords.length ? ((wins.length / closedRecords.length) * 100) : 0,
+ avgWin: wins.length ? (wins.reduce((sum, record) => sum + Number(record.pnl || 0), 0) / wins.length) : 0,
+ avgLoss: losses.length ? (losses.reduce((sum, record) => sum + Number(record.pnl || 0), 0) / losses.length) : 0,
+ volume: totalVolume,
+ fees: totalFees,
+ rebates: totalRebates,
+ funding: totalFunding,
+ deposits: totalDeposits,
+ withdrawals: totalWithdrawals,
+ liquidationFees: totalLiquidationFees,
+ unrealized: selectedUnrealized,
+ endingEquity: equitySeries[equitySeries.length - 1]?.equity || 0,
+ };
+}
+
+function v16GetAnalyticsEquityChartModel(model = {}) {
+ const series = Array.isArray(model.equitySeries) ? model.equitySeries : [];
+ if (!series.length) return null;
+ const width = 860;
+ const height = 260;
+ const padX = 28;
+ const padY = 24;
+ const values = series.map(point => Number(point.equity || 0));
+ const min = Math.min(...values, 0);
+ const max = Math.max(...values, 0);
+ const range = Math.max(1, max - min);
+ const zeroY = height - padY - (((0 - min) / range) * (height - padY * 2));
+ const points = series.map((point, index) => {
+ const x = padX + ((width - padX * 2) * index / Math.max(1, series.length - 1));
+ const y = height - padY - (((Number(point.equity || 0) - min) / range) * (height - padY * 2));
+ return { ...point, x, y };
+ });
+ return {
+ width,
+ height,
+ padX,
+ padY,
+ zeroY,
+ points,
+ isNegative: values[values.length - 1] < 0,
+ };
+}
+
+function v16BuildAnalyticsEquityChart(model = {}) {
+ const chartModel = v16GetAnalyticsEquityChartModel(model);
+ if (!chartModel) {
+ return `<div class="empty"><div class="ei">--</div><div class="eh">No analytics history yet</div><div class="es">Refresh live data to build the selected range.</div></div>`;
+ }
+ const { width, height, padX, padY, zeroY, points, isNegative } = chartModel;
+ const path = points.map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ');
+ const depositMarkers = model.view?.legend?.deposits
+ ? points.filter(point => Number(point.deposits || 0) > 0).map(point => `<circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="4" class="analytics-event-marker deposits"><title>${v16Esc(point.label)} deposit ${v16FmtSigned(point.deposits)}</title></circle>`).join('')
+ : '';
+ const withdrawalMarkers = model.view?.legend?.withdrawals
+ ? points.filter(point => Number(point.withdrawals || 0) > 0).map(point => `<circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="4" class="analytics-event-marker withdrawals"><title>${v16Esc(point.label)} withdrawal ${v16FmtSigned(-point.withdrawals)}</title></circle>`).join('')
+ : '';
+ const liquidationMarkers = model.view?.legend?.liquidationFees
+ ? points.filter(point => Number(point.liquidationFees || 0) > 0).map(point => `<circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="4" class="analytics-event-marker liquidation"><title>${v16Esc(point.label)} liquidation fee ${v16FmtSigned(-point.liquidationFees)}</title></circle>`).join('')
+ : '';
+ const xLabels = points.filter((_, index) => index === 0 || index === points.length - 1 || index === Math.floor((points.length - 1) / 2))
+ .map(point => `<span style="left:${((point.x / width) * 100).toFixed(2)}%">${v16Esc(point.label)}</span>`)
+ .join('');
+ return `<div class="live-analytics-equity-plot ${isNegative ? 'negative' : 'positive'}">
+ <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" class="live-analytics-equity-svg">
+ <line x1="${padX}" y1="${zeroY.toFixed(1)}" x2="${width - padX}" y2="${zeroY.toFixed(1)}" class="live-equity-zero"></line>
+ <polyline fill="none" stroke="url(#liveAnalyticsStroke)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" points="${path}"></polyline>
+ <defs>
+ <linearGradient id="liveAnalyticsStroke" x1="0" y1="${padY}" x2="0" y2="${height - padY}" gradientUnits="userSpaceOnUse">
+ <stop offset="0%" stop-color="#4fd1ff"></stop>
+ <stop offset="100%" stop-color="${isNegative ? '#ff6b82' : '#1de9b6'}"></stop>
+ </linearGradient>
+ </defs>
+ ${depositMarkers}
+ ${withdrawalMarkers}
+ ${liquidationMarkers}
+ </svg>
+ <div class="live-equity-hoverline" hidden></div>
+ <div class="live-equity-tooltip" hidden></div>
+ <div class="live-analytics-axis-labels">${xLabels}</div>
+ </div>`;
+}
+
+function v16EquityTooltipTone(value) {
+ const numeric = Number(value || 0);
+ if (numeric > 0) return 'good';
+ if (numeric < 0) return 'bad';
+ return '';
+}
+
+function v16EquityTooltipRow(label, value, tone = '', prefix = '') {
+ return `<div class="live-equity-tooltip-meta"><span>${v16Esc(label)}</span><strong class="${tone}">${prefix}${value}</strong></div>`;
+}
+
+function v16PositionEquityTooltip(plot, tooltip, leftPct) {
+ const placement = leftPct < 18 ? 'is-left-edge' : (leftPct > 82 ? 'is-right-edge' : '');
+ tooltip.classList.toggle('is-left-edge', placement === 'is-left-edge');
+ tooltip.classList.toggle('is-right-edge', placement === 'is-right-edge');
+ tooltip.style.left = `${Math.max(4, Math.min(96, leftPct))}%`;
+}
+
+function v16EquityDrawdownAt(points = [], point = {}) {
+ const ts = Number(point.ts || 0);
+ const eligible = points.filter(item => Number(item.ts || 0) <= ts);
+ const peak = eligible.reduce((max, item) => Math.max(max, Number(item.equity || 0)), Number(point.equity || 0));
+ return Math.min(0, Number(point.equity || 0) - peak);
+}
+
+function v16RenderAnalyticsEquityChart(model = {}) {
+ const chartEl = document.getElementById('liveAnalyticsEquityChart');
+ if (!chartEl) return;
+ chartEl.innerHTML = v16BuildAnalyticsEquityChart(model);
+ const chartModel = v16GetAnalyticsEquityChartModel(model);
+ if (!chartModel) return;
+ const plot = chartEl.querySelector('.live-analytics-equity-plot');
+ const tooltip = chartEl.querySelector('.live-equity-tooltip');
+ const hoverline = chartEl.querySelector('.live-equity-hoverline');
+ if (!plot || !tooltip || !hoverline) return;
+ const nearestClosedRecordByTs = (ts) => (model.closedRecords || []).reduce((closest, record) => {
+ if (!record) return closest;
+ if (!closest) return record;
+ return Math.abs(Number(record.closedAt || 0) - ts) < Math.abs(Number(closest.closedAt || 0) - ts) ? record : closest;
+ }, null);
+ const showPoint = (point) => {
+ const leftPct = Math.max(0, Math.min(100, (point.x / chartModel.width) * 100));
+ hoverline.hidden = false;
+ hoverline.style.left = `${leftPct}%`;
+ const nearestRecord = nearestClosedRecordByTs(point.ts);
+ const drawdown = v16EquityDrawdownAt(chartModel.points, point);
+ const feeImpact = -Number(point.fees || 0) + Number(point.rebates || 0) + Number(point.funding || 0) - Number(point.liquidationFees || 0);
+ const cashFlow = Number(point.deposits || 0) - Number(point.withdrawals || 0);
+ const closedTrades = Number(point.trades || 0);
+ const eventCopy = nearestRecord && Math.abs(Number(nearestRecord.closedAt || 0) - point.ts) <= 12 * 60 * 60 * 1000
+ ? `<div class="live-equity-tooltip-note ${nearestRecord.pnl >= 0 ? 'good' : 'bad'}">${v16Esc(nearestRecord.symbol)} close ${v16FmtSigned(nearestRecord.pnl)}</div>`
+ : '';
+ tooltip.hidden = false;
+ tooltip.className = `live-equity-tooltip ${point.realized >= 0 ? 'good' : 'bad'}`;
+ tooltip.innerHTML = `
+ <div class="live-equity-tooltip-head">
+ <span class="live-equity-tooltip-time">${v16Esc(v16FormatTs(point.ts))}</span>
+ <span class="live-equity-tooltip-event">${closedTrades} close${closedTrades === 1 ? '' : 's'}</span>
+ </div>
+ <div class="live-equity-tooltip-kicker">Net trading change</div>
+ <div class="live-equity-tooltip-value ${v16EquityTooltipTone(point.realized)}">${v16FmtSigned(point.realized || 0)}</div>
+ ${v16EquityTooltipRow('Trading equity', `$${v16FmtNumber(point.equity, 2)}`)}
+ ${v16EquityTooltipRow('Realized P&L', v16FmtSigned(point.realized || 0), v16EquityTooltipTone(point.realized))}
+ ${v16EquityTooltipRow('Fees, funding', v16FmtSigned(feeImpact), v16EquityTooltipTone(feeImpact))}
+ ${v16EquityTooltipRow('Cash flow', v16FmtSigned(cashFlow), v16EquityTooltipTone(cashFlow))}
+ ${v16EquityTooltipRow('Drawdown', v16FmtSigned(drawdown), drawdown < 0 ? 'bad' : '')}
+ ${eventCopy}`;
+ v16PositionEquityTooltip(plot, tooltip, leftPct);
+ };
+ plot.addEventListener('mousemove', (event) => {
+ const rect = plot.getBoundingClientRect();
+ const normalizedX = ((event.clientX - rect.left) / Math.max(1, rect.width)) * chartModel.width;
+ const point = chartModel.points.reduce((closest, item) => (
+ !closest || Math.abs(item.x - normalizedX) < Math.abs(closest.x - normalizedX) ? item : closest
+ ), null);
+ if (point) showPoint(point);
+ });
+ plot.addEventListener('mouseleave', () => {
+ tooltip.hidden = true;
+ hoverline.hidden = true;
+ });
+}
+
+function v16GetAnalyticsBarChartModel(series = [], tone = 'neutral') {
+ const points = Array.isArray(series) ? series : [];
+ const hasData = points.some(point => Math.abs(Number(point.value || 0)) > 0);
+ if (!points.length || !hasData) return null;
+ const width = 420;
+ const height = 170;
+ const padX = 22;
+ const padY = 18;
+ const values = points.map(point => Number(point.value || 0));
+ const min = Math.min(...values, 0);
+ const max = Math.max(...values, 0);
+ const range = Math.max(1, max - min);
+ const zeroY = height - padY - (((0 - min) / range) * (height - padY * 2));
+ const barGap = 6;
+ const slot = (width - padX * 2) / Math.max(1, points.length);
+ const barWidth = Math.max(8, slot - barGap);
+ const bars = points.map((point, index) => {
+ const value = Number(point.value || 0);
+ const x = padX + (slot * index) + ((slot - barWidth) / 2);
+ const y = height - padY - (((value - min) / range) * (height - padY * 2));
+ const rectY = Math.min(y, zeroY);
+ const rectH = Math.max(2, Math.abs(zeroY - y));
+ const klass = tone === 'signed'
+ ? (value >= 0 ? 'positive' : 'negative')
+ : tone;
+ return {
+ ...point,
+ x,
+ y,
+ rectY,
+ rectH,
+ barWidth,
+ klass,
+ };
+ });
+ return {
+ width,
+ height,
+ padX,
+ padY,
+ zeroY,
+ bars,
+ hasData,
+ };
+}
+
+function v16BuildAnalyticsBarChart(series = [], tone = 'neutral', emptyTitle = 'No data yet', emptyCopy = 'Refresh live data to populate this chart.') {
+ const chartModel = v16GetAnalyticsBarChartModel(series, tone);
+ if (!chartModel) {
+ return `<div class="empty compact"><div class="ei">--</div><div class="eh">${v16Esc(emptyTitle)}</div><div class="es">${v16Esc(emptyCopy)}</div></div>`;
+ }
+ const { width, height, padX, zeroY, bars } = chartModel;
+ const barMarkup = bars.map(point => (
+ `<g><rect x="${point.x.toFixed(1)}" y="${point.rectY.toFixed(1)}" width="${point.barWidth.toFixed(1)}" height="${point.rectH.toFixed(1)}" rx="4" class="live-analytics-bar ${v16Esc(point.klass)}"></rect></g>`
+ )).join('');
+ const labels = bars.filter((_, index) => index === 0 || index === bars.length - 1 || index === Math.floor((bars.length - 1) / 2))
+ .map(point => `<span>${v16Esc(point.label)}</span>`)
+ .join('');
+ return `<div class="live-analytics-bar-shell">
+ <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" class="live-analytics-bar-svg">
+ <line x1="${padX}" y1="${zeroY.toFixed(1)}" x2="${width - padX}" y2="${zeroY.toFixed(1)}" class="live-equity-zero"></line>
+ ${barMarkup}
+ </svg>
+ <div class="live-equity-hoverline" hidden></div>
+ <div class="live-equity-tooltip" hidden></div>
+ <div class="live-analytics-bar-labels">${labels}</div>
+ </div>`;
+}
+
+function v16RenderAnalyticsBarChart(elementId, series = [], tone = 'neutral', emptyTitle = 'No data yet', emptyCopy = 'Refresh live data to populate this chart.', valueLabel = 'Value', valueFormatter = (value => `${value}`)) {
+ const chartEl = document.getElementById(elementId);
+ if (!chartEl) return;
+ chartEl.innerHTML = v16BuildAnalyticsBarChart(series, tone, emptyTitle, emptyCopy);
+ const chartModel = v16GetAnalyticsBarChartModel(series, tone);
+ if (!chartModel) return;
+ const plot = chartEl.querySelector('.live-analytics-bar-shell');
+ const tooltip = chartEl.querySelector('.live-equity-tooltip');
+ const hoverline = chartEl.querySelector('.live-equity-hoverline');
+ if (!plot || !tooltip || !hoverline) return;
+ const showPoint = (point) => {
+ const leftPct = Math.max(0, Math.min(100, ((point.x + (point.barWidth / 2)) / chartModel.width) * 100));
+ hoverline.hidden = false;
+ hoverline.style.left = `${leftPct}%`;
+ tooltip.hidden = false;
+ tooltip.className = `live-equity-tooltip ${Number(point.value || 0) >= 0 ? 'good' : 'bad'}`;
+ tooltip.innerHTML = `
+ <div class="live-equity-tooltip-time">${v16Esc(point.label)}</div>
+ <div class="live-equity-tooltip-value ${Number(point.value || 0) >= 0 ? 'good' : 'bad'}">${v16Esc(valueFormatter(Number(point.value || 0)))}</div>
+ <div class="live-equity-tooltip-meta">${v16Esc(valueLabel)} <strong>${v16Esc(valueFormatter(Number(point.value || 0)))}</strong></div>`;
+ tooltip.style.left = `${Math.max(12, Math.min(88, leftPct))}%`;
+ };
+ plot.addEventListener('mousemove', (event) => {
+ const rect = plot.getBoundingClientRect();
+ const normalizedX = ((event.clientX - rect.left) / Math.max(1, rect.width)) * chartModel.width;
+ const point = chartModel.bars.reduce((closest, item) => {
+ const itemCenter = item.x + (item.barWidth / 2);
+ const closestCenter = closest ? (closest.x + (closest.barWidth / 2)) : 0;
+ return !closest || Math.abs(itemCenter - normalizedX) < Math.abs(closestCenter - normalizedX) ? item : closest;
+ }, null);
+ if (point) showPoint(point);
+ });
+ plot.addEventListener('mouseleave', () => {
+ tooltip.hidden = true;
+ hoverline.hidden = true;
+ });
+}
+
+function v16RenderLiveAnalyticsKpis(model = {}) {
+ const wrap = document.getElementById('liveAnalyticsKpis');
+ if (!wrap) return;
+ const avgLoss = Number(model.avgLoss || 0);
+ const primaryPnlValue = Number((model.primaryPnlValue ?? model.realized) || 0);
+ const cards = [
+ { label: String(model.primaryPnlLabel || 'REALIZED P&L'), value: v16FmtSigned(primaryPnlValue), tone: primaryPnlValue >= 0 ? 'good' : 'bad', meta: String(model.primaryPnlMeta || `${model.tradeCount || 0} closed trade${model.tradeCount === 1 ? '' : 's'} in range.`) },
+ { label: 'WIN RATE', value: `${v16FmtNumber(model.winRate || 0, 1)}%`, tone: Number(model.winRate || 0) >= 50 ? 'good' : 'warn', meta: `${model.instrumentLabel || 'All instruments'}.` },
+ { label: 'AVERAGE WIN', value: v16FmtSigned(model.avgWin || 0), tone: Number(model.avgWin || 0) > 0 ? 'good' : 'warn', meta: `${model.tradeCount ? 'Winning trades only.' : 'No winning trades yet.'}` },
+ { label: 'AVERAGE LOSS', value: v16FmtSigned(avgLoss || 0), tone: avgLoss >= 0 ? 'warn' : 'bad', meta: `${model.tradeCount ? 'Losing trades only.' : 'No losing trades yet.'}` },
+ { label: '# TRADES', value: `${Number(model.tradeCount || 0)}`, tone: '', meta: `${Number(model.tradeCount || 0)} closed trade${model.tradeCount === 1 ? '' : 's'} selected.` },
+ { label: 'VOLUME TRADED', value: `$${v16FmtNumber(model.volume || 0, model.volume >= 1000 ? 0 : 2)}`, tone: '', meta: 'Approximate notional from fills.' },
+ { label: 'FEES PAID', value: v16FmtSigned(-(model.fees || 0)), tone: Number(model.fees || 0) > 0 ? 'bad' : '', meta: model.rebates > 0 ? `Rebates ${v16FmtSigned(model.rebates || 0)}.` : 'Commissions in range.' },
+ { label: 'FUNDING', value: v16FmtSigned(model.funding || 0), tone: Number(model.funding || 0) >= 0 ? 'good' : 'bad', meta: model.view?.instrument === 'options' ? 'Options filter excludes funding.' : 'Wallet funding adjustments.' },
+ { label: 'DEPOSITS', value: v16FmtSigned(model.deposits || 0), tone: Number(model.deposits || 0) > 0 ? 'good' : '', meta: 'Account-level cash inflows in range.' },
+ { label: 'WITHDRAWALS', value: v16FmtSigned(-(model.withdrawals || 0)), tone: Number(model.withdrawals || 0) > 0 ? 'warn' : '', meta: 'Account-level cash outflows in range.' },
+ ];
+ wrap.innerHTML = cards.map(card => `
+ <div class="live-analytics-kpi-card">
+ <span>${v16Esc(card.label)}</span>
+ <strong class="${v16Esc(card.tone)}">${v16Esc(card.value)}</strong>
+ <small>${v16Esc(card.meta)}</small>
+ </div>`).join('');
+}
+
+function v16RenderLiveAnalyticsReview(model = {}) {
+ const journalMeta = document.getElementById('liveAnalyticsJournalMeta');
+ const journalWrap = document.getElementById('liveAnalyticsJournalRows');
+ const historyMeta = document.getElementById('liveAnalyticsTradeHistoryMeta');
+ const historyWrap = document.getElementById('liveAnalyticsTradeHistoryRows');
+ if (!journalMeta || !journalWrap || !historyMeta || !historyWrap) return;
+ const trades = Array.isArray(model.trades) ? model.trades : [];
+ journalMeta.textContent = trades.some(trade => !trade.hasNotes)
+ ? 'At least one closed trade still needs post-trade notes.'
+ : `${trades.length} closed trade${trades.length === 1 ? '' : 's'} ready for review.`;
+ if (!trades.length) {
+ journalWrap.innerHTML = `<div class="empty"><div class="ei">--</div><div class="eh">No journal trades yet</div><div class="es">Closed positions detected from Delta history will appear here.</div></div>`;
+ } else {
+ journalWrap.innerHTML = trades.slice(0, 40).map(trade => `
+ <button class="live-journal-row ${trade.hasNotes ? '' : 'pending'}" data-live-analytics-journal-id="${v16Esc(trade.id)}">
+ <div class="live-journal-top">
+ <strong>${v16Esc(trade.symbol)}</strong>
+ <span class="${trade.pnl >= 0 ? 'good' : 'bad'}">${v16FmtSigned(trade.pnl)}</span>
+ </div>
+ <div class="live-journal-meta">${v16Esc(String(trade.side || '').toUpperCase())} | ${v16FmtNumber(trade.size, 4).replace(/\.?0+$/, '')} contracts | ${v16Esc(v16FormatTs(trade.closedAt))}</div>
+ <div class="live-journal-tags">${V16_MANAGE_REVIEW_CHECKS.filter(check => trade.review?.checklist?.[check.key]).map(check => `<span class="live-journal-tag">${v16Esc(check.label)}</span>`).join('')}${trade.review?.setupTag ? `<span class="live-journal-tag">${v16Esc(trade.review.setupTag)}</span>` : ''}${trade.review?.mistakeTag ? `<span class="live-journal-tag warn">${v16Esc(trade.review.mistakeTag)}</span>` : ''}</div>
+ <div class="live-journal-meta">${trade.hasNotes ? v16Esc(v16BuildJournalSummary(trade.review)) : 'Add post-trade notes'}</div>
+ </button>`).join('');
+ journalWrap.querySelectorAll('[data-live-analytics-journal-id]').forEach(button => {
+ button.addEventListener('click', () => {
+ const trade = trades.find(item => item.id === button.dataset.liveAnalyticsJournalId);
+ if (trade) openV16JournalDetail(trade);
+ });
+ });
+ }
+
+ const fills = Array.isArray(model.fills) ? model.fills : [];
+ const orders = Array.isArray(model.orderHistory) ? model.orderHistory : [];
+ const resolvedFeed = fills.length ? fills : orders;
+ const usingOrders = !fills.length && orders.length;
+ historyMeta.textContent = resolvedFeed.length
+ ? `${resolvedFeed.length} activity record${resolvedFeed.length === 1 ? '' : 's'} in the selected range.`
+ : 'No activity in the selected range.';
+ if (!resolvedFeed.length) {
+ historyWrap.innerHTML = `<div class="empty"><div class="ei">--</div><div class="eh">No trade activity loaded</div><div class="es">Refresh live data to load fills and order history from Delta Exchange.</div></div>`;
+ return;
+ }
+ historyWrap.innerHTML = resolvedFeed.slice(0, 40).map(item => `
+ <div class="live-fill-row ${usingOrders ? 'is-order-row' : ''}">
+ <div>
+ <div class="live-fill-symbol">${v16Esc(item.symbol)}</div>
+ <div class="live-fill-meta">${v16Esc(String(item.side || '').toUpperCase())} | ${v16FmtNumber(Number(item.size || 0), 4).replace(/\.?0+$/, '')}${Number(item.price || 0) > 0 ? ` @ $${v16FmtPrice(item.price)}` : ''}${usingOrders ? ` | ${v16Esc(String(item.state || '').toUpperCase())}` : ''}</div>
+ <small>${usingOrders ? 'Order history fallback' : `Fee -$${Math.abs(Number(item.commission || 0)).toFixed(4)}`}</small>
+ </div>
+ </div>`).join('');
+}
+
+async function renderV16LiveAnalyticsPane(preloaded = null, forceRefresh = false) {
+ const pane = document.getElementById('pane-liveanalytics');
+ if (!pane) return;
+ const statusEl = document.getElementById('liveAnalyticsStatus');
+ const syncEnabled = v16IsLiveAccountSyncEnabled();
+ const clearAnalyticsUi = (title = 'Load a Trade Enabled or Read Only profile with session secrets to fetch private Delta account analytics.') => {
+ const setHtml = (id, html) => {
+ const element = document.getElementById(id);
+ if (element) element.innerHTML = html;
+ };
+ v16LiveAnalyticsSetupCache = null;
+ v16LiveAnalyticsRenderCache = {
+ key: '',
+ builtAt: 0,
+ analyticsModel: null,
+ manageModel: null,
+ setupRows: [],
+ history: [],
+ };
+ if (statusEl) {
+ statusEl.textContent = title;
+ statusEl.className = 'live-account-status';
+ }
+ v16UpdateRateLimitBanner(null);
+ const equityMetaEl = document.getElementById('liveAnalyticsEquityMeta');
+ const realizedMetaEl = document.getElementById('liveAnalyticsRealizedMeta');
+ const volumeMetaEl = document.getElementById('liveAnalyticsVolumeMeta');
+ const feesMetaEl = document.getElementById('liveAnalyticsFeesMeta');
+ const fundingMetaEl = document.getElementById('liveAnalyticsFundingMeta');
+ if (equityMetaEl) equityMetaEl.textContent = 'Trading equity, deposits, withdrawals, and liquidation fees.';
+ if (realizedMetaEl) realizedMetaEl.textContent = 'Waiting for closed trades.';
+ if (volumeMetaEl) volumeMetaEl.textContent = 'Waiting for fills.';
+ if (feesMetaEl) feesMetaEl.textContent = 'Waiting for fee data.';
+ if (fundingMetaEl) fundingMetaEl.textContent = 'Waiting for funding entries.';
+ setHtml('liveAnalyticsKpis', '');
+ setHtml('liveAnalyticsReliabilityPanel', '');
+ setHtml('liveAnalyticsDailyControlPanel', '');
+ setHtml('liveAnalyticsSetupBreakdown', '');
+ setHtml('liveAnalyticsPaperLedger', '');
+ setHtml('liveAnalyticsRDistribution', '');
+ setHtml('liveAnalyticsEquityChart', `<div class="empty"><div class="ei">--</div><div class="eh">No analytics history yet</div><div class="es">Refresh live data to build the selected range.</div></div>`);
+ setHtml('liveAnalyticsRealizedChart', `<div class="empty compact"><div class="ei">--</div><div class="eh">No realized P&L yet</div><div class="es">Closed trades in the selected range will appear here.</div></div>`);
+ setHtml('liveAnalyticsVolumeChart', `<div class="empty compact"><div class="ei">--</div><div class="eh">No volume yet</div><div class="es">Fills in the selected range will appear here.</div></div>`);
+ setHtml('liveAnalyticsFeesChart', `<div class="empty compact"><div class="ei">--</div><div class="eh">No fees yet</div><div class="es">Fee events in the selected range will appear here.</div></div>`);
+ setHtml('liveAnalyticsFundingChart', `<div class="empty compact"><div class="ei">--</div><div class="eh">No funding yet</div><div class="es">Funding entries in the selected range will appear here.</div></div>`);
+ };
+ let snapshot = forceRefresh
+ ? await refreshV16PrivateAccountData(true)
+ : (!syncEnabled
+ ? (await storeGet(V16_LIVE_SNAPSHOT_KEY))?.[V16_LIVE_SNAPSHOT_KEY] || null
+ : (await refreshV16PrivateAccountData(false)) || (await storeGet(V16_LIVE_SNAPSHOT_KEY))?.[V16_LIVE_SNAPSHOT_KEY] || null);
+ if (
+ snapshot
+ && !forceRefresh
+ && syncEnabled
+ && !(Array.isArray(snapshot?.fills) && snapshot.fills.length)
+ && !(Array.isArray(snapshot?.orderHistory) && snapshot.orderHistory.length)
+ && !v16NormalizeRateLimitMeta(snapshot?.rateLimit)
+ && v16CapabilityAllowsAccountRead()
+ ) {
+ snapshot = (await refreshV16PrivateAccountData(true).catch(() => snapshot)) || snapshot;
+ }
+ await v16LoadLiveAnalyticsView();
+ v16SyncLiveAnalyticsAutoRefreshButtons();
+ if (!snapshot) {
+ clearAnalyticsUi(syncEnabled
+ ? 'Load a Trade Enabled or Read Only profile with session secrets to fetch private Delta account analytics.'
+ : 'Live account sync is paused in Settings. Enable it or click Refresh for an on-demand snapshot.');
+ const shadowStore = await storeGet([V16_SHADOW_TRADE_LEDGER_KEY, 'autoTradeSettings']).catch(() => ({}));
+ const shadowLedger = shadowStore?.[V16_SHADOW_TRADE_LEDGER_KEY] || { open: [], closed: [] };
+ v16RenderAnalyticsReliabilityPanel(null, null, shadowLedger);
+ v16RenderPaperLedgerPanel(shadowLedger);
+ return;
+ }
+ const scanResults = Array.isArray(preloaded?.scanResults) ? preloaded.scanResults : ((await getV16Snapshot())?.scanResults || []);
+ const notesStore = await storeGet(V16_LIVE_JOURNAL_NOTES_KEY);
+ const notesMap = notesStore?.[V16_LIVE_JOURNAL_NOTES_KEY] || {};
+ const shadowStore = await storeGet([V16_SHADOW_TRADE_LEDGER_KEY, V16_SETUP_PERFORMANCE_KEY, 'autoTradeSettings']);
+ const shadowLedger = shadowStore?.[V16_SHADOW_TRADE_LEDGER_KEY] || { open: [], closed: [] };
+ const autoTradeSettings = sanitizeAutoTradeSettings(shadowStore?.autoTradeSettings || {});
+ const analyticsCacheKey = JSON.stringify({
+ fetchedAt: Number(snapshot?.fetchedAt || 0),
+ lastScan: String(preloaded?.lastScan || ''),
+ signalCount: Array.isArray(scanResults) ? scanResults.length : 0,
+ noteCount: Object.keys(notesMap).length,
+ shadowOpen: Array.isArray(shadowLedger?.open) ? shadowLedger.open.length : 0,
+ shadowClosed: Array.isArray(shadowLedger?.closed) ? shadowLedger.closed.length : 0,
+ shadowUpdatedAt: Number(shadowLedger?.updatedAt || 0),
+ rangeDays: Number(v16LiveAnalyticsView?.rangeDays || 7),
+ instrument: String(v16LiveAnalyticsView?.instrument || 'all'),
+ legend: v16LiveAnalyticsView?.legend || {},
+ });
+ const useAnalyticsCache = !forceRefresh
+ && v16LiveAnalyticsRenderCache.key === analyticsCacheKey
+ && (Date.now() - Number(v16LiveAnalyticsRenderCache.builtAt || 0)) < 10000;
+ let analyticsModel = v16LiveAnalyticsRenderCache.analyticsModel || null;
+ let manageModel = v16LiveAnalyticsRenderCache.manageModel || null;
+ let cachedSetupRows = Array.isArray(v16LiveAnalyticsRenderCache.setupRows) ? v16LiveAnalyticsRenderCache.setupRows : [];
+ let history = Array.isArray(v16LiveAnalyticsRenderCache.history) ? v16LiveAnalyticsRenderCache.history : [];
+ if (!useAnalyticsCache) {
+ const productDefinitions = await v16BuildProductDefinitionsForSnapshot(snapshot);
+ const metrics = v16ComputeSessionMetrics(snapshot, scanResults, notesMap, productDefinitions);
+ history = await v16AppendEquityHistory(metrics);
+ await v16SyncLiveManageHistory(metrics, history);
+ analyticsModel = v16BuildLiveAnalyticsModel(metrics, productDefinitions, v16LiveAnalyticsView);
+ const manageBundle = await v16EnsureLiveManageHistory();
+ manageModel = v16BuildManageAnalyticsModel(manageBundle, { source: 'live', range: '30d' }, notesMap);
+ const setupPerformance = buildSetupPerformance(
+ Array.isArray(shadowLedger?.closed) ? shadowLedger.closed : [],
+ Array.isArray(manageModel?.closedTrades) ? manageModel.closedTrades : [],
+ { minSample: autoTradeSettings.setupPerformanceMinSample }
+ );
+ storeSet({ [V16_SETUP_PERFORMANCE_KEY]: setupPerformance }).catch(() => {});
+ cachedSetupRows = v16BuildAnalyticsSetupRows(manageModel, scanResults, setupPerformance);
+ v16LiveAnalyticsRenderCache = {
+ key: analyticsCacheKey,
+ builtAt: Date.now(),
+ analyticsModel,
+ manageModel,
+ setupRows: cachedSetupRows,
+ history,
+ };
+ }
+
+ if (statusEl) {
+ const activeRateLimit = v16NormalizeRateLimitMeta(snapshot?.rateLimit);
+ v16UpdateRateLimitBanner(activeRateLimit, 'Analytics');
+ const extra = activeRateLimit ? ` | API cooldown ${v16FormatDurationShort(activeRateLimit.waitMs)} (cached)` : '';
+ const syncCopy = !syncEnabled ? ' | auto sync paused' : '';
+ const analyticsRefreshCopy = v16IsLiveAnalyticsAutoRefreshEnabled() ? ' | analytics auto refresh on' : ' | analytics manual mode';
+ const optionCopy = analyticsModel.usesDeltaOptionMtM ? ' | Delta option P&L from live positions' : '';
+ const feedCopy = ` | Mode ${v16MarketDataModeLabel(snapshot?.marketDataMode || globalThis.deltaMarketDataMode || 'auto')} | Feed ${v16MarketDataSourceLabel(snapshot?.feedSource || 'rest')} | Updated ${v16FormatFeedAge(snapshot?.fetchedAt || 0)}`;
+ statusEl.textContent = `${analyticsModel.instrumentLabel} | ${v16AnalyticsRangeLabel(analyticsModel.view.rangeDays)} | ${analyticsModel.tradeCount} closed trade${analyticsModel.tradeCount === 1 ? '' : 's'} | ${analyticsModel.equityMode === 'absolute' ? 'Account-level curve' : 'Relative curve'}${optionCopy}${syncCopy}${analyticsRefreshCopy}${extra}${feedCopy}`;
+ statusEl.className = `live-account-status ${Number(analyticsModel.realized || 0) >= 0 ? 'good' : 'bad'}`;
+ }
+ globalThis.renderReportsHealthStrip?.({
+ rangeDays: analyticsModel.view?.rangeDays || 7,
+ closedTrades: analyticsModel.tradeCount || 0,
+ updatedAt: snapshot?.fetchedAt || Date.now(),
+ autoTrade: false,
+ paperTracking: true,
+ mode: analyticsModel.instrumentLabel || 'Reports',
+ profile: v16MarketDataSourceLabel(snapshot?.feedSource || 'rest'),
+ });
+
+ const equityMetaEl = document.getElementById('liveAnalyticsEquityMeta');
+ const realizedMetaEl = document.getElementById('liveAnalyticsRealizedMeta');
+ const volumeMetaEl = document.getElementById('liveAnalyticsVolumeMeta');
+ const feesMetaEl = document.getElementById('liveAnalyticsFeesMeta');
+ const fundingMetaEl = document.getElementById('liveAnalyticsFundingMeta');
+ if (equityMetaEl) {
+ equityMetaEl.textContent = analyticsModel.equityMode === 'absolute'
+ ? `Trading equity excludes deposits and withdrawals | ${analyticsModel.instrumentLabel} | ${v16MarketDataSourceLabel(snapshot?.feedSource || 'rest')} | updated ${v16FormatFeedAge(snapshot?.fetchedAt || 0)}.`
+ : `Relative trading curve for ${analyticsModel.instrumentLabel.toLowerCase()} | latest point includes live unrealized P&L | ${v16MarketDataSourceLabel(snapshot?.feedSource || 'rest')} | updated ${v16FormatFeedAge(snapshot?.fetchedAt || 0)}.`;
+ }
+ if (realizedMetaEl) {
+ realizedMetaEl.textContent = analyticsModel.usesDeltaOptionMtM
+ ? `Delta option closes only. Live option P&L is read from open positions until close or expiry.`
+ : `${analyticsModel.tradeCount} closed trade${analyticsModel.tradeCount === 1 ? '' : 's'} in range.`;
+ }
+ if (volumeMetaEl) volumeMetaEl.textContent = `$${v16FmtNumber(analyticsModel.volume || 0, analyticsModel.volume >= 1000 ? 0 : 2)} approximate notional traded.`;
+ if (feesMetaEl) {
+ feesMetaEl.textContent = analyticsModel.rebates > 0
+ ? `Fees ${v16FmtSigned(-(analyticsModel.fees || 0))} | Rebates ${v16FmtSigned(analyticsModel.rebates || 0)}.`
+ : `Fees ${v16FmtSigned(-(analyticsModel.fees || 0))} in the selected range.`;
+ }
+ if (fundingMetaEl) {
+ fundingMetaEl.textContent = analyticsModel.view.instrument === 'options'
+ ? 'Options filter excludes funding.'
+ : `${analyticsModel.funding === 0 ? 'No funding entries in range.' : `Funding ${v16FmtSigned(analyticsModel.funding || 0)}.`}`;
+ }
+
+ v16RenderLiveAnalyticsKpis(analyticsModel);
+ v16RenderAnalyticsReliabilityPanel(snapshot, analyticsModel, shadowLedger);
+ v16RenderAnalyticsDailyControlPanel(analyticsModel, shadowLedger);
+ v16RenderPaperLedgerPanel(shadowLedger);
+ const exportSetupBtn = document.getElementById('btnExportSetupReport');
+ if (exportSetupBtn) exportSetupBtn.onclick = v16ExportSetupPerformanceReport;
+
+ // --- Setup Family + R-Multiple in Analytics pane ---
+ {
+ v16LiveAnalyticsSetupCache = {
+ rows: cachedSetupRows,
+ analyticsModel,
+ manageModel,
+ preloaded,
+ cachedAt: Date.now(),
+ };
+ v16RenderAnalyticsSetupBreakdown(preloaded);
+ const rDistEl = document.getElementById('liveAnalyticsRDistribution');
+ if (rDistEl) {
+ rDistEl.innerHTML = `
+ <div class="risk-manage-section-label">R-MULTIPLE DISTRIBUTION${manageModel.rDistribution.avgR !== null ? ` &nbsp;&middot;&nbsp; Avg R: <span style="color:${manageModel.rDistribution.avgR >= 1 ? '#00e5a0' : '#ff4560'}">${manageModel.rDistribution.avgR >= 0 ? '+' : ''}${manageModel.rDistribution.avgR}R</span>` : ''}</div>
+ <div class="risk-manage-r-rows">${
+ manageModel.rDistribution.count > 0
+ ? Object.entries(manageModel.rDistribution.buckets).filter(([, v]) => v > 0).map(([label, count]) => {
+ const isWin = label.startsWith('win');
+ const isScratch = label === 'scratch';
+ const pct = +((count / manageModel.rDistribution.count) * 100).toFixed(0);
+ const col = isWin ? '#00e5a0' : isScratch ? '#ffc840' : '#ff4560';
+ return `<div class="risk-manage-r-row">
+ <span class="rr-label" style="color:${col}">${v16Esc(label)}</span>
+ <span class="rr-bar"><span style="width:${pct}%;background:${col}"></span></span>
+ <span class="rr-count">${count}</span>
+ </div>`;
+ }).join('')
+ : '<div class="account-inline-note">No trades with SL price data yet - SL is required for R-multiple tracking.</div>'
+ }</div>`;
+ }
+ }
+
+ v16RenderAnalyticsEquityChart(analyticsModel);
+ v16RenderAnalyticsBarChart('liveAnalyticsRealizedChart', analyticsModel.realizedPnlSeries, 'signed', 'No realized P&L yet', 'Closed trades in the selected range will appear here.', 'Realized P&L', value => v16FmtSigned(value || 0));
+ v16RenderAnalyticsBarChart('liveAnalyticsVolumeChart', analyticsModel.volumeSeries, 'volume', 'No volume yet', 'Fills in the selected range will appear here.', 'Volume Traded', value => `$${v16FmtNumber(value || 0, Number(value || 0) >= 1000 ? 0 : 2)}`);
+ v16RenderAnalyticsBarChart('liveAnalyticsFeesChart', analyticsModel.feesSeries, 'fees', 'No fees yet', 'Fee events in the selected range will appear here.', 'Fees Paid', value => v16FmtSigned(-(value || 0)));
+ v16RenderAnalyticsBarChart('liveAnalyticsFundingChart', analyticsModel.fundingSeries, 'signed', 'No funding yet', 'Funding entries in the selected range will appear here.', 'Funding', value => v16FmtSigned(value || 0));
+
+ pane.querySelectorAll('[data-analytics-range-days]').forEach(button => {
+ button.classList.toggle('active', Number(button.dataset.analyticsRangeDays || 0) === Number(analyticsModel.view.rangeDays || 7));
+ button.onclick = async () => {
+ await v16PersistLiveAnalyticsView({ rangeDays: Number(button.dataset.analyticsRangeDays || 7) });
+ renderV16LiveAnalyticsPane(preloaded, false);
+ };
+ });
+ const rangeInput = pane.querySelector('#liveAnalyticsRangeDaysInput');
+ if (rangeInput) {
+ rangeInput.value = String(Number(analyticsModel.view.rangeDays || 7));
+ const commitRangeDays = async () => {
+ const nextDays = Math.min(365, Math.max(1, Math.round(Number(rangeInput.value || analyticsModel.view.rangeDays || 7) || 7)));
+ rangeInput.value = String(nextDays);
+ if (nextDays === Number(analyticsModel.view.rangeDays || 7)) return;
+ await v16PersistLiveAnalyticsView({ rangeDays: nextDays });
+ renderV16LiveAnalyticsPane(preloaded, false);
+ };
+ rangeInput.onchange = commitRangeDays;
+ rangeInput.onblur = commitRangeDays;
+ rangeInput.onkeydown = event => {
+ if (event.key === 'Enter') {
+ event.preventDefault();
+ void commitRangeDays();
+ }
+ };
+ }
+ pane.querySelectorAll('[data-analytics-instrument]').forEach(button => {
+ button.classList.toggle('active', button.dataset.analyticsInstrument === analyticsModel.view.instrument);
+ button.onclick = async () => {
+ await v16PersistLiveAnalyticsView({ instrument: button.dataset.analyticsInstrument || 'all' });
+ renderV16LiveAnalyticsPane(preloaded, false);
+ };
+ });
+ pane.querySelectorAll('[data-analytics-legend]').forEach(button => {
+ const legendKey = button.dataset.analyticsLegend || '';
+ button.classList.toggle('active', analyticsModel.view.legend?.[legendKey] !== false);
+ button.onclick = async () => {
+ await v16PersistLiveAnalyticsView({
+ legend: {
+ [legendKey]: !(analyticsModel.view.legend?.[legendKey] !== false),
+ },
+ });
+ renderV16LiveAnalyticsPane(preloaded, false);
+ };
+ });
+}
+
+function v16BuildEquityChart(history = [], journalTrades = []) {
+ if (!history.length) {
+ return `<div class="empty"><div class="ei">--</div><div class="eh">No session history yet</div><div class="es">Refresh live data to build today&apos;s curve and journal markers.</div></div>`;
+ }
+ const model = v16GetEquityChartModel(history);
+ if (!model) {
+ return `<div class="empty"><div class="ei">--</div><div class="eh">No session history yet</div><div class="es">Refresh live data to build today&apos;s curve and journal markers.</div></div>`;
+ }
+ const { width, height, pad, zeroY, points, gradientOffset, isNegative } = model;
+ const path = points.map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ');
+ const markers = (journalTrades || []).slice(0, 20).map(trade => {
+ const point = points.reduce((closest, item) => {
+ if (!closest) return item;
+ return Math.abs(Number(item.ts || 0) - Number(trade.closedAt || 0)) < Math.abs(Number(closest.ts || 0) - Number(trade.closedAt || 0)) ? item : closest;
+ }, null);
+ if (!point) return '';
+ const tone = trade.pnl >= 0 ? '#00e5a0' : '#ff4560';
+ return `<circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="3.6" fill="${tone}"><title>${v16Esc(trade.symbol)} | ${trade.pnl >= 0 ? 'Win' : 'Loss'} | ${v16FmtSigned(trade.pnl)}</title></circle>`;
+ }).join('');
+ const zeroOffset = (gradientOffset * 100).toFixed(2);
+ return `<div class="live-equity-plot ${isNegative ? 'negative' : 'positive'}">
+ <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" class="live-equity-svg">
+ <defs>
+ <linearGradient id="liveEquityStroke" x1="0" y1="${pad}" x2="0" y2="${height - pad}" gradientUnits="userSpaceOnUse">
+ <stop offset="0%" stop-color="#13d8d2"></stop>
+ <stop offset="${zeroOffset}%" stop-color="#13d8d2"></stop>
+ <stop offset="${zeroOffset}%" stop-color="#ff5d7a"></stop>
+ <stop offset="100%" stop-color="#ff5d7a"></stop>
+ </linearGradient>
+ <linearGradient id="liveEquityFill" x1="0" y1="${pad}" x2="0" y2="${height - pad}" gradientUnits="userSpaceOnUse">
+ <stop offset="0%" stop-color="#13d8d2" stop-opacity=".24"></stop>
+ <stop offset="${zeroOffset}%" stop-color="#13d8d2" stop-opacity=".1"></stop>
+ <stop offset="${zeroOffset}%" stop-color="#ff5d7a" stop-opacity=".14"></stop>
+ <stop offset="100%" stop-color="#ff5d7a" stop-opacity=".03"></stop>
+ </linearGradient>
+ </defs>
+ <line x1="${pad}" y1="${zeroY.toFixed(1)}" x2="${width - pad}" y2="${zeroY.toFixed(1)}" class="live-equity-zero"></line>
+ <polygon fill="url(#liveEquityFill)" points="${pad},${zeroY.toFixed(1)} ${path} ${width - pad},${zeroY.toFixed(1)}"></polygon>
+ <polyline fill="none" stroke="url(#liveEquityStroke)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" points="${path}"></polyline>
+ ${markers}
+ </svg>
+ <div class="live-equity-hoverline" hidden></div>
+ <div class="live-equity-tooltip" hidden></div>
+ </div>`;
+}
+
+function v16RenderEquityChart(history = [], journalTrades = []) {
+ const chartEl = document.getElementById('liveEquityChart');
+ if (!chartEl) return;
+ chartEl.innerHTML = v16BuildEquityChart(history, journalTrades);
+ const model = v16GetEquityChartModel(history);
+ if (!model) return;
+ const plot = chartEl.querySelector('.live-equity-plot');
+ const tooltip = chartEl.querySelector('.live-equity-tooltip');
+ const hoverline = chartEl.querySelector('.live-equity-hoverline');
+ if (!plot || !tooltip || !hoverline) return;
+ const nearestTradeByTs = (ts) => (journalTrades || []).reduce((closest, trade) => {
+ if (!trade) return closest;
+ if (!closest) return trade;
+ return Math.abs(Number(trade.closedAt || 0) - ts) < Math.abs(Number(closest.closedAt || 0) - ts) ? trade : closest;
+ }, null);
+ const showPoint = (point) => {
+ const leftPct = Math.max(0, Math.min(100, (point.x / model.width) * 100));
+ hoverline.hidden = false;
+ hoverline.style.left = `${leftPct}%`;
+ const nearestTrade = nearestTradeByTs(point.ts);
+ const drawdown = v16EquityDrawdownAt(model.points, point);
+ const fees = -Math.abs(Number(point.feesPaidToday || 0)) + Number(point.feeCreditsToday || 0);
+ const funding = Number(point.fundingToday || 0);
+ const netCarry = fees + funding;
+ const openMove = Number(point.unrealized || 0);
+ const closedMove = Number(point.realizedToday || 0);
+ const eventCopy = nearestTrade && Math.abs(Number(nearestTrade.closedAt || 0) - point.ts) <= 300000
+ ? `<div class="live-equity-tooltip-note ${nearestTrade.pnl >= 0 ? 'good' : 'bad'}">${v16Esc(nearestTrade.symbol)} ${nearestTrade.pnl >= 0 ? 'win' : 'loss'} ${v16FmtSigned(nearestTrade.pnl)}</div>`
+ : '';
+ tooltip.hidden = false;
+ tooltip.className = `live-equity-tooltip ${point.pnl >= 0 ? 'good' : 'bad'}`;
+ tooltip.innerHTML = `
+ <div class="live-equity-tooltip-head">
+ <span class="live-equity-tooltip-time">${v16Esc(v16FormatTs(point.ts))}</span>
+ <span class="live-equity-tooltip-event">${point.tradeCount} close${point.tradeCount === 1 ? '' : 's'}</span>
+ </div>
+ <div class="live-equity-tooltip-kicker">Session P&L</div>
+ <div class="live-equity-tooltip-value ${v16EquityTooltipTone(point.pnl)}">${v16FmtSigned(point.pnl)}</div>
+ ${v16EquityTooltipRow('Equity', `$${v16FmtNumber(point.equity, 2)}`)}
+ ${v16EquityTooltipRow('Open P&L', v16FmtSigned(openMove), v16EquityTooltipTone(openMove))}
+ ${v16EquityTooltipRow('Closed P&L', v16FmtSigned(closedMove), v16EquityTooltipTone(closedMove))}
+ ${v16EquityTooltipRow('Fees, funding', v16FmtSigned(netCarry), v16EquityTooltipTone(netCarry))}
+ ${v16EquityTooltipRow('Drawdown', v16FmtSigned(drawdown), drawdown < 0 ? 'bad' : '')}
+ ${eventCopy}`;
+ v16PositionEquityTooltip(plot, tooltip, leftPct);
+ };
+ plot.addEventListener('mousemove', (event) => {
+ const rect = plot.getBoundingClientRect();
+ const normalizedX = ((event.clientX - rect.left) / Math.max(1, rect.width)) * model.width;
+ const point = model.points.reduce((closest, item) => (
+ !closest || Math.abs(item.x - normalizedX) < Math.abs(closest.x - normalizedX) ? item : closest
+ ), null);
+ if (point) showPoint(point);
+ });
+ plot.addEventListener('mouseleave', () => {
+ tooltip.hidden = true;
+ hoverline.hidden = true;
+ });
+}
+function v16RenderSessionCards(metrics) {
+ const wrap = document.getElementById('liveSessionGrid');
+ if (!wrap) return;
+ const feeImpact = -Math.abs(Number(metrics.feesPaidToday || 0)) + Number(metrics.feeCreditsToday || 0) + Number(metrics.fundingToday || 0);
+ const feeSummary = `Fees ${v16FmtSigned(-Math.abs(Number(metrics.feesPaidToday || 0)))}${Number(metrics.feeCreditsToday || 0) > 0 ? ` | Rebates ${v16FmtSigned(metrics.feeCreditsToday)}` : ''}${Number(metrics.fundingToday || 0) ? ` | Funding ${v16FmtSigned(metrics.fundingToday)}` : ''}`;
+ const exposure = metrics.exposure || {};
+ const maxLossAbs = Math.abs(Number(exposure.maxLoss || 0));
+ const maxProfit = Math.max(0, Number(exposure.maxProfit || 0));
+ const riskRewardRatio = maxLossAbs > 0 && maxProfit > 0
+ ? `1:${v16FmtNumber(maxProfit / maxLossAbs, 2)}`
+ : (maxLossAbs > 0 ? '1:0.00' : 'Setup');
+ const riskRewardClass = maxLossAbs > 0 && maxProfit > 0
+ ? (maxProfit >= maxLossAbs ? 'good' : 'warn')
+ : (maxLossAbs > 0 ? 'bad' : 'warn');
+ const riskRewardMeta = [
+ `Loss ${exposure.positionsWithStops ? v16FmtSigned(exposure.maxLoss) : '-'}`,
+ `Profit ${exposure.positionsWithTargets ? v16FmtSigned(exposure.maxProfit) : '-'}`,
+ `Stops ${v16FmtNumber(Number(exposure.stopCoveragePct || 0), 0)}%`,
+ `Targets ${v16FmtNumber(Number(exposure.targetCoveragePct || 0), 0)}%`,
+ ].join(' | ');
+ const journalMeta = [
+ `${v16FmtNumber(Number(metrics.winRate || 0), 0)}% win`,
+ `Avg ${metrics.wins.length ? v16FmtSigned(metrics.avgWin) : '-'} / ${metrics.losses.length ? v16FmtSigned(metrics.avgLoss) : '-'}`,
+ `Targets ${v16FmtNumber(Number(metrics.targetHits || 0), 0)}`,
+ `Stops ${v16FmtNumber(Number(metrics.stopHits || 0), 0)}`,
+ ].join(' | ');
+ wrap.innerHTML = `
+ <div class="live-session-card">
+ <span>OPEN P&amp;L</span>
+ <strong class="${metrics.openPnl >= 0 ? 'good' : 'bad'}">${v16FmtSigned(metrics.openPnl)}</strong>
+ <small>Unrealized across ${metrics.positions.length} live position${metrics.positions.length === 1 ? '' : 's'}.</small>
+ </div>
+ <div class="live-session-card">
+ <span>CLOSED P&amp;L</span>
+ <strong class="${metrics.closedPnl >= 0 ? 'good' : 'bad'}">${v16FmtSigned(metrics.closedPnl)}</strong>
+ <small>${metrics.closedCount} closed trade${metrics.closedCount === 1 ? '' : 's'} today | ${feeSummary}</small>
+ </div>
+ <div class="live-session-card">
+ <span>NET P&amp;L</span>
+ <strong class="${metrics.netPnl >= 0 ? 'good' : 'bad'}">${v16FmtSigned(metrics.netPnl)}</strong>
+ <small>Closed ${v16FmtSigned(metrics.closedPnl)} | Fees ${v16FmtSigned(feeImpact)} | Open ${v16FmtSigned(metrics.openPnl)}</small>
+ </div>
+ <div class="live-session-card">
+ <span>OPEN EXPOSURE</span>
+ <strong class="${riskRewardClass}">${riskRewardRatio}</strong>
+ <small>${riskRewardMeta}</small>
+ </div>
+ <button class="live-session-card" data-live-journal-filter="all">
+ <span>REALIZED JOURNAL</span>
+ <strong>${metrics.closedCount} | ${metrics.wins.length}/${metrics.losses.length}</strong>
+ <small>${v16Esc(metrics.realizedJournalSource || 'Loaded journal')} today | ${journalMeta}</small>
+ </button>`;
+ wrap.querySelectorAll('[data-live-journal-filter]').forEach(button => {
+ button.addEventListener('click', () => {
+ v16LiveAccountView.filter = button.dataset.liveJournalFilter || 'all';
+ document.getElementById('liveJournalRows')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+ v16RenderJournal(metrics.trades);
+ });
+ });
+}
+
+function v16ClassifyOpenOrder(order = {}) {
+ const role = String(order.role || '').toLowerCase();
+ const linked = !!String(order.linkedPositionId || '').trim()
+ || !!order.reduceOnly
+ || ['stop_loss', 'take_profit', 'exit'].includes(role);
+ if (!linked && role === 'entry') {
+ return {
+ key: 'fresh',
+ label: 'Fresh Entry Orders',
+ copy: 'New working entries that can open or add exposure.',
+ tone: 'good',
+ badge: 'Fresh',
+ };
+ }
+ if (linked) {
+ return {
+ key: 'linked',
+ label: 'Linked / Protection Orders',
+ copy: 'Targets, stops, exits, and other orders tied to live exposure.',
+ tone: 'warn',
+ badge: 'Linked',
+ };
+ }
+ return {
+ key: 'other',
+ label: 'Other Working Orders',
+ copy: 'Orders that need review because their purpose is not explicit.',
+ tone: 'dim',
+ badge: 'Review',
+ };
+}
+
+function v16RenderOpenOrderGroup(label, copy, tone, orders = [], canTrade = false) {
+ if (!orders.length) return '';
+ return `
+ <section class="live-open-order-group live-open-order-group--${v16Esc(tone || 'dim')}">
+ <div class="live-open-order-group-head">
+ <div>
+ <div class="live-open-order-group-title">${v16Esc(label)}</div>
+ <div class="live-open-order-group-copy">${v16Esc(copy)}</div>
+ </div>
+ <div class="live-open-order-group-count">${orders.length} order${orders.length === 1 ? '' : 's'}</div>
+ </div>
+ ${orders.map(order => {
+ const editMeta = v16BuildOpenOrderEditMeta(order);
+ const triggerLabel = order.role === 'stop_loss' ? 'Stop' : (order.role === 'take_profit' ? 'Target' : 'Trigger');
+ const remainingLabel = v16DisplayUnit({ displayUnit: order.displayUnit }) === 'contracts'
+ ? `${v16FmtNumber(Number(order.displayRemainingSize || order.remainingSize || order.size || 0), 0)}`
+ : `${v16FmtNumber(Number(order.displayRemainingSize || order.remainingSize || order.size || 0), 4).replace(/\.?0+$/, '')} ${v16Esc(order.displayUnit)}`;
+ const bucket = v16ClassifyOpenOrder(order);
+ const attention = bucket.key === 'other'
+ ? 'Needs review'
+ : (order.reduceOnly ? 'Reduce only' : (order.postOnly ? 'Post only' : 'Working'));
+ return `
+ <div class="live-open-order-row">
+ <div class="live-open-order-top">
+ <div>
+ <div class="live-open-order-symbol">${v16Esc(order.symbol)}</div>
+ <div class="live-open-order-meta">${String(order.side || '').toUpperCase()} | ${v16Esc(v16OrderRoleLabel(order.role))} | ${v16Esc(String(order.state || '').toUpperCase())}</div>
+ </div>
+ <div class="live-open-order-badges">
+ <div class="live-position-badge live-order-role ${v16Esc(order.role)}">${v16Esc(v16OrderModeLabel(order))}</div>
+ <div class="live-position-badge live-order-bucket live-order-bucket--${v16Esc(bucket.key)}">${v16Esc(bucket.badge)}</div>
+ <div class="live-position-badge live-order-attention live-order-attention--${v16Esc(bucket.key)}">${v16Esc(attention)}</div>
+ </div>
+ </div>
+ <div class="live-order-row-grid">
+ <div><span>Remaining</span><strong>${remainingLabel}</strong></div>
+ <div><span>Limit</span><strong>${Number(order.limitPrice || 0) > 0 ? `$${v16FmtPrice(order.limitPrice)}` : '-'}</strong></div>
+ <div><span>${triggerLabel}</span><strong>${Number(order.stopPrice || 0) > 0 ? `$${v16FmtPrice(order.stopPrice)}` : '-'}</strong></div>
+ <div><span>Flags</span><strong>${v16JoinUniqueParts([order.postOnly ? 'Post Only' : '', order.reduceOnly ? 'Reduce Only' : '']) || '-'}</strong></div>
+ </div>
+ <div class="live-order-row-actions">
+ <button class="bsm primary" data-live-order-edit="${v16Esc(order.orderId || order.id)}" ${canTrade ? '' : 'disabled'}>${v16Esc(editMeta.editLabel)}</button>
+ <button class="bsm secondary" data-live-order-duplicate="${v16Esc(order.orderId || order.id)}">Duplicate as New</button>
+ <button class="bsm danger" data-live-order-cancel="${v16Esc(order.orderId || order.id)}" ${canTrade ? '' : 'disabled'}>Cancel</button>
+ </div>
+ </div>`;
+ }).join('')}
+ </section>`;
+}
+
+function v16RenderOrdersStatusRail(metrics = {}, filteredOrders = null) {
+ const rail = document.getElementById('liveOrdersStatusRail');
+ if (!rail) return;
+ const orders = Array.isArray(filteredOrders) ? filteredOrders : (Array.isArray(metrics.openOrders) ? metrics.openOrders : []);
+ const families = v16BuildOrderLineageFamilies(metrics);
+ const fresh = orders.filter(order => v16ClassifyOpenOrder(order).key === 'fresh').length;
+ const stops = orders.filter(order => String(order.role || '').toLowerCase() === 'stop_loss').length;
+ const targets = orders.filter(order => String(order.role || '').toLowerCase() === 'take_profit').length;
+ const reduceOnly = orders.filter(order => !!order.reduceOnly).length;
+ const other = orders.filter(order => v16ClassifyOpenOrder(order).key === 'other').length;
+ const missingStop = families.filter(family => family.state === 'live' && !Number(family.lineage?.stop?.length || 0)).length;
+ const missingTarget = families.filter(family => family.state === 'live' && !Number(family.lineage?.target?.length || 0)).length;
+ const cards = [
+ ['Pending entries', fresh, 'Fresh orders that can open exposure', fresh ? 'warn' : 'dim'],
+ ['Pending stops', stops, `${missingStop} live position${missingStop === 1 ? '' : 's'} missing stop`, missingStop ? 'bad' : 'good'],
+ ['Pending targets', targets, `${missingTarget} live position${missingTarget === 1 ? '' : 's'} missing target`, missingTarget ? 'warn' : 'good'],
+ ['Reduce-only', reduceOnly, 'Protection or exit orders', reduceOnly ? 'good' : 'dim'],
+ ['Review', other, 'Orders without explicit purpose', other ? 'bad' : 'dim'],
+ ];
+ rail.innerHTML = cards.map(([label, value, copy, tone]) => `
+ <div class="orders-status-card orders-status-card--${v16Esc(tone)}">
+ <span>${v16Esc(label)}</span>
+ <strong>${v16Esc(String(value))}</strong>
+ <small>${v16Esc(copy)}</small>
+ </div>`).join('');
+}
+
+function v16RenderOpenOrders(metrics) {
+ const wrap = document.getElementById('liveOpenOrdersRows');
+ const meta = document.getElementById('liveOpenOrdersMeta');
+ const selectEl = document.getElementById('liveOpenOrdersSymbolSelect');
+ const cancelSymbolBtn = document.getElementById('btnLiveCancelSymbolOrders');
+ if (!wrap || !meta || !selectEl || !cancelSymbolBtn) return;
+ const canTrade = v16CapabilityAllowsTrade() && hasV16SessionSecret(getV16ActiveAccountProfile().id);
+ const orders = Array.isArray(metrics.openOrders) ? metrics.openOrders : [];
+ const selectedSymbol = String(selectEl.value || '').trim();
+ const filteredOrders = selectedSymbol ? orders.filter(order => order.symbol === selectedSymbol) : orders;
+ const symbols = Array.from(new Set(orders.map(order => order.symbol).filter(Boolean))).sort();
+ selectEl.innerHTML = `<option value="">All symbols</option>${symbols.map(symbol => `<option value="${v16Esc(symbol)}" ${symbol === selectedSymbol ? 'selected' : ''}>${v16Esc(symbol)}</option>`).join('')}`;
+ cancelSymbolBtn.disabled = !canTrade || !selectedSymbol;
+ cancelSymbolBtn.onclick = cancelV16OrdersForSelectedSymbol;
+ selectEl.onchange = () => v16RenderOpenOrders(metrics);
+ const actionCopy = v16LiveAccountView.lastOrderAction
+ ? ` | Last action ${v16Esc(v16LiveAccountView.lastOrderAction.type)} ${v16LiveAccountView.lastOrderAction.symbol ? `on ${v16Esc(v16LiveAccountView.lastOrderAction.symbol)}` : ''}`
+ : '';
+ const freshOrders = filteredOrders.filter(order => v16ClassifyOpenOrder(order).key === 'fresh');
+ const linkedOrders = filteredOrders.filter(order => v16ClassifyOpenOrder(order).key === 'linked');
+ const otherOrders = filteredOrders.filter(order => v16ClassifyOpenOrder(order).key === 'other');
+ v16RenderOrdersStatusRail(metrics, filteredOrders);
+ meta.textContent = `${filteredOrders.length} open order${filteredOrders.length === 1 ? '' : 's'} visible | ${freshOrders.length} fresh | ${linkedOrders.length} linked${actionCopy}`;
+ if (!filteredOrders.length) {
+ wrap.innerHTML = `<div class="empty"><div class="ei">+</div><div class="eh">No open orders</div><div class="es">Delta returned no open or pending orders for this filter.</div></div>`;
+ return;
+ }
+ wrap.innerHTML = [
+ v16RenderOpenOrderGroup('Fresh Entry Orders', 'New working entries that can open or add exposure.', 'good', freshOrders, canTrade),
+ v16RenderOpenOrderGroup('Linked / Protection Orders', 'Targets, stops, exits, and other orders tied to live exposure.', 'warn', linkedOrders, canTrade),
+ v16RenderOpenOrderGroup('Other Working Orders', 'Orders that need review because their purpose is not explicit.', 'dim', otherOrders, canTrade),
+ ].filter(Boolean).join('');
+ wrap.querySelectorAll('[data-live-order-edit]').forEach(button => {
+ button.addEventListener('click', () => {
+ const order = filteredOrders.find(item => String(item.orderId || item.id) === String(button.dataset.liveOrderEdit || ''));
+ if (order) openV16OpenOrderEditor(order);
+ });
+ });
+ wrap.querySelectorAll('[data-live-order-duplicate]').forEach(button => {
+ button.addEventListener('click', () => {
+ const order = filteredOrders.find(item => String(item.orderId || item.id) === String(button.dataset.liveOrderDuplicate || ''));
+ if (order) duplicateV16OpenOrder(order);
+ });
+ });
+ wrap.querySelectorAll('[data-live-order-cancel]').forEach(button => {
+ button.addEventListener('click', () => {
+ const order = filteredOrders.find(item => String(item.orderId || item.id) === String(button.dataset.liveOrderCancel || ''));
+ if (order) cancelV16OpenOrder(order);
+ });
+ });
+}
+
+function v16ResolveLineageOrderPrice(order = {}) {
+ const role = String(order.role || '').toLowerCase();
+ if (role === 'entry') return Number(order.limitPrice || order.price || order.stopPrice || 0);
+ return Number(v16ResolvePlannedExitPrice(order) || 0);
+}
+
+function v16FormatLineageOrderRef(order = {}) {
+ const raw = String(order.orderId || order.id || order.clientOrderId || '').trim();
+ if (!raw) return 'no-ref';
+ return raw.length > 12 ? raw.slice(-12).toUpperCase() : raw.toUpperCase();
+}
+
+function v16RenderLineageOrderPill(order = {}, tone = 'dim') {
+ const price = v16ResolveLineageOrderPrice(order);
+ const state = String(order.state || '').trim().toUpperCase() || 'OPEN';
+ const parts = [
+ state,
+ order.reduceOnly ? 'RO' : '',
+ order.postOnly ? 'PO' : '',
+ `#${v16FormatLineageOrderRef(order)}`,
+ ].filter(Boolean);
+ return `
+ <div class="live-order-lineage-pill live-order-lineage-pill--${v16Esc(tone)}">
+ <strong>${v16Esc(v16OrderRoleLabel(order.role || 'order'))}</strong>
+ <span>${price > 0 ? `$${v16FmtPrice(price)}` : '-'}</span>
+ <small>${v16Esc(parts.join(' | '))}</small>
+ </div>`;
+}
+
+function v16RenderLineageLane(label = '', orders = [], tone = 'dim', emptyCopy = 'No orders linked') {
+ return `
+ <div class="live-order-lineage-lane">
+ <div class="live-order-lineage-lane-label">${v16Esc(label)}</div>
+ <div class="live-order-lineage-lane-body">
+ ${orders.length
+ ? orders.map(order => v16RenderLineageOrderPill(order, tone)).join('')
+ : `<div class="live-order-lineage-empty">${v16Esc(emptyCopy)}</div>`}
+ </div>
+ </div>`;
+}
+
+function v16BuildQueuedLineageModel(symbol = '', openOrders = []) {
+ const symbolOrders = (openOrders || []).filter(order => String(order.symbol || '').trim().toUpperCase() === symbol);
+ const entry = symbolOrders.filter(order => v16ClassifyOpenOrder(order).key === 'fresh');
+ const linked = symbolOrders.filter(order => v16ClassifyOpenOrder(order).key !== 'fresh');
+ const stop = linked.filter(order => String(order.role || '').toLowerCase() === 'stop_loss');
+ const target = linked.filter(order => String(order.role || '').toLowerCase() === 'take_profit');
+ const exit = linked.filter(order => String(order.role || '').toLowerCase() === 'exit');
+ const knownIds = new Set([...stop, ...target, ...exit].map(order => String(order.orderId || order.id || order.clientOrderId || '')));
+ const orphan = linked.filter(order => !knownIds.has(String(order.orderId || order.id || order.clientOrderId || '')));
+ return {
+ all: symbolOrders,
+ entry,
+ stop,
+ target,
+ exit,
+ orphan,
+ dsManaged: linked.filter(v16IsFWDTradeDeskManagedOrder),
+ };
+}
+
+function v16BuildOrderLineageFamilies(metrics = {}) {
+ const positions = (Array.isArray(metrics?.positions) ? metrics.positions : [])
+ .filter(position => {
+ const symbol = v16NormalizeSymbol(position?.symbol || '');
+ return symbol && v16AnalyticsProductType(symbol) === 'futures';
+ });
+ const openOrders = (Array.isArray(metrics?.openOrders) ? metrics.openOrders : [])
+ .filter(order => {
+ const symbol = v16NormalizeSymbol(order?.symbol || '');
+ const productType = String(order?.productType || '').trim().toLowerCase();
+ return symbol && (productType ? productType === 'futures' : v16AnalyticsProductType(symbol) === 'futures');
+ });
+ const liveSymbols = new Set();
+ const families = positions.map(position => {
+ const symbol = String(position.symbol || '').trim().toUpperCase();
+ liveSymbols.add(symbol);
+ const lineage = position.linkedOrders || v16BuildLinkedOrderModel(position, openOrders);
+ const freshOrders = openOrders.filter(order => String(order.symbol || '').trim().toUpperCase() === symbol && v16ClassifyOpenOrder(order).key === 'fresh');
+ return {
+ key: `live:${position.id || symbol}`,
+ symbol,
+ state: 'live',
+ slotLabel: '1 live slot',
+ position,
+ freshOrders,
+ lineage,
+ };
+ });
+ const queuedSymbols = Array.from(new Set(openOrders
+ .filter(order => v16ClassifyOpenOrder(order).key === 'fresh')
+ .map(order => String(order.symbol || '').trim().toUpperCase())
+ .filter(symbol => symbol && !liveSymbols.has(symbol))));
+ queuedSymbols.forEach(symbol => {
+ families.push({
+ key: `queued:${symbol}`,
+ symbol,
+ state: 'queued',
+ slotLabel: '1 queued slot',
+ position: null,
+ freshOrders: openOrders.filter(order => String(order.symbol || '').trim().toUpperCase() === symbol && v16ClassifyOpenOrder(order).key === 'fresh'),
+ lineage: v16BuildQueuedLineageModel(symbol, openOrders),
+ });
+ });
+ return families.sort((a, b) => {
+ if (a.state !== b.state) return a.state === 'live' ? -1 : 1;
+ return String(a.symbol || '').localeCompare(String(b.symbol || ''));
+ });
+}
+
+function v16RenderOrderLineage(metrics = {}) {
+ const wrap = document.getElementById('liveOrderLineageRows');
+ const meta = document.getElementById('liveOrderLineageMeta');
+ if (!wrap || !meta) return;
+ const families = v16BuildOrderLineageFamilies(metrics);
+ const slotSummary = v16ResolveConcurrentExposureSummary(metrics);
+ meta.textContent = `${families.length} symbol ${families.length === 1 ? 'family' : 'families'} | ${slotSummary.used}/${slotSummary.maxConcurrent} slots used | ${slotSummary.available} free | ${slotSummary.reserved || 0} reserved`;
+ if (!families.length) {
+ wrap.innerHTML = `<div class="empty"><div class="ei">+</div><div class="eh">No order lineage yet</div><div class="es">Working entry orders and live positions will appear here as parent-child families.</div></div>`;
+ return;
+ }
+ wrap.innerHTML = families.map(family => {
+ const position = family.position || null;
+ const lineage = family.lineage || { entry: [], stop: [], target: [], exit: [], orphan: [], all: [] };
+ const childCount = Number(lineage.stop?.length || 0) + Number(lineage.target?.length || 0) + Number(lineage.exit?.length || 0) + Number(lineage.orphan?.length || 0);
+ const freshCount = Number(family.freshOrders?.length || 0);
+ const entryPrice = position
+ ? Number(position.entry || 0)
+ : Number(family.freshOrders?.[0]?.limitPrice || family.freshOrders?.[0]?.price || family.freshOrders?.[0]?.stopPrice || 0);
+ const parentLabel = position
+ ? `${String(position.side || '').toUpperCase()} live position`
+ : 'Queued fresh entry';
+ const parentMeta = position
+ ? `${v16FmtNumber(Number(position.displaySize || position.size || 0), 4).replace(/\.?0+$/, '')} ${v16DisplayUnit({ displayUnit: position.displayUnit })}`
+ : `${freshCount} fresh entry order${freshCount === 1 ? '' : 's'}`;
+ const pnlLabel = position
+ ? v16FmtSigned(Number(position.unrealized || 0))
+ : (freshCount ? `${freshCount} working` : '-');
+ const pnlTone = position
+ ? (Number(position.unrealized || 0) >= 0 ? 'good' : 'bad')
+ : 'warn';
+ const stateTone = family.state === 'live' ? 'good' : 'warn';
+ return `
+ <article class="live-order-lineage-family live-order-lineage-family--${v16Esc(family.state)}">
+ <div class="live-order-lineage-head">
+ <div>
+ <div class="live-order-lineage-symbol">${v16Esc(family.symbol)}</div>
+ <div class="live-order-lineage-sub">${v16Esc(parentLabel)} | ${v16Esc(parentMeta)} | ${childCount} linked child order${childCount === 1 ? '' : 's'}</div>
+ </div>
+ <div class="live-order-lineage-badges">
+ <span class="live-position-badge live-order-lineage-state live-order-lineage-state--${v16Esc(stateTone)}">${family.state === 'live' ? 'LIVE' : 'QUEUED'}</span>
+ <span class="live-position-badge live-order-lineage-slot">${v16Esc(family.slotLabel)}</span>
+ </div>
+ </div>
+ <div class="live-order-lineage-grid">
+ <div><span>Parent</span><strong>${v16Esc(parentLabel)}</strong></div>
+ <div><span>Entry</span><strong>${entryPrice > 0 ? `$${v16FmtPrice(entryPrice)}` : '-'}</strong></div>
+ <div><span>Fresh Adds</span><strong>${freshCount}</strong></div>
+ <div><span>Children</span><strong>${childCount}</strong></div>
+ <div><span>Slot Use</span><strong>${v16Esc(family.slotLabel)}</strong></div>
+ <div><span>${position ? 'Open P&amp;L' : 'Queue State'}</span><strong class="${v16Esc(pnlTone)}">${v16Esc(pnlLabel)}</strong></div>
+ </div>
+ <div class="live-order-lineage-lanes">
+ ${v16RenderLineageLane('Fresh Entry', family.freshOrders || lineage.entry || [], 'good', 'No fresh entry order')}
+ ${v16RenderLineageLane('Stop', lineage.stop || [], 'bad', 'No stop linked')}
+ ${v16RenderLineageLane('Target', lineage.target || [], 'good', 'No target linked')}
+ ${v16RenderLineageLane('Other', [...(lineage.exit || []), ...(lineage.orphan || [])], 'dim', 'No other linked orders')}
+ </div>
+ </article>`;
+ }).join('');
+}
+
+function v16ResolveConfiguredAutoTradeProfile(settings = {}) {
+ const configuredProfileId = String(settings?.profileId || '').trim();
+ if (configuredProfileId) return getV16ProfileById(configuredProfileId) || null;
+ return getV16ActiveAccountProfile();
+}
+
+function v16ExplainAutoTradeReason(reason = '', status = '') {
+ const raw = String(reason || '').trim();
+ const lower = raw.toLowerCase();
+ if (!raw) return 'No explicit block reason was recorded.';
+ if (lower.includes('kill switch is armed')) return 'Kill switch is armed, so the engine can scan but cannot place new orders.';
+ if (lower.includes('tradeenabled profile required')) return 'Auto-trade needs a Trade Enabled profile before it can place live orders.';
+ if (lower.includes('readonly or tradeenabled profile required')) return 'Choose a Delta profile before auto-trade can continue.';
+ if (lower.includes('trading key and secret are required')) return 'Trading credentials are missing for the configured profile.';
+ if (lower.includes('windows credential alias is missing')) return 'Windows credential alias is missing for the configured profile.';
+ if (lower.includes('no active delta profile found')) return 'No active Delta profile is available right now.';
+ if (lower.includes('api circuit breaker')) return 'Delta API protection is paused after repeated auth or request failures.';
+ if (lower.startsWith('funding block:')) return raw.replace(/^funding block:\s*/i, 'Funding is adverse: ');
+ if (lower.includes('max concurrent reached')) return 'All auto-trade slots are currently in use, so no fresh entry can be added.';
+ if (lower.includes('max trades per day reached')) return 'The daily trade budget is fully used for today.';
+ if (lower.includes('daily loss limit reached')) return 'The daily loss guard is blocking fresh entries until the next reset.';
+ if (String(status || '').trim().toLowerCase() === 'blocked_protection') return 'A live position is missing valid stop protection, so new entries are paused.';
+ if (String(status || '').trim().toLowerCase() === 'no_candidates') return raw;
+ return raw;
+}
+
+function v16ResolveAuditFocusSymbol(audit = {}) {
+ return v16NormalizeSymbol(
+ audit?.symbol
+ || audit?.bestSignal?.symbol
+ || (Array.isArray(audit?.topSignals) ? audit.topSignals[0]?.symbol : '')
+ || (Array.isArray(audit?.placedSymbols) ? audit.placedSymbols[0] : '')
+ || ''
+ );
+}
+
+function v16BuildAuditManualControlNotes(manualControls = {}, symbol = '', now = Date.now()) {
+ const manual = v16ResolveManualControlRecord(manualControls, symbol, now);
+ if (!manual?.record) return [];
+ return [
+ manual.paused ? `Pause active until ${v16FormatTs(manual.record?.pausedUntil || 0)}` : '',
+ manual.reentryBlocked ? `Re-entry block active until ${v16FormatTs(manual.record?.reentryBlockedUntil || 0)}` : '',
+ manual.ignoreFunding ? `Funding override active until ${v16FormatTs(manual.record?.ignoreFundingUntil || 0)}` : '',
+ manual.reservedSlot ? `Reserved slot held until ${v16FormatTs(manual.record?.reservedSlotUntil || 0)}` : '',
+ manual.blockedToday ? `Blocked for the rest of today until ${v16FormatTs(manual.record?.blockedTodayUntil || v16StartOfNextDay(now))}` : '',
+ ].filter(Boolean);
+}
+
+function v16BuildAuditNextPassSummary({
+ status = '',
+ currentCapacity = 0,
+ remainingDayBudget = 0,
+ dailyLossUsed = 0,
+ dailyLossLimit = 0,
+ slotSummary = {},
+ maxPerScan = 0,
+ dailyLossResetTs = 0,
+} = {}) {
+ const normalizedStatus = String(status || '').trim().toLowerCase();
+ if (normalizedStatus === 'placed') {
+ return 'The last engine pass already placed an entry. The next pass will only add more trades if fresh capacity opens and another qualified setup remains.';
+ }
+ if (currentCapacity > 0) {
+ return `The next pass can still try up to ${currentCapacity} new entr${currentCapacity === 1 ? 'y' : 'ies'} with ${Math.max(0, remainingDayBudget)} day slot${remainingDayBudget === 1 ? '' : 's'} left and ${Math.max(0, Number(slotSummary?.maxConcurrent || 0) - Number(slotSummary?.used || 0))} live slot${Math.max(0, Number(slotSummary?.maxConcurrent || 0) - Number(slotSummary?.used || 0)) === 1 ? '' : 's'} open.`;
+ }
+ if (normalizedStatus === 'blocked_daily_loss' && dailyLossLimit > 0) {
+ return `No fresh entry can be placed until the daily loss guard resets at ${dailyLossResetTs ? v16FormatTs(dailyLossResetTs) : 'the next reset window'}. Current loss is $${v16FmtNumber(dailyLossUsed, 2)} against the $${v16FmtNumber(dailyLossLimit, 2)} limit.`;
+ }
+ if (normalizedStatus === 'blocked_daily_limit') {
+ return `The engine is waiting for the daily trade counter to reset. Max per scan is ${maxPerScan}, but no new entries can be added until the next trading day.`;
+ }
+ if (normalizedStatus === 'blocked_concurrent') {
+ return `No new entry can be added until live, queued, or reserved slot usage drops below ${Number(slotSummary?.maxConcurrent || 0)}.`;
+ }
+ return 'The engine can scan again on the next pass, but the current blockers must clear before a new entry can be placed.';
+}
+
+function v16BuildAuditReasonFacts({
+ statusMeta = {},
+ effectiveReason = '',
+ bestSignal = null,
+ currentCapacity = 0,
+ slotSummary = {},
+ remainingDayBudget = 0,
+ dailyCount = 0,
+ maxPerDay = 0,
+ dailyLossUsed = 0,
+ dailyLossLimit = 0,
+ dailyLossResetTs = 0,
+} = {}) {
+ const facts = [
+ `Exact blocker: ${statusMeta?.label || 'Unknown state'}.`,
+ effectiveReason ? `Plain language: ${effectiveReason}` : '',
+ `Slots: ${Number(slotSummary?.used || 0)}/${Number(slotSummary?.maxConcurrent || 0)} used, with ${Number(slotSummary?.live || 0)} live, ${Number(slotSummary?.queued || 0)} queued, and ${Number(slotSummary?.reserved || 0)} reserved.`,
+ maxPerDay > 0 ? `Day budget: ${dailyCount}/${maxPerDay} used, ${remainingDayBudget} left today.` : '',
+ dailyLossLimit > 0 ? `Daily loss: $${v16FmtNumber(dailyLossUsed, 2)} used out of $${v16FmtNumber(dailyLossLimit, 2)}. Reset ${dailyLossResetTs ? v16FormatTs(dailyLossResetTs) : 'not available'}.` : '',
+ `Next pass capacity: ${currentCapacity} new entr${currentCapacity === 1 ? 'y' : 'ies'} available right now.`,
+ bestSignal ? `Lead signal: ${String(bestSignal.symbol || '-').toUpperCase()} ${String(bestSignal.direction || '').toLowerCase()} with TQ ${v16FmtNumber(Number(bestSignal.tradeQuality || 0), 0)} and score ${v16FmtNumber(Number(bestSignal.score || 0), 0)}.` : '',
+ ];

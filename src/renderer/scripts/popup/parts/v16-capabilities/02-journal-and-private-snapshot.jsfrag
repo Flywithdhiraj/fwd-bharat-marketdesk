@@ -1,0 +1,1316 @@
+// Journal detail, account snapshots and private socket fetch
+
+async function openV16JournalDetail(trade = {}) {
+ const overlay = document.getElementById('liveJournalOverlay');
+ const body = document.getElementById('liveJournalBody');
+ if (!overlay || !body || !trade) return;
+ const uxHintDismissals = await v16LoadUxHintDismissals();
+ const review = v16NormalizeJournalRecord(trade.review || trade.notes || '');
+ const tradeMode = v16ResolveTradeModeLabel(trade);
+ const reverseMeta = v16ResolveReverseTradeMeta(trade);
+ const closeReasonLabel = v16HumanizeCloseReasonLabel(trade.closeReasonLabel || 'closed on exchange');
+ const pnl = Number(trade.pnl || 0);
+ const pnlTone = pnl >= 0 ? 'good' : 'bad';
+ const outcomeLabel = pnl > 0 ? 'Win' : pnl < 0 ? 'Loss' : 'Flat';
+ const diagnosticParts = v16BuildTradeDiagnosticParts(trade);
+ const tradeStory = v16BuildJournalTradeStory(trade, review);
+ const lessonPlaceholder = v16BuildJournalLessonsPlaceholder(trade, review);
+ const holdMinutes = Number(trade.holdMinutes || 0);
+ const shiftCount = Array.isArray(trade.targetShiftEvents) ? trade.targetShiftEvents.length : 0;
+ const tradeTypeLabel = String(review.type || 'unknown').replace(/-/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+ v16LiveAccountView.activeJournalId = String(trade.id || '');
+ body.innerHTML = `
+ <div class="live-journal-summary-band">
+ <div class="live-journal-summary-card live-journal-summary-card--symbol">
+ <span>Trade</span>
+ <strong>${v16Esc(trade.symbol || '-')}</strong>
+ <small>${v16Esc(String(trade.side || '').toUpperCase())} | ${v16Esc(tradeMode)}${reverseMeta.enabled ? ` | ${v16Esc(reverseMeta.detail)}` : ''}</small>
+ </div>
+ <div class="live-journal-summary-card live-journal-summary-card--${v16Esc(pnlTone)}">
+ <span>Outcome</span>
+ <strong>${v16Esc(outcomeLabel)} ${v16Esc(v16FmtSigned(pnl))}</strong>
+ <small>${v16Esc(closeReasonLabel)}</small>
+ </div>
+ <div class="live-journal-summary-card">
+ <span>Entry / Exit</span>
+ <strong>${v16Esc(v16FormatOptionalPrice(trade.entryPrice || 0))} -> ${v16Esc(v16FormatOptionalPrice(trade.exitPrice || 0))}</strong>
+ <small>${v16Esc(v16FormatTs(trade.openedAt))} -> ${v16Esc(v16FormatTs(trade.closedAt))}</small>
+ </div>
+ <div class="live-journal-summary-card">
+ <span>Trade Story</span>
+ <strong>${v16Esc(diagnosticParts.headline)}</strong>
+ <small>${v16Esc(tradeStory)}</small>
+ </div>
+ </div>
+ ${reverseMeta.enabled ? `<div class="live-journal-tags"><span class="live-journal-tag reverse" title="${v16Esc(reverseMeta.detail)}">Reversed Trade</span></div>` : ''}
+ <div class="live-journal-detail-layout">
+ <div class="live-journal-detail-main">
+ <div class="live-order-preview-card">
+ <div class="v16-section-title"><div class="mo-section">Trade Summary</div>${v16BuildInlineHelpHtml('Trade summary', 'This section compresses the trade into the shortest readable story: trade type, hold time, planned risk path, and lesson status.')}</div>
+ <div class="live-order-preview-copy">This is the short version of the trade: what happened, how long it ran, and how the system managed it.</div>
+ <div class="live-journal-detail-grid">
+ <div><span>Trade Type</span><strong>${v16Esc(tradeTypeLabel)}</strong><small>${v16Esc(tradeMode)} ${v16Esc(String(trade.side || '').toUpperCase())}${reverseMeta.enabled ? ` | ${v16Esc(reverseMeta.detail)}` : ''}</small></div>
+ <div><span>Held</span><strong>${holdMinutes > 0 ? `${v16Esc(String(holdMinutes))}m` : '-'}</strong><small>${trade.rMultiple != null && Number.isFinite(Number(trade.rMultiple)) ? v16Esc(`${Number(trade.rMultiple).toFixed(2)}R realized`) : 'R multiple unavailable'}</small></div>
+ <div><span>Risk Path</span><strong>${v16Esc(v16FormatOptionalPrice(trade.stopLoss || 0))} -> ${v16Esc(v16FormatOptionalPrice(trade.tp1 || trade.takeProfit || trade.tp || 0))}</strong><small>${shiftCount ? v16Esc(`${shiftCount} target shift${shiftCount === 1 ? '' : 's'} recorded`) : 'No target shifts were recorded.'}</small></div>
+ <div><span>Lesson Status</span><strong>${v16Esc(v16BuildJournalLessonStatus(review))}</strong><small>${review.notes ? 'This trade already has saved notes.' : 'Add what the system did and what you learned.'}</small></div>
+ </div>
+ <div class="live-journal-trade-story">${v16Esc(tradeStory)}</div>
+ </div>
+ <div class="live-order-preview-card">
+ <div class="v16-section-title"><div class="mo-section">System Actions</div>${v16BuildInlineHelpHtml('System actions', 'Use this to separate what FWD TradeDesk Pro actually did from what you may want to change as the trader.')}</div>
+ <div class="live-order-preview-copy">This is the clean engine story: what FWD TradeDesk Pro placed, adjusted, or closed, in plain language and IST time.</div>
+ <div class="live-journal-system-actions">${v16BuildAutoTradeSystemActionsHtml(trade)}</div>
+ <div class="live-notification-list">${v16BuildAutoTradeTimelineHtml(trade)}</div>
+ <div class="live-journal-shift-audit">
+ <div class="live-order-preview-copy">Target-shift audit keeps the old target, new target, old stop, new stop, and shift time together for fast review.</div>
+ <div class="live-notification-list">${v16BuildTargetShiftJournalHtml(trade)}</div>
+ </div>
+ </div>
+ <div class="live-journal-detail-form">
+ <div class="v16-section-title"><div class="mo-section">Lessons</div>${v16BuildInlineHelpHtml('Journal checklist', 'Use the checklist to mark whether you followed plan, respected risk, and executed cleanly before writing your lesson note.')}</div>
+ <div class="live-order-preview-copy">Separate what the system did from what you learned, then capture what went well and what to improve next time.</div>
+ ${v16BuildFirstUseHintHtml({
+ key: 'journal_checklist',
+ title: 'Journal notes now split system behavior from trader learning',
+ body: 'Fill What Went Well, What To Improve Next Time, and the checklist first. Then use the main note box to compare what FWD TradeDesk Pro did with what you learned from the trade.',
+ dismissals: uxHintDismissals,
+ tone: 'info',
+ })}
+ <div class="live-order-preview-grid live-journal-detail-form-grid">
+ <label class="account-field"><span>Trade Type</span>
+ <select class="si" id="liveJournalType">
+ <option value="unknown" ${review.type === 'unknown' ? 'selected' : ''}>Unknown</option>
+ <option value="trend-following" ${review.type === 'trend-following' ? 'selected' : ''}>Trend Following</option>
+ <option value="mean-reversion" ${review.type === 'mean-reversion' ? 'selected' : ''}>Mean Reversion</option>
+ <option value="breakout" ${review.type === 'breakout' ? 'selected' : ''}>Breakout</option>
+ <option value="scalp" ${review.type === 'scalp' ? 'selected' : ''}>Scalp</option>
+ </select>
+ </label>
+ <label class="account-field"><span>What Went Well</span><input class="si" id="liveJournalSetupTag" maxlength="32" placeholder="Clean entry, patient hold, rule-following" value="${v16Esc(review.setupTag)}"></label>
+ <label class="account-field"><span>What To Improve Next Time</span><input class="si" id="liveJournalMistakeTag" maxlength="32" placeholder="Late chase, early exit, sizing" value="${v16Esc(review.mistakeTag)}"></label>
+ <label class="account-field"><span>Confidence</span><select class="si" id="liveJournalConfidence">${[1,2,3,4,5].map(value => `<option value="${value}" ${value === Number(review.confidence || 3) ? 'selected' : ''}>${value}/5</option>`).join('')}</select></label>
+ <label class="account-field account-field-wide"><span>Entry Reason</span><input class="si" id="liveJournalEntryReason" maxlength="180" placeholder="Why this entry was valid" value="${v16Esc(review.entryReason)}"></label>
+ <label class="account-field account-field-wide"><span>Exit Reason</span><input class="si" id="liveJournalExitReason" maxlength="180" placeholder="Why this trade closed here" value="${v16Esc(review.exitReason)}"></label>
+ <label class="account-field account-field-wide"><span>Chart Snapshot Note</span><input class="si" id="liveJournalChartSnapshot" maxlength="180" placeholder="Entry, stop, target, or replay observation" value="${v16Esc(review.chartSnapshot)}"></label>
+ </div>
+ <div class="live-journal-tags">${V16_MANAGE_REVIEW_CHECKS.map(check => `<label class="scheck"><input type="checkbox" data-live-journal-check="${v16Esc(check.key)}" ${review.checklist?.[check.key] ? 'checked' : ''}/> ${v16Esc(check.label)}</label>`).join('')}</div>
+ <div class="journal-lesson-actions">
+ <button class="bsm" type="button" data-live-journal-fill="system">Use System Story</button>
+ <button class="bsm" type="button" data-live-journal-fill="lesson">Use Lesson Template</button>
+ <button class="bsm" type="button" data-live-journal-fill="clear">Clear Note</button>
+ </div>
+ <label class="account-field"><span>What System Did vs What Trader Learned</span><textarea class="si" id="liveJournalNotes" rows="10" maxlength="500" placeholder="${v16Esc(lessonPlaceholder)}">${v16Esc(review.notes)}</textarea></label>
+ <div class="live-journal-save-state" data-live-journal-save-state>Notes unchanged</div>
+ </div>
+ </div>
+ <div class="live-journal-detail-side">
+ <div class="live-order-preview-card live-journal-chart-review-card">
+ <div class="v16-section-title"><div class="mo-section">Replay</div>${v16BuildInlineHelpHtml('Replay controls', 'Use Back and Forward to step through the trade, Reset to restart the story, and Open Full Chart when you need more space.')}</div>
+ <div class="live-order-preview-copy">This replay keeps the trade story front and center: entry, stop, targets, target shifts, and final exit. The journal view hides extra workspace controls so review stays fast.</div>
+ ${v16BuildFirstUseHintHtml({
+ key: 'journal_replay',
+ title: 'Replay is now chart-story first',
+ body: 'The journal replay keeps entry, stop, target ladder, shifts, and exit visible by default. Extra workspace controls stay hidden until you open the full chart.',
+ dismissals: uxHintDismissals,
+ tone: 'info',
+ })}
+ ${v16BuildJournalReplayLegendHtml(trade)}
+ <div id="liveJournalChartPreview"></div>
+ </div>
+ </div>
+ </div>`;
+ v16BindUxHintDismissButtons(body);
+ overlay.style.display = 'flex';
+ const saveButton = document.getElementById('liveJournalSave');
+ const saveState = body.querySelector('[data-live-journal-save-state]');
+ if (saveButton) {
+ saveButton.disabled = true;
+ saveButton.classList.add('is-disabled');
+ }
+ body.querySelectorAll('input, textarea, select').forEach(control => {
+ control.addEventListener('input', () => {
+ if (saveButton) {
+ saveButton.disabled = false;
+ saveButton.classList.remove('is-disabled');
+ }
+ if (saveState) saveState.textContent = 'Unsaved journal changes';
+ }, { once: false });
+ control.addEventListener('change', () => {
+ if (saveButton) {
+ saveButton.disabled = false;
+ saveButton.classList.remove('is-disabled');
+ }
+ if (saveState) saveState.textContent = 'Unsaved journal changes';
+ }, { once: false });
+ });
+ await globalThis.ensureChartWorkspaceLoaded?.();
+ if (globalThis.FWDTradeDeskChartWorkspace?.mountPreviewChart) {
+ await globalThis.FWDTradeDeskChartWorkspace.mountPreviewChart({
+ root: document.getElementById('liveJournalChartPreview'),
+ symbol: String(trade.symbol || '').trim().toUpperCase(),
+ replaySeed: globalThis.FWDTradeDeskChartWorkspace.buildReplaySeedFromTrade?.(trade) || null,
+ orderContext: v16BuildJournalReplayOrderContext(trade),
+ timeframe: globalThis.FWDTradeDeskChartWorkspace.deriveReplayTimeframe?.(trade) || '5m',
+ preset: 'clean',
+ showOrders: true,
+ showVwap: false,
+ uiMode: 'journal',
+ visibleCandleCount: 110,
+ forceRefresh: true,
+ });
+ }
+}
+
+function v16ApplyJournalLessonTemplate(kind = '') {
+ const notesEl = document.getElementById('liveJournalNotes');
+ if (!notesEl) return;
+ const tradeId = String(v16LiveAccountView.activeJournalId || '').trim();
+ const trade = (v16LiveAccountView.lastPositionMetrics?.trades || []).find(item => String(item.id || '') === tradeId) || {};
+ const review = v16NormalizeJournalRecord({
+ entryReason: document.getElementById('liveJournalEntryReason')?.value || '',
+ exitReason: document.getElementById('liveJournalExitReason')?.value || '',
+ chartSnapshot: document.getElementById('liveJournalChartSnapshot')?.value || '',
+ setupTag: document.getElementById('liveJournalSetupTag')?.value || '',
+ mistakeTag: document.getElementById('liveJournalMistakeTag')?.value || '',
+ type: document.getElementById('liveJournalType')?.value || 'unknown',
+ confidence: Number(document.getElementById('liveJournalConfidence')?.value || 3),
+ });
+ if (kind === 'clear') {
+ notesEl.value = '';
+ v16MarkJournalNotesDirty();
+ return;
+ }
+ const entry = v16ResolveJournalEntryReason(trade, review);
+ const exit = v16ResolveJournalExitReason(trade, review);
+ const story = v16BuildJournalTradeStory(trade, review);
+ const snapshot = review.chartSnapshot || 'Chart replay not reviewed yet.';
+ const improve = review.mistakeTag || 'Next improvement not tagged yet.';
+ const well = review.setupTag || 'What went well not tagged yet.';
+ notesEl.value = kind === 'system'
+ ? `System: ${story}\nEntry: ${entry}\nExit: ${exit}\nReplay: ${snapshot}`.slice(0, 500)
+ : `What went well: ${well}\nWhat to improve: ${improve}\nReplay observation: ${snapshot}\nNext rule: I will only repeat this setup when the entry reason and risk path are clear.`.slice(0, 500);
+ v16MarkJournalNotesDirty();
+ notesEl.focus();
+}
+
+function v16MarkJournalNotesDirty() {
+ const saveButton = document.getElementById('liveJournalSave');
+ const saveState = document.querySelector('[data-live-journal-save-state]');
+ if (saveButton) {
+ saveButton.disabled = false;
+ saveButton.classList.remove('is-disabled');
+ }
+ if (saveState) saveState.textContent = 'Unsaved journal changes';
+}
+
+async function saveV16JournalNotes() {
+ const tradeId = String(v16LiveAccountView.activeJournalId || '').trim();
+ if (!tradeId) return;
+ const notesStore = await storeGet(V16_LIVE_JOURNAL_NOTES_KEY);
+ const notesMap = notesStore?.[V16_LIVE_JOURNAL_NOTES_KEY] || {};
+ notesMap[tradeId] = v16NormalizeJournalRecord({
+ notes: document.getElementById('liveJournalNotes')?.value || '',
+ entryReason: document.getElementById('liveJournalEntryReason')?.value || '',
+ exitReason: document.getElementById('liveJournalExitReason')?.value || '',
+ chartSnapshot: document.getElementById('liveJournalChartSnapshot')?.value || '',
+ setupTag: document.getElementById('liveJournalSetupTag')?.value || '',
+ mistakeTag: document.getElementById('liveJournalMistakeTag')?.value || '',
+ type: document.getElementById('liveJournalType')?.value || 'unknown',
+ confidence: Number(document.getElementById('liveJournalConfidence')?.value || 3),
+ checklist: Object.fromEntries(V16_MANAGE_REVIEW_CHECKS.map(check => [
+ check.key,
+ !!document.querySelector(`[data-live-journal-check="${check.key}"]`)?.checked,
+ ])),
+ updatedAt: Date.now(),
+ });
+ await storeSet({ [V16_LIVE_JOURNAL_NOTES_KEY]: notesMap });
+ closeV16JournalOverlay();
+ await renderV16PositionsPane(null, false);
+}
+
+function v16NormalizeManageTrade(trade = {}, source = 'live') {
+ const review = v16NormalizeJournalRecord(trade.review || trade.notes || '');
+ const setupFamilyMeta = v16ResolveTradeSetupFamilyMeta(trade, review);
+ const openedAt = Number(trade.openedAt || trade.ts || 0);
+ const closedAt = Number(trade.closedAt || trade.ts || openedAt || 0);
+ const pnl = Number(trade.pnl || 0);
+ const entryPrice = Number(trade.entryPrice || trade.entry || 0);
+ const exitPrice = Number(trade.exitPrice || trade.closePrice || trade.lastPrice || 0);
+ const stopLoss = Number(trade.stopLoss || trade.sl || 0);
+ const tradeQuality = Number(trade.tradeQualityScore || trade.tradeQuality || trade.tradeQuality?.score || 0);
+ const score = Number(trade.score || 0);
+ const side = String(trade.side || 'long').toLowerCase() === 'short' ? 'short' : 'long';
+ // R-multiple: how many R units was gained/lost vs the planned stop distance
+ let rMultiple = null;
+ if (entryPrice > 0 && stopLoss > 0 && exitPrice > 0) {
+ const rUnit = Math.abs(entryPrice - stopLoss);
+ if (rUnit > 0) {
+ const gained = side === 'long' ? (exitPrice - entryPrice) : (entryPrice - exitPrice);
+ rMultiple = +(gained / rUnit).toFixed(2);
+ }
+ }
+ return {
+ id: String(trade.id || `${source}_${trade.symbol || 'trade'}_${closedAt || Date.now()}`),
+ source,
+ symbol: v16NormalizeSymbol(trade.symbol || ''),
+ side,
+ size: Number(trade.size || trade.qty || 0),
+ entryPrice,
+ exitPrice,
+ stopLoss,
+ pnl,
+ rMultiple,
+ commission: Number(trade.commission || trade.entryFee || 0) + Number(trade.exitFee || 0),
+ openedAt,
+ closedAt,
+ holdMinutes: openedAt && closedAt ? Math.max(0, Math.round((closedAt - openedAt) / 60000)) : 0,
+ outcome: pnl > 0 ? 'win' : pnl < 0 ? 'loss' : 'flat',
+ status: String(trade.status || (closedAt ? 'closed' : 'open')).toLowerCase(),
+ setupFamilyKey: setupFamilyMeta.key,
+ setupFamily: setupFamilyMeta.label,
+ setupFamilyLabel: setupFamilyMeta.label,
+ tradeQuality,
+ score,
+ shortlistAction: String(trade.shortlistAction || '').trim(),
+ review,
+ };
+}
+
+async function v16GetManageHistoryBundle() {
+ const docs = await manageStoreGetMany(Object.values(V16_MANAGE_STORE_KEYS));
+ return {
+ liveLedger: docs[V16_MANAGE_STORE_KEYS.liveLedger] || { trades: [], fills: [], orderHistory: [], openOrders: [], rawFills: [], rawOrderHistory: [], historyDiagnostics: {}, lastOrderAction: null, updatedAt: 0 },
+ liveEquity: docs[V16_MANAGE_STORE_KEYS.liveEquity] || { points: [], updatedAt: 0 },
+ };
+}
+
+function v16RangeStart(range = '30d') {
+ const now = Date.now();
+ if (range === 'today') return v16StartOfToday();
+ if (range === '7d') return now - (7 * 24 * 60 * 60 * 1000);
+ if (range === '365d') return now - (365 * 24 * 60 * 60 * 1000);
+ return now - (30 * 24 * 60 * 60 * 1000);
+}
+
+function v16BuildManageAnalyticsModel(bundle = {}, filters = {}, notesMap = {}) {
+ const source = ['all', 'live'].includes(String(filters.source || '')) ? String(filters.source || 'live') : 'live';
+ const range = filters.range || '30d';
+ const cutoff = v16RangeStart(range);
+ const liveTrades = Array.isArray(bundle?.liveLedger?.trades) ? bundle.liveLedger.trades : [];
+ const selectedSources = [];
+ if (source === 'all' || source === 'live') {
+ selectedSources.push(...liveTrades.map(trade => {
+ const journalReview = notesMap[trade.id] || null;
+ const enriched = journalReview ? { ...trade, review: journalReview } : trade;
+ return v16NormalizeManageTrade(enriched, 'live');
+ }));
+ }
+ const closedTrades = selectedSources
+ .filter(trade => trade.status === 'closed' && Number(trade.closedAt || 0) >= cutoff)
+ .sort((a, b) => Number(a.closedAt || 0) - Number(b.closedAt || 0));
+ let equity = 0;
+ let peak = 0;
+ let maxDrawdown = 0;
+ const equityPoints = closedTrades.map(trade => {
+ equity += Number(trade.pnl || 0);
+ peak = Math.max(peak, equity);
+ maxDrawdown = Math.min(maxDrawdown, equity - peak);
+ return { ts: Number(trade.closedAt || 0), equity: +equity.toFixed(4), tradeId: trade.id, source: trade.source };
+ });
+ const wins = closedTrades.filter(trade => trade.pnl > 0);
+ const realized = closedTrades.reduce((sum, trade) => sum + Number(trade.pnl || 0), 0);
+ const expectancy = closedTrades.length ? realized / closedTrades.length : 0;
+ let streak = 0;
+ let streakTone = 'flat';
+ for (let i = closedTrades.length - 1; i >= 0; i -= 1) {
+ const tone = closedTrades[i].pnl > 0 ? 'win' : 'loss';
+ if (!streak) {
+ streak = 1;
+ streakTone = tone;
+ continue;
+ }
+ if (tone === streakTone) {
+ streak += 1;
+ continue;
+ }
+ break;
+ }
+ const symbols = new Map();
+ closedTrades.forEach(trade => {
+ const entry = symbols.get(trade.symbol) || { symbol: trade.symbol, trades: 0, pnl: 0, wins: 0 };
+ entry.trades += 1;
+ entry.pnl += Number(trade.pnl || 0);
+ if (trade.pnl > 0) entry.wins += 1;
+ symbols.set(trade.symbol, entry);
+ });
+
+ // Setup family breakdown
+ const setupMap = new Map();
+ closedTrades.forEach(trade => {
+ const familyKey = String(trade.setupFamilyKey || trade.setupFamily || 'untagged').trim().toLowerCase() || 'untagged';
+ const familyLabel = String(trade.setupFamilyLabel || trade.setupFamily || 'Untagged').trim() || 'Untagged';
+ const e = setupMap.get(familyKey) || {
+ familyKey,
+ family: familyLabel,
+ trades: 0,
+ pnl: 0,
+ wins: 0,
+ symbolSet: new Set(),
+ tradeQualitySum: 0,
+ tradeQualityCount: 0,
+ scoreSum: 0,
+ scoreCount: 0,
+ lastClosedAt: 0,
+ };
+ e.trades += 1;
+ e.pnl += Number(trade.pnl || 0);
+ if (trade.pnl > 0) e.wins += 1;
+ if (trade.symbol) e.symbolSet.add(trade.symbol);
+ if (Number.isFinite(Number(trade.tradeQuality || 0)) && Number(trade.tradeQuality || 0) > 0) {
+ e.tradeQualitySum += Number(trade.tradeQuality || 0);
+ e.tradeQualityCount += 1;
+ }
+ if (Number.isFinite(Number(trade.score || 0)) && Number(trade.score || 0) > 0) {
+ e.scoreSum += Number(trade.score || 0);
+ e.scoreCount += 1;
+ }
+ e.lastClosedAt = Math.max(Number(e.lastClosedAt || 0), Number(trade.closedAt || 0));
+ setupMap.set(familyKey, e);
+ });
+ const setupBreakdown = Array.from(setupMap.values())
+ .sort((a, b) => b.trades - a.trades)
+ .map(e => ({
+ familyKey: e.familyKey,
+ family: e.family,
+ trades: e.trades,
+ pnl: e.pnl,
+ wins: e.wins,
+ winRate: e.trades ? +((e.wins / e.trades) * 100).toFixed(1) : 0,
+ expectancy: e.trades ? +(e.pnl / e.trades).toFixed(2) : 0,
+ symbolCount: e.symbolSet.size,
+ avgTradeQuality: e.tradeQualityCount ? +(e.tradeQualitySum / e.tradeQualityCount).toFixed(1) : null,
+ avgScore: e.scoreCount ? +(e.scoreSum / e.scoreCount).toFixed(1) : null,
+ lastClosedAt: e.lastClosedAt,
+ }));
+
+ // R-multiple distribution - bucket trades that have a calculated rMultiple
+ const rBuckets = { 'loss >2R': 0, 'loss 1-2R': 0, 'loss <1R': 0, 'scratch': 0, 'win <1R': 0, 'win 1-2R': 0, 'win 2-3R': 0, 'win >3R': 0 };
+ const rTrades = closedTrades.filter(t => t.rMultiple !== null);
+ rTrades.forEach(t => {
+ const r = t.rMultiple;
+ if (r <= -2) rBuckets['loss >2R'] += 1;
+ else if (r <= -1) rBuckets['loss 1-2R'] += 1;
+ else if (r < 0) rBuckets['loss <1R'] += 1;
+ else if (r === 0) rBuckets['scratch'] += 1;
+ else if (r < 1) rBuckets['win <1R'] += 1;
+ else if (r < 2) rBuckets['win 1-2R'] += 1;
+ else if (r < 3) rBuckets['win 2-3R'] += 1;
+ else rBuckets['win >3R'] += 1;
+ });
+ const avgR = rTrades.length ? +(rTrades.reduce((s, t) => s + t.rMultiple, 0) / rTrades.length).toFixed(2) : null;
+
+ return {
+ filters: { source, range },
+ closedTrades,
+ equityPoints,
+ realized,
+ winRate: closedTrades.length ? (wins.length / closedTrades.length) * 100 : 0,
+ expectancy,
+ maxDrawdown: Math.abs(maxDrawdown),
+ streak,
+ streakTone,
+ pendingReviews: closedTrades.filter(trade => !v16BuildJournalSummary(trade.review || '').trim()).length,
+ symbolBreakdown: Array.from(symbols.values())
+ .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl))
+ .slice(0, 6),
+ setupBreakdown,
+ rDistribution: { buckets: rBuckets, avgR, count: rTrades.length },
+ };
+}
+
+function v16BuildAutoTradeTrailingSummary() { return null; }
+
+function v16FormatOptionalPrice(value = 0, withDollar = true) {
+ const price = Number(value || 0);
+ // Guard: negative prices are invalid for stop/target display - show dash instead
+ if (!Number.isFinite(price) || price <= 0) return '-';
+ const formatted = v16FmtPrice(price);
+ // Double-check the formatted string doesn't start with a minus sign (floating-point edge case)
+ if (formatted.startsWith('-')) return '-';
+ return withDollar ? `$${formatted}` : formatted;
+}
+
+function v16ResolveTradeModeLabel(trade = {}) {
+ const explicit = String(trade.sourceLabel || trade.source || '').trim().toLowerCase();
+ if (explicit.includes('auto')) return 'Auto';
+ if (explicit.includes('manual')) return 'Manual';
+ const idText = `${trade.closeClientOrderId || ''} ${trade.clientOrderId || ''} ${trade.id || ''}`.toUpperCase();
+ return (idText.includes('AT_') || idText.includes('AT2')) ? 'Auto' : 'Manual';
+}
+
+function v16ResolveReverseTradeMeta(item = {}) {
+ const enabled = item?.autoTradeReverseApplied === true;
+ const readSide = (value = '') => {
+ const raw = String(value || '').trim().toLowerCase();
+ if (!raw) return '';
+ if (raw === 'sell' || raw.includes('short')) return 'short';
+ if (raw === 'buy' || raw.includes('long')) return 'long';
+ return '';
+ };
+ const originalSide = enabled ? readSide(item?.autoTradeOriginalDirection || '') : '';
+ const executionSide = enabled ? readSide(item?.autoTradeExecutionDirection || item?.direction || item?.positionSide || item?.side || '') : '';
+ const detail = enabled && originalSide && executionSide && originalSide !== executionSide
+ ? `${String(originalSide || '').toUpperCase()} -> ${String(executionSide || '').toUpperCase()}`
+ : 'Execution flipped from scanner signal';
+ return {
+ enabled,
+ originalSide,
+ executionSide,
+ detail,
+ };
+}
+
+function v16HumanizeCloseReasonLabel(value = '') {
+ const text = String(value || '').trim();
+ if (!text) return 'Closed on exchange';
+ const lower = text.toLowerCase();
+ if (lower === 'closed on exchange') return 'Closed on exchange';
+ if (lower === 'closed') return 'Closed on exchange';
+ if (lower === 'target hit') return 'Target hit';
+ if (lower === 'stop hit') return 'Stop hit';
+ if (lower === 'breakeven stop') return 'Breakeven stop';
+ if (lower === 'manual close') return 'Manual close';
+ if (lower === 'funding exit') return 'Funding exit';
+ if (lower === 'signal flip exit') return 'Signal flip exit';
+ if (lower === 'time capitulation') return 'Time capitulation';
+ if (lower === 'expired pending order') return 'Expired pending order';
+ return lower.replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function v16ResolveEntryDirectionLabel(entry = {}) {
+ const explicit = String(entry?.positionSide || '').trim().toLowerCase();
+ if (explicit === 'long' || explicit === 'short') return explicit;
+ return String(entry?.side || '').trim().toLowerCase() === 'sell' ? 'short' : 'long';
+}
+
+function v16DescribeCloseReasonAction(value = '') {
+ const closeReason = v16HumanizeCloseReasonLabel(value || '');
+ if (!closeReason) return 'Trade closed.';
+ if (closeReason.startsWith('Closed ')) {
+ return `${closeReason}.`;
+ }
+ return `Closed by ${closeReason.toLowerCase()}.`;
+}
+
+function v16HumanizeDecisionActionLabel(value = '') {
+ const action = String(value || '').trim().toUpperCase() || 'PASS';
+ switch (action) {
+ case 'TRADE NOW': return 'Trade now';
+ case 'WATCH CLOSE': return 'Watch for close';
+ case 'PASS': return 'Passed filters';
+ default: return action.toLowerCase().replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+ }
+}
+
+function v16DescribeDecisionAction(value = '') {
+ const action = String(value || '').trim().toUpperCase() || 'PASS';
+ switch (action) {
+ case 'TRADE NOW': return 'Trade can be placed on the next engine pass.';
+ case 'WATCH CLOSE': return 'Passed filters, but the setup still needs confirmation.';
+ case 'PASS': return 'Passed filters, but not eligible now.';
+ default: return `Current decision: ${v16HumanizeDecisionActionLabel(action).toLowerCase()}.`;
+ }
+}
+
+function v16BuildDecisionStatusCopy(state = {}) {
+ if (state.eligible) return 'The engine can place this trade on the next pass if market data stays valid.';
+ if (String(state?.decision?.action || '').toUpperCase() === 'TRADE NOW') return 'The setup qualifies, but a live guard is blocking entry right now.';
+ return 'The setup is being tracked, but it still needs more confirmation before entry.';
+}
+
+function v16BuildDecisionFollowThroughItems(signal = {}, state = {}) {
+ const items = [];
+ const side = normalizePositionSide(signal?.direction || signal?.side || '', 'long');
+ const sideLabel = side === 'short' ? 'short' : 'long';
+ const entry = Number(signal?.entry || signal?.price || 0);
+ const stop = Number(signal?.sl || signal?.stopLoss || 0);
+ const tp1 = Number(signal?.tp1 || signal?.tp || signal?.takeProfit || 0);
+ const tp2 = Number(signal?.tp2 || signal?.takeProfit2 || 0);
+ const tp3 = Number(signal?.tp3 || 0);
+ const tp4 = Number(signal?.tp4 || 0);
+
+ if (entry > 0 && stop > 0 && tp1 > 0) {
+ items.push(`If placed, the system will queue a ${sideLabel} entry near ${v16FormatOptionalPrice(entry)} with stop at ${v16FormatOptionalPrice(stop)} and first target at ${v16FormatOptionalPrice(tp1)}.`);
+ } else {
+ items.push('If placed, the system will use the current signal entry, stop, and target values on the next engine pass.');
+ }
+
+ const ladder = [
+ tp1 > 0 ? `T1 ${v16FormatOptionalPrice(tp1)}` : '',
+ tp2 > 0 ? `T2 ${v16FormatOptionalPrice(tp2)}` : '',
+ tp3 > 0 ? `T3 ${v16FormatOptionalPrice(tp3)}` : '',
+ tp4 > 0 ? `T4 ${v16FormatOptionalPrice(tp4)}` : '',
+ ].filter(Boolean);
+ if (ladder.length > 1) {
+ items.push(`Target ladder in play: ${ladder.join(' -> ')}.`);
+ items.push('If auto-shift is active, the live target and stop can step forward as each target stage is reached.');
+ }
+
+ if (state?.fundingForecast?.notional > 0) {
+ const nextSettlement = state.fundingForecast.nextFundingAt
+ ? ` Next settlement ${v16FormatTs(state.fundingForecast.nextFundingAt)}.`
+ : '';
+ const intervalHours = v16FmtNumber(Number(state.fundingForecast.intervalHours || 8), Number(state.fundingForecast.intervalHours || 8) % 1 ? 1 : 0);
+ items.push(`Funding estimate on this size is ${v16FmtSigned(state.fundingForecast.costSettlement)} per ${intervalHours}h settlement, ${v16FmtSigned(state.fundingForecast.cost24h)} over 24h, and ${v16FmtSigned(state.fundingForecast.cost48h)} over 48h.${nextSettlement}`);
+ }
+
+ if (state?.slotSummary?.maxConcurrent > 0) {
+ items.push(`This symbol would count toward ${state.slotSummary.used}/${state.slotSummary.maxConcurrent} live slot usage under the current profile.`);
+ }
+ return items;
+}
+
+function v16BuildSignalManualActionDefinitions(state = {}) {
+ const hasActiveManualControl = !!(
+ state?.manual?.paused
+ || state?.manual?.reentryBlocked
+ || state?.manual?.ignoreFunding
+ || state?.manual?.reservedSlot
+ || state?.manual?.blockedToday
+ );
+ const activeNotes = {
+ pause: state?.manual?.paused ? `Active until ${v16FormatTs(state.manual.record?.pausedUntil || 0)}.` : 'Expires in 6 hours.',
+ reentry: state?.manual?.reentryBlocked ? `Active until ${v16FormatTs(state.manual.record?.reentryBlockedUntil || 0)}.` : 'Expires in 6 hours.',
+ ignore_funding: state?.manual?.ignoreFunding ? `Active until ${v16FormatTs(state.manual.record?.ignoreFundingUntil || 0)}.` : 'Expires in 8 hours.',
+ reserve_slot: state?.manual?.reservedSlot ? `Active until ${v16FormatTs(state.manual.record?.reservedSlotUntil || 0)}.` : 'Expires in 6 hours.',
+ close_block_today: state?.manual?.blockedToday ? `Active until ${v16FormatTs(state.manual.record?.blockedTodayUntil || v16StartOfNextDay())}.` : 'Blocks the symbol for the rest of today.',
+ clear_all: 'Clears every active symbol-level control immediately.',
+ };
+ const actions = [
+ { kind: 'pause', label: 'Pause 6h', tone: hasActiveManualControl ? 'secondary' : 'primary', when: 'Use when you want the system to stand down on this symbol for a few hours.', effect: 'Skips fresh entries for this symbol during the pause window.', expires: activeNotes.pause, destructive: false },
+ { kind: 'reentry', label: 'Block Re-entry 6h', tone: 'secondary', when: 'Use after an exit when you do not want an immediate re-entry on the same symbol.', effect: 'Prevents another entry after this trade cycle resets.', expires: activeNotes.reentry, destructive: false },
+ { kind: 'ignore_funding', label: 'Ignore Funding', tone: 'caution', when: 'Use when the setup is strong but you want to bypass the funding block for one session.', effect: 'Lets the engine ignore adverse funding checks for this symbol.', expires: activeNotes.ignore_funding, destructive: false },
+ { kind: 'reserve_slot', label: 'Reserve 1 Slot', tone: 'secondary', when: 'Use when you want to keep capacity open for this symbol before entry is eligible.', effect: 'Holds one trade slot so other symbols do not take it first.', expires: activeNotes.reserve_slot, destructive: false },
+ { kind: 'close_block_today', label: 'Close + Block Today', tone: 'danger', when: 'Use when you want to flatten and make sure the symbol stays off for the rest of the day.', effect: 'Closes the live position, then blocks fresh entries on this symbol today.', expires: activeNotes.close_block_today, destructive: true },
+ { kind: 'clear_all', label: 'Clear Controls', tone: hasActiveManualControl ? 'primary' : 'passive', when: 'Use when the symbol no longer needs manual handling.', effect: 'Removes pause, re-entry block, funding override, reserved slot, and day block.', expires: activeNotes.clear_all, destructive: false },
+ ];
+ const priorityOrder = { primary: 0, secondary: 1, caution: 2, passive: 3, danger: 4 };
+ return actions.sort((a, b) => (priorityOrder[a.tone] ?? 9) - (priorityOrder[b.tone] ?? 9));
+}
+
+function v16BuildAutoTradeLifecycleEvents(trade = {}, entry = {}) {
+ const notifications = entry?.notifications && typeof entry.notifications === 'object' ? entry.notifications : {};
+ const events = [];
+ const push = (ts, title, detail, tone = 'info') => {
+ const numericTs = Number(ts || 0);
+ if (!(numericTs > 0) || !String(title || '').trim()) return;
+ events.push({
+ ts: numericTs,
+ title: String(title || '').trim(),
+ detail: String(detail || '').trim(),
+ tone,
+ });
+ };
+ const resolvedTradeSide = String(trade?.side || '').trim().toLowerCase();
+ const resolvedEntrySide = v16ResolveEntryDirectionLabel(entry);
+ const sideLabel = String(
+ resolvedTradeSide === 'long' || resolvedTradeSide === 'short'
+ ? resolvedTradeSide
+ : resolvedEntrySide
+ ).toUpperCase() || 'POSITION';
+ const primaryTargetPrice = Number(
+ trade?.tp1
+ || trade?.takeProfit
+ || trade?.tp
+ || entry?.tp1
+ || entry?.tp
+ || entry?.takeProfitLimitPrice
+ || 0
+ );
+ push(entry?.ts || trade?.openedAt || 0, 'Signal placed order', `${sideLabel} entry submitted by auto-trade.`, 'info');
+ push(entry?.positionSeenAt || trade?.openedAt || 0, 'Position detected live', 'Exchange snapshot confirmed the live position.', 'good');
+ push(notifications?.stopArmedAt || 0, 'Stop armed', `Protective stop live at ${v16FormatOptionalPrice(entry?.sl || trade?.stopLoss || 0)}.`, 'warn');
+ push(notifications?.targetArmedAt || 0, 'Target armed', `Primary live target set at ${v16FormatOptionalPrice(primaryTargetPrice)}.`, 'good');
+ (Array.isArray(entry?.targetShiftEvents) ? entry.targetShiftEvents : []).forEach(event => {
+ const fromLabel = String(event?.fromTargetLabel || event?.fromStage || 'T?').trim().toUpperCase();
+ const toLabel = String(event?.toTargetLabel || event?.toStage || 'T?').trim().toUpperCase();
+ push(
+ event?.shiftedAt || 0,
+ `${fromLabel} near -> ${toLabel} live`,
+ `Target ${v16FormatOptionalPrice(event?.oldTargetPrice || 0)} -> ${v16FormatOptionalPrice(event?.newTargetPrice || 0)} | Stop ${v16FormatOptionalPrice(event?.oldStopPrice || 0)} -> ${v16FormatOptionalPrice(event?.newStopPrice || 0)}.`,
+ 'info'
+ );
+ });
+ const closeReason = v16HumanizeCloseReasonLabel(trade?.closeReasonLabel || entry?.closeReason || '');
+ push(entry?.closedAt || notifications?.closedAt || trade?.closedAt || 0, 'Trade closed', v16DescribeCloseReasonAction(closeReason), Number(trade?.pnl || 0) >= 0 ? 'good' : 'bad');
+ push(entry?.cancelledAt || notifications?.cancelledAt || 0, 'Entry cancelled', `Reason: ${v16HumanizeCloseReasonLabel(entry?.closeReason || 'cancelled')}.`, 'warn');
+ return events
+ .sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0))
+ .filter((event, index, arr) => index === 0 || !(event.ts === arr[index - 1].ts && event.title === arr[index - 1].title));
+}
+
+function v16BuildAutoTradeSystemActions(trade = {}) {
+ const items = [];
+ const lifecycle = Array.isArray(trade.autoTradeLifecycleEvents) ? trade.autoTradeLifecycleEvents : [];
+ const shiftEvents = Array.isArray(trade.targetShiftEvents) ? trade.targetShiftEvents : [];
+ if (lifecycle.some(event => event.title === 'Stop armed')) items.push('Stop armed on Delta');
+ if (lifecycle.some(event => event.title === 'Target armed')) items.push('Target armed on Delta');
+ if (shiftEvents.length) items.push(`${shiftEvents.length} target shift${shiftEvents.length === 1 ? '' : 's'} recorded`);
+ const stageLabel = v16FormatTargetShiftStage(trade.targetAutoShiftStage || '');
+ if (stageLabel) items.push(stageLabel.replace(/^Auto-shift:\s*/i, ''));
+ const closeReason = v16HumanizeCloseReasonLabel(trade.closeReasonLabel || '');
+ if (closeReason) items.push(`Final exit: ${closeReason}`);
+ return items;
+}
+
+function v16BuildAutoTradeTimelineHtml(trade = {}) {
+ const events = Array.isArray(trade.autoTradeLifecycleEvents) ? trade.autoTradeLifecycleEvents : [];
+ if (!events.length) {
+ return `<div class="account-inline-note">No auto-trade lifecycle timeline was recorded for this trade.</div>`;
+ }
+ return events.map(event => `
+ <div class="live-notification-item live-notification-item--${v16Esc(String(event.tone || 'info').toLowerCase())}">
+ <div class="live-notification-head">
+ <strong>${v16Esc(event.title || 'Event')}</strong>
+ <span>${v16Esc(v16FormatTs(event.ts || 0))}</span>
+ </div>
+ <div class="live-notification-copy"><span>What</span><strong>${v16Esc(event.detail || '-')}</strong></div>
+ </div>
+ `).join('');
+}
+
+function v16BuildAutoTradeSystemActionsHtml(trade = {}) {
+ const actions = v16BuildAutoTradeSystemActions(trade);
+ if (!actions.length) {
+ return `<div class="account-inline-note">No system actions were reconstructed for this trade.</div>`;
+ }
+ return `<div class="live-journal-tags">${actions.map(action => `<span class="live-journal-tag">${v16Esc(action)}</span>`).join('')}</div>`;
+}
+
+function v16BuildJournalReplayOrderContext(trade = {}) {
+ const symbol = v16NormalizeSymbol(trade.symbol || '');
+ if (!symbol) return null;
+ const rawLines = [
+ { key: 'entry', label: 'Entry', tone: 'entry', price: Number(trade.entryPrice || trade.entry || 0), source: 'journal' },
+ { key: 'stop', label: 'Stop', tone: 'stop', price: Number(trade.stopLoss || trade.sl || 0), source: 'journal' },
+ { key: 'target_1', label: 'T1', tone: 'target', price: Number(trade.tp1 || trade.takeProfit || trade.tp || 0), source: 'journal' },
+ { key: 'target_2', label: 'T2', tone: 'target', price: Number(trade.tp2 || trade.takeProfit2 || 0), source: 'journal' },
+ { key: 'target_3', label: 'T3', tone: 'target', price: Number(trade.tp3 || 0), source: 'journal' },
+ { key: 'target_4', label: 'T4', tone: 'target', price: Number(trade.tp4 || 0), source: 'journal' },
+ { key: 'exit', label: 'Exit', tone: 'mark', price: Number(trade.exitPrice || trade.closePrice || 0), source: 'journal' },
+ ];
+ const shiftEvents = Array.isArray(trade.targetShiftEvents) ? trade.targetShiftEvents : [];
+ if (shiftEvents.length) {
+ const latestShift = shiftEvents[shiftEvents.length - 1];
+ rawLines.push({
+ key: 'active_target',
+ label: 'Live Target',
+ tone: 'target',
+ price: Number(latestShift?.newTargetPrice || 0),
+ source: 'journal',
+ meta: String(latestShift?.toTargetLabel || latestShift?.toStage || '').trim().toUpperCase(),
+ });
+ rawLines.push({
+ key: 'active_stop',
+ label: 'Live Stop',
+ tone: 'stop',
+ price: Number(latestShift?.newStopPrice || 0),
+ source: 'journal',
+ meta: String(latestShift?.toTargetLabel || latestShift?.toStage || '').trim().toUpperCase(),
+ });
+ }
+ const dedup = new Map();
+ rawLines.forEach(line => {
+ const price = Number(line.price || 0);
+ if (!(price > 0)) return;
+ const key = `${String(line.label || '').trim().toLowerCase()}_${price.toFixed(10)}`;
+ if (!dedup.has(key)) dedup.set(key, line);
+ });
+ const lines = Array.from(dedup.values());
+ if (!lines.length) return null;
+ return {
+ source: 'journal',
+ label: `${symbol} trade replay`,
+ symbol,
+ lines,
+ linkedOrders: [],
+ };
+}
+
+function v16BuildJournalReplayLegendHtml(trade = {}) {
+ const items = [];
+ const push = (label, value, tone = '') => {
+ if (!String(value || '').trim() || value === '-') return;
+ items.push(`<span class="live-order-chart-tag ${tone}"><strong>${v16Esc(label)}</strong><em>${v16Esc(value)}</em></span>`);
+ };
+ push('Entry', v16FormatOptionalPrice(trade.entryPrice || 0), 'entry');
+ push('Stop', v16FormatOptionalPrice(trade.stopLoss || 0), 'stop');
+ push('T1', v16FormatOptionalPrice(trade.tp1 || trade.takeProfit || trade.tp || 0), 'target');
+ push('T2', v16FormatOptionalPrice(trade.tp2 || trade.takeProfit2 || 0), 'target');
+ push('T3', v16FormatOptionalPrice(trade.tp3 || 0), 'target');
+ push('T4', v16FormatOptionalPrice(trade.tp4 || 0), 'target');
+ push('Exit', v16FormatOptionalPrice(trade.exitPrice || 0), 'mark');
+ const shifts = Array.isArray(trade.targetShiftEvents) ? trade.targetShiftEvents : [];
+ if (shifts.length) {
+ items.push(`<span class="live-order-chart-tag mark"><strong>Shift Audit</strong><em>${v16Esc(`${shifts.length} event${shifts.length === 1 ? '' : 's'}`)}</em></span>`);
+ }
+ if (!items.length) {
+ return `<div class="account-inline-note">Replay markers will appear here once the trade has entry, exit, stop, and target context.</div>`;
+ }
+ return `<div class="live-journal-replay-legend">${items.join('')}</div>`;
+}
+
+function v16ResolveAutoTradeJournalMatch(trade = {}, autoTradeLog = []) {
+ const symbol = v16NormalizeSymbol(trade.symbol || '');
+ if (!symbol) return null;
+ const closedAt = Number(trade.closedAt || 0);
+ const tradeSide = String(trade.side || '').trim().toLowerCase();
+ return (Array.isArray(autoTradeLog) ? autoTradeLog : [])
+ .filter(entry => v16NormalizeSymbol(entry?.symbol || '') === symbol && String(entry?.source || '').toLowerCase() === 'auto')
+ .sort((a, b) => {
+ const aSideMatch = v16ResolveEntryDirectionLabel(a) === tradeSide ? 0 : 1;
+ const bSideMatch = v16ResolveEntryDirectionLabel(b) === tradeSide ? 0 : 1;
+ if (aSideMatch !== bSideMatch) return aSideMatch - bSideMatch;
+ const aDelta = Math.abs(Number(a?.closedAt || a?.ts || 0) - closedAt);
+ const bDelta = Math.abs(Number(b?.closedAt || b?.ts || 0) - closedAt);
+ return aDelta - bDelta;
+ })[0] || null;
+}
+
+function v16EnrichTradeWithAutoTradeContext(trade = {}, autoTradeLog = [], orderHistory = []) {
+ const match = v16ResolveAutoTradeJournalMatch(trade, autoTradeLog);
+ if (!match) return trade;
+ return {
+ ...trade,
+ sourceLabel: 'Auto',
+ setupFamily: String(trade.setupFamily || match.setupFamily || '').trim(),
+ setupFamilyLabel: String(trade.setupFamilyLabel || match.setupFamilyLabel || v16HumanizeSetupFamily(match.setupFamily || '')).trim(),
+ tradeQualityScore: Number(trade.tradeQualityScore || trade.tradeQuality || match.tradeQuality || 0),
+ score: Number(trade.score || match.score || 0),
+ shortlistAction: String(trade.shortlistAction || match.shortlistAction || '').trim(),
+ entryPrice: Number(trade.entryPrice || trade.entry || match.entryPrice || match.entry || 0),
+ stopLoss: Number(trade.stopLoss || trade.sl || match.sl || 0),
+ tp1: Number(trade.tp1 || trade.takeProfit || trade.tp || match.tp1 || match.tp || 0),
+ tp2: Number(trade.tp2 || trade.takeProfit2 || match.tp2 || 0),
+ tp3: Number(trade.tp3 || match.tp3 || 0),
+ tp4: Number(trade.tp4 || match.tp4 || 0),
+ closeReasonLabel: v16ResolveJournalCloseReason(trade, match, orderHistory) || trade.closeReasonLabel || 'closed on exchange',
+ targetShiftEvents: Array.isArray(match?.targetShiftEvents) ? match.targetShiftEvents.slice() : [],
+ targetAutoShiftStage: String(match?.targetAutoShiftStage || trade?.targetAutoShiftStage || '').trim().toLowerCase(),
+ autoTradeReverseApplied: match?.autoTradeReverseApplied === true,
+ autoTradeOriginalDirection: String(match?.autoTradeOriginalDirection || trade?.autoTradeOriginalDirection || '').trim().toLowerCase(),
+ autoTradeExecutionDirection: String(match?.autoTradeExecutionDirection || trade?.autoTradeExecutionDirection || '').trim().toLowerCase(),
+ autoTradeEntryId: String(match?.id || ''),
+ autoTradeLifecycleEvents: v16BuildAutoTradeLifecycleEvents(trade, match),
+ };
+}
+
+function v16BuildTradeDiagnosticSummary(trade = {}) {
+ const headline = [];
+ const detail = [];
+ const closeReason = v16HumanizeCloseReasonLabel(trade.closeReasonLabel || '');
+ if (closeReason) headline.push(closeReason.startsWith('closed ') ? 'Exchange close' : closeReason.replace(/\b\w/g, char => char.toUpperCase()));
+ const holdMinutes = Number(trade.holdMinutes || 0);
+ if (holdMinutes > 0) detail.push(`Held ${holdMinutes}m`);
+ if (trade.rMultiple != null && Number.isFinite(Number(trade.rMultiple))) detail.push(`${Number(trade.rMultiple).toFixed(2)}R`);
+ const setupTag = String(trade.review?.setupTag || trade.setupFamily || '').trim();
+ if (setupTag) headline.push(`Setup ${setupTag}`);
+ const mistakeTag = String(trade.review?.mistakeTag || '').trim();
+ if (mistakeTag) detail.push(`Improve ${mistakeTag}`);
+ const shiftEvents = Array.isArray(trade.targetShiftEvents) ? trade.targetShiftEvents : [];
+ if (shiftEvents.length) {
+ const latestShift = shiftEvents[shiftEvents.length - 1];
+ const fromLabel = String(latestShift?.fromTargetLabel || latestShift?.fromStage || 'T?').trim().toUpperCase();
+ const toLabel = String(latestShift?.toTargetLabel || latestShift?.toStage || 'T?').trim().toUpperCase();
+ detail.push(`Shift ${fromLabel} -> ${toLabel}`);
+ }
+ const lifecycle = Array.isArray(trade.autoTradeLifecycleEvents) ? trade.autoTradeLifecycleEvents : [];
+ if (lifecycle.length) detail.push(`${lifecycle.length} system event${lifecycle.length === 1 ? '' : 's'}`);
+ const headlineText = headline.filter(Boolean).slice(0, 2).join(' | ');
+ const detailText = detail.filter(Boolean).slice(0, 3).join(' | ');
+ if (headlineText && detailText) return `${headlineText}\n${detailText}`;
+ return headlineText || detailText;
+}
+
+function v16BuildTradeDiagnosticParts(trade = {}) {
+ const summary = String(v16BuildTradeDiagnosticSummary(trade) || '').trim();
+ if (!summary) {
+ return {
+ headline: 'No diagnostic summary yet',
+ detail: 'Review timeline for system actions',
+ };
+ }
+ const [headline, ...rest] = summary.split('\n');
+ return {
+ headline: String(headline || '').trim() || 'No diagnostic summary yet',
+ detail: String(rest.join(' | ') || '').trim() || (v16BuildAutoTradeSystemActions(trade).join(' | ') || 'Review timeline for system actions'),
+ };
+}
+
+function v16FormatTargetShiftStage(value = '') {
+ const stage = String(value || '').trim().toLowerCase();
+ if (stage === 'tp4') return 'Auto-shift: T4 live';
+ if (stage === 'tp2') return 'Auto-shift: T2 live';
+ if (stage === 'tp3') return 'Auto-shift: T3 live';
+ if (stage === 'tp1') return 'Auto-shift: T1 live';
+ return '';
+}
+
+function v16BuildTargetShiftJournalHtml(trade = {}) {
+ const events = Array.isArray(trade.targetShiftEvents) ? trade.targetShiftEvents : [];
+ if (!events.length) {
+ return `<div class="account-inline-note">No target auto-shift events were recorded for this trade.</div>`;
+ }
+ return events.slice().reverse().map(event => {
+ const fromLabel = String(event?.fromTargetLabel || event?.fromStage || 'T?').trim().toUpperCase();
+ const toLabel = String(event?.toTargetLabel || event?.toStage || 'T?').trim().toUpperCase();
+ return `
+ <div class="live-notification-item live-notification-item--info">
+ <div class="live-notification-head">
+ <strong>${v16Esc(`${fromLabel} -> ${toLabel}`)}</strong>
+ <span>${v16Esc(v16FormatTs(event?.shiftedAt || 0))}</span>
+ </div>
+ <div class="live-notification-copy"><span>Target</span><strong>${v16Esc(v16FormatOptionalPrice(event?.oldTargetPrice || 0))} -> ${v16Esc(v16FormatOptionalPrice(event?.newTargetPrice || 0))}</strong></div>
+ <div class="live-notification-copy"><span>Stop</span><strong>${v16Esc(v16FormatOptionalPrice(event?.oldStopPrice || 0))} -> ${v16Esc(v16FormatOptionalPrice(event?.newStopPrice || 0))}</strong></div>
+ <div class="live-notification-copy"><span>Reason</span><strong>${v16Esc(`${fromLabel} almost reached, so the system advanced the live protection ladder.`)}</strong></div>
+ </div>`;
+ }).join('');
+}
+
+function v16ResolvePositionTrailingEntry(position = {}, tradeLog = [], profileId = '', settings = {}) {
+ const symbol = v16NormalizeSymbol(position.symbol || '');
+ if (!symbol) return null;
+ const activeStatuses = new Set(['placed', 'pending', 'live']);
+ const match = (Array.isArray(tradeLog) ? tradeLog : []).find(entry => {
+ if (!activeStatuses.has(String(entry?.status || '').toLowerCase())) return false;
+ if (v16NormalizeSymbol(entry?.symbol || '') !== symbol) return false;
+ return true;
+ });
+ if (!match) return null;
+ return { ...match };
+}
+
+function v16ResolvePositionProtectionMeta(position = {}, trailEntry = null) {
+ const stopOrder = Array.isArray(position?.exposurePlan?.stopOrders) ? position.exposurePlan.stopOrders[0] || null : null;
+ const targetOrder = Array.isArray(position?.exposurePlan?.targetOrders) ? position.exposurePlan.targetOrders[0] || null : null;
+ const stopPrice = Number(stopOrder?.stopPrice || stopOrder?.limitPrice || 0);
+ const targetPrice = Number(targetOrder?.limitPrice || targetOrder?.stopPrice || 0);
+ const normalizeState = (value = '', fallback = '') => {
+ const raw = String(value || '').trim().toLowerCase();
+ if (!raw) return fallback;
+ if (['armed', 'manual_native', 'triggered', 'unprotected', 'closed', 'missing'].includes(raw)) return raw;
+ if (['armed_trailing'].includes(raw)) return 'armed';
+ if (['stop_pending', 'stop_missing', 'pending'].includes(raw)) return 'missing';
+ if (['stopped', 'stop_hit', 'target_hit'].includes(raw)) return 'triggered';
+ if (['protection_failed'].includes(raw)) return 'unprotected';
+ return fallback || raw;
+ };
+ const normalizeSource = (value = '', fallback = '') => {
+ const raw = String(value || '').trim().toLowerCase();
+ if (!raw) return fallback;
+ if (raw === 'manual') return 'manual_native';
+ if (raw === 'app' || raw === 'native') return 'app_native';
+ if (raw === 'app_native' || raw === 'manual_native') return raw;
+ return fallback || raw;
+ };
+ const stopSource = stopOrder
+ ? normalizeSource(
+ trailEntry?.stopProtectionSource || trailEntry?.protectionSource || '',
+ v16IsFWDTradeDeskManagedOrder(stopOrder) ? 'app_native' : 'manual_native'
+ )
+ : '';
+ const targetSource = targetOrder
+ ? normalizeSource(
+ trailEntry?.targetProtectionSource || '',
+ v16IsFWDTradeDeskManagedOrder(targetOrder) ? 'app_native' : 'manual_native'
+ )
+ : '';
+ const protectionState = stopOrder
+ ? (stopSource === 'manual_native' ? 'manual_native' : normalizeState(trailEntry?.protectionState || '', 'armed'))
+ : normalizeState(trailEntry?.protectionState || '', 'missing');
+ const sourceLabel = stopSource === 'manual_native'
+ ? 'Manual Native'
+ : stopSource === 'app_native'
+ ? 'App Native'
+ : (targetSource === 'manual_native' ? 'Manual Native' : (targetSource === 'app_native' ? 'App Native' : '-'));
+ const statusText = protectionState === 'manual_native'
+ ? 'Manual Native Stop'
+ : protectionState === 'armed'
+ ? 'Static Stop'
+ : protectionState === 'unprotected'
+ ? 'Unprotected'
+ : protectionState === 'closed'
+ ? 'Closed'
+ : 'No Stop';
+ return {
+ stopPrice,
+ targetPrice,
+ stopSource,
+ targetSource,
+ sourceLabel,
+ protectionState,
+ statusText,
+ warningText: protectionState === 'unprotected'
+ ? 'Unprotected | add a native stop on Delta or close the position.'
+ : protectionState === 'missing'
+ ? 'No Stop'
+ : statusText,
+ };
+}
+
+function v16BuildAutoTradeSizingSummary(entry = {}) {
+ const requestedSizeUSD = Math.max(0, Number(entry?.requestedSizeUSD || entry?.sizeUSD || 0));
+ const expectedNotionalUSD = Math.max(0, Number(entry?.expectedNotionalUSD || 0));
+ const previewContracts = Math.max(0, Number(entry?.previewContracts || 0));
+ const previewDisplaySize = Math.max(0, Number(entry?.previewDisplaySize || 0));
+ const previewDisplayUnit = String(entry?.previewDisplayUnit || (previewDisplaySize > 0 ? 'contracts' : '')).trim();
+ if (requestedSizeUSD <= 0 && expectedNotionalUSD <= 0 && previewContracts <= 0) return '';
+ const parts = [];
+ if (requestedSizeUSD > 0) parts.push(`Req $${v16FmtNumber(requestedSizeUSD, 2)}`);
+ if (expectedNotionalUSD > 0) parts.push(`Exp $${v16FmtNumber(expectedNotionalUSD, 2)}`);
+ if (previewContracts > 0) {
+ const sizeLabel = previewDisplaySize > 0 && previewDisplayUnit
+ ? `${v16FmtNumber(previewDisplaySize, previewDisplaySize >= 1000 ? 0 : 4).replace(/\.?0+$/, '')} ${previewDisplayUnit}`
+ : `${v16FmtNumber(previewContracts, 0)} contracts`;
+ parts.push(`${v16FmtNumber(previewContracts, 0)}c / ${sizeLabel}`);
+ }
+ return parts.join(' | ');
+}
+
+async function v16HmacHex(secret, payload) {
+ const encoder = new TextEncoder();
+ const cryptoKey = await crypto.subtle.importKey(
+ 'raw',
+ encoder.encode(String(secret || '')),
+ { name: 'HMAC', hash: 'SHA-256' },
+ false,
+ ['sign']
+ );
+ const signature = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(String(payload || '')));
+ return Array.from(new Uint8Array(signature)).map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function v16PrivateSocketUrlForBase(baseUrl = '') {
+ const value = String(baseUrl || '').toLowerCase();
+ if (value.includes('api.delta.exchange') && !value.includes('india')) return V16_PRIVATE_SOCKET_URLS.global;
+ return V16_PRIVATE_SOCKET_URLS.india;
+}
+
+function v16PrivateSocketCandidateUrls(baseUrl = '') {
+ return Array.from(new Set([
+ v16PrivateSocketUrlForBase(baseUrl),
+ V16_PRIVATE_SOCKET_URLS.india,
+ V16_PRIVATE_SOCKET_URLS.global,
+ ]));
+}
+
+function v16BaseUrlFromSocketUrl(url = '') {
+ return String(url || '').includes('socket.delta.exchange') && !String(url || '').includes('india')
+ ? 'https://api.delta.exchange/v2'
+ : 'https://api.india.delta.exchange/v2';
+}
+
+function v16UpsertSocketRecord(store, key, value) {
+ if (!key) return;
+ store.set(String(key), value);
+}
+
+function v16DeleteSocketRecord(store, key) {
+ if (!key) return;
+ store.delete(String(key));
+}
+
+function v16IngestPrivateSocketMessage(feed, message) {
+ const type = String(message?.type || '').toLowerCase();
+ if (!type) return;
+ const list = Array.isArray(message?.result) ? message.result : [message];
+ if (type === 'margins') {
+ list.forEach(item => {
+ const key = item?.asset_symbol || item?.asset_id || item?.id;
+ if (key != null) v16UpsertSocketRecord(feed.margins, key, item);
+ });
+ return;
+ }
+ if (type === 'positions') {
+ const action = String(message?.action || '').toLowerCase();
+ list.forEach(item => {
+ const key = item?.product_symbol || item?.symbol || item?.product_id || item?.id;
+ if (action === 'delete') {
+ v16DeleteSocketRecord(feed.positions, key);
+ } else if (key != null) {
+ v16UpsertSocketRecord(feed.positions, key, item);
+ }
+ });
+ return;
+ }
+ if (type === 'orders') {
+ const action = String(message?.action || '').toLowerCase();
+ list.forEach(item => {
+ const key = item?.order_id || item?.id || item?.client_order_id;
+ if (action === 'delete') {
+ v16DeleteSocketRecord(feed.orders, key);
+ } else if (key != null) {
+ v16UpsertSocketRecord(feed.orders, key, item);
+ }
+ });
+ return;
+ }
+ if (type === 'user_trades' || type === 'v2/user_trades') {
+ list.forEach(item => {
+ const key = item?.fill_id || item?.f || item?.id || `${item?.symbol || item?.sy || item?.product_id || ''}_${item?.timestamp || item?.t || ''}`;
+ if (key) v16UpsertSocketRecord(feed.userTrades, key, item);
+ });
+ }
+}
+
+function v16BuildPrivateSocketSnapshot(feed, socketUrl = '') {
+ const baseUrl = v16BaseUrlFromSocketUrl(socketUrl);
+ return {
+ baseUrl,
+ region: baseUrl.includes('api.delta.exchange') && !baseUrl.includes('india') ? 'global' : 'india',
+ fetchedAt: Date.now(),
+ walletBalances: Array.from(feed.margins.values()),
+ positions: [],
+ marginedPositions: Array.from(feed.positions.values()),
+ fills: Array.from(feed.userTrades.values()),
+ orderHistory: Array.from(feed.orders.values()),
+ openOrders: Array.from(feed.orders.values()).filter(order => ['open', 'pending'].includes(String(order?.state || '').toLowerCase())),
+ socket: true,
+ };
+}
+
+async function runV16PrivateSocketSnapshot(profile, secret, preferredBaseUrl = '') {
+ const tradingKey = String(secret?.tradingKey || '').trim();
+ const tradingSecret = String(secret?.tradingSecret || '').trim();
+ if (!tradingKey || !tradingSecret) throw new Error('Trading key and secret are required');
+
+ let lastError = null;
+ for (const socketUrl of v16PrivateSocketCandidateUrls(preferredBaseUrl)) {
+ try {
+ const timestamp = String(Math.floor(Date.now() / 1000));
+ const signature = await v16HmacHex(tradingSecret, `GET${timestamp}/live`);
+ const feed = {
+ margins: new Map(),
+ positions: new Map(),
+ orders: new Map(),
+ userTrades: new Map(),
+ };
+
+ const snapshot = await new Promise((resolve, reject) => {
+ const ws = new WebSocket(socketUrl);
+ let settled = false;
+ let authOk = false;
+ let settleTimer = 0;
+ let hardTimeout = 0;
+
+ const finish = (fn, value) => {
+ if (settled) return;
+ settled = true;
+ clearTimeout(settleTimer);
+ clearTimeout(hardTimeout);
+ try { ws.close(); } catch (_) {}
+ fn(value);
+ };
+ const scheduleResolve = (delay = 700) => {
+ clearTimeout(settleTimer);
+ settleTimer = setTimeout(() => finish(resolve, v16BuildPrivateSocketSnapshot(feed, socketUrl)), delay);
+ };
+
+ ws.addEventListener('open', () => {
+ ws.send(JSON.stringify({
+ type: 'key-auth',
+ payload: {
+ 'api-key': tradingKey,
+ signature,
+ timestamp,
+ },
+ }));
+ });
+
+ ws.addEventListener('message', event => {
+ let message = null;
+ try {
+ message = JSON.parse(String(event.data || '{}'));
+ } catch (_) {
+ return;
+ }
+ const type = String(message?.type || '').toLowerCase();
+ if (type === 'key-auth') {
+ if (!message?.success) {
+ finish(reject, new Error(`${message?.status_code || 'ERR'} ${message?.message || message?.status || 'Socket auth failed'}`));
+ return;
+ }
+ authOk = true;
+ ws.send(JSON.stringify({
+ type: 'subscribe',
+ payload: {
+ channels: [
+ { name: 'margins' },
+ { name: 'positions', symbols: ['all'] },
+ { name: 'orders', symbols: ['all'] },
+ { name: 'v2/user_trades', symbols: ['all'] },
+ ],
+ },
+ }));
+ scheduleResolve(1400);
+ return;
+ }
+ if (!authOk) return;
+ v16IngestPrivateSocketMessage(feed, message);
+ scheduleResolve(700);
+ });
+
+ ws.addEventListener('error', () => {
+ if (!settled) finish(reject, new Error(`Socket connection failed: ${socketUrl}`));
+ });
+
+ ws.addEventListener('close', event => {
+ if (settled) return;
+ if (authOk) {
+ finish(resolve, v16BuildPrivateSocketSnapshot(feed, socketUrl));
+ return;
+ }
+ finish(reject, new Error(`Socket closed before auth: ${event?.code || 'unknown'}`));
+ });
+
+ hardTimeout = setTimeout(() => {
+ if (!authOk) {
+ finish(reject, new Error(`Socket auth timeout: ${socketUrl}`));
+ return;
+ }
+ finish(resolve, v16BuildPrivateSocketSnapshot(feed, socketUrl));
+ }, V16_PRIVATE_SOCKET_TIMEOUT_MS);
+ });
+
+ const score = (snapshot.marginedPositions?.length || 0) + (snapshot.fills?.length || 0) + (snapshot.orderHistory?.length || 0) + (snapshot.walletBalances?.length || 0);
+ if (score > 0) return snapshot;
+ lastError = new Error(`Socket connected but returned no private data via ${socketUrl}`);
+ } catch (error) {
+ lastError = error;
+ }
+ }
+ throw lastError || new Error('Private socket snapshot failed');
+}
+
+function v16RuntimeSend(action, payload = {}) {
+ return new Promise(resolve => {
+ try {
+ chrome.runtime.sendMessage({ action, ...payload }, response => {
+ if (chrome.runtime?.lastError) {
+ resolve({ ok: false, error: chrome.runtime.lastError.message });
+ return;
+ }
+ resolve(response || { ok: false, error: 'No response' });
+ });
+ } catch (error) {
+ resolve({ ok: false, error: error?.message || 'Runtime error' });
+ }
+ });
+}
+
+async function loadV16AccountState(force = false) {
+ if (v16InitPromise && !force) return v16InitPromise;
+ v16InitPromise = (async () => {
+ const response = await v16RuntimeSend('v16:getAccountState');
+ if (response?.ok) {
+ const metadata = sanitizeAccountMetadata(response.metadata || {});
+ const secrets = sanitizeAccountSecrets(response.secrets || {}, metadata.profiles);
+ v16AccountState = { metadata, secrets };
+ return v16AccountState;
+ }
+ const [localData, sessionSecretsData, legacySecretsData] = await Promise.all([
+ storeGet(V16_ACCOUNT_METADATA_KEY),
+ sessionGet(V16_ACCOUNT_SECRETS_KEY),
+ storeGet(V16_ACCOUNT_SECRETS_KEY),
+ ]);
+ const hasSessionSecrets = Object.prototype.hasOwnProperty.call(sessionSecretsData || {}, V16_ACCOUNT_SECRETS_KEY);
+ const nextSecrets = hasSessionSecrets
+ ? (sessionSecretsData?.[V16_ACCOUNT_SECRETS_KEY] || {})
+ : (legacySecretsData?.[V16_ACCOUNT_SECRETS_KEY] || {});
+ if (!hasSessionSecrets && Object.prototype.hasOwnProperty.call(legacySecretsData || {}, V16_ACCOUNT_SECRETS_KEY)) {
+ await Promise.all([
+ sessionSet({ [V16_ACCOUNT_SECRETS_KEY]: nextSecrets }),
+ storeRemove(V16_ACCOUNT_SECRETS_KEY),
+ ]);
+ }
+ v16AccountState = createDefaultAccountState({
+ metadata: localData?.[V16_ACCOUNT_METADATA_KEY] || {},
+ secrets: nextSecrets,
+ });
+ return v16AccountState;
+ })();
+ return v16InitPromise;
+}
+
+async function persistV16AccountState(metadata, secrets) {
+ const nextMetadata = sanitizeAccountMetadata(metadata || v16AccountState.metadata || {});
+ const nextSecrets = sanitizeAccountSecrets(secrets || v16AccountState.secrets || {}, nextMetadata.profiles);
+ const response = await v16RuntimeSend('v16:saveAccountState', {
+ metadata: nextMetadata,
+ secrets: nextSecrets,
+ });
+ if (response?.ok) {
+ const savedMetadata = sanitizeAccountMetadata(response.metadata || nextMetadata);
+ const savedSecrets = sanitizeAccountSecrets(response.secrets || nextSecrets, savedMetadata.profiles);
+ v16AccountState = { metadata: savedMetadata, secrets: savedSecrets };
+ return v16AccountState;
+ }
+ await Promise.all([
+ storeSet({ [V16_ACCOUNT_METADATA_KEY]: nextMetadata }),
+ sessionSet({ [V16_ACCOUNT_SECRETS_KEY]: nextSecrets }),
+ storeRemove(V16_ACCOUNT_SECRETS_KEY),
+ ]);
+ v16AccountState = { metadata: nextMetadata, secrets: nextSecrets };
+ return v16AccountState;
+}
+
+function getV16Metadata() {
+ return v16AccountState.metadata || createDefaultAccountState({}).metadata;
+}
+
+function getV16Secrets() {
+ return v16AccountState.secrets || {};
+}
+
+function getV16ProfileById(profileId) {
+ const metadata = getV16Metadata();
+ return metadata.profiles?.[0] || null;
+}
+
+function getV16ActiveAccountProfile() {
+ const metadata = getV16Metadata();
+ return getV16ProfileById(metadata.activeProfileId) || metadata.profiles?.[0] || createAccountProfile({});
+}
+
+function getV16SelectedAccountProfile() {
+ const metadata = getV16Metadata();
+ return getV16ProfileById(metadata.ui?.selectedProfileId) || getV16ActiveAccountProfile();
+}
+
+function getV16KillSwitchState() {
+ return sanitizeKillSwitchState(getV16Metadata().killSwitch || {});
+}
+
+function hasV16SessionSecret(profileId) {
+ const profile = getV16ProfileById(profileId) || {};
+ if (String(profile?.credentialSource || '').trim().toLowerCase() === 'native_host') return true;
+ const secret = getV16Secrets()?.[profileId] || {};
+ return !!(String(secret.tradingKey || '').trim() || String(secret.tradingSecret || '').trim());
+}
+
+function v16UsesNativeCredential(profile = {}) {
+ return String(profile?.credentialSource || '').trim().toLowerCase() === 'native_host';
+}
+
+async function v16RefreshNativeCredentialState(force = false) {
+ if (!force && v16NativeCredentialState.checkedAt && (Date.now() - v16NativeCredentialState.checkedAt) < 30000) {
+ return v16NativeCredentialState;
+ }
+ const response = await v16RuntimeSend('v16:checkNativeCredentialHost', { force: !!force });
+ v16NativeCredentialState = {
+ checkedAt: Date.now(),
+ available: !!response?.available,
+ error: response?.ok ? '' : String(response?.error || ''),
+ };
+ return v16NativeCredentialState;
+}

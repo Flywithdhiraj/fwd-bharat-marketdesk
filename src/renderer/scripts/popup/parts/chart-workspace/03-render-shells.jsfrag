@@ -1,0 +1,1487 @@
+// Replay, axes, panels, chart model and chart markup builders
+ function buildOrderContextFromDraft(draft = {}, preview = null) {
+ const symbol = String(draft.symbol || preview?.productSymbol || '').trim().toUpperCase();
+ const lines = [
+ { key: 'mark', label: 'Mark', tone: 'mark', price: Number(preview?.markPrice || draft.freshMarkPrice || 0), source: 'preview' },
+ { key: 'entry', label: 'Entry', tone: 'entry', price: Number(draft.entry || preview?.entryReference || 0), source: 'preview' },
+ { key: 'stop', label: 'Stop', tone: 'stop', price: Number(draft.stopLoss || 0), source: 'preview' },
+ { key: 'target', label: 'Target', tone: 'target', price: Number(draft.takeProfit || 0), source: 'preview' },
+ ].map(normalizeOrderLine).filter(Boolean);
+ return normalizeOrderContext({
+ source: 'preview',
+ label: symbol ? `${symbol} live order` : 'Live order',
+ symbol,
+ lines,
+ linkedOrders: [],
+ });
+ }
+
+ function buildOrderContextFromPosition(position = {}, linked = null) {
+ const lines = [
+ { key: 'entry', label: 'Entry', tone: 'entry', price: Number(position.entry || 0), source: 'position' },
+ { key: 'mark', label: 'Mark', tone: 'mark', price: Number(position.markPrice || 0), source: 'position' },
+ ];
+ const linkedOrders = Array.isArray(linked?.all) ? linked.all : [];
+ linkedOrders.forEach(order => {
+ const price = Number(order.stopPrice || order.limitPrice || order.price || 0);
+ if (!(price > 0)) return;
+ const role = String(order.role || '').toLowerCase();
+ lines.push({
+ key: `${role || 'order'}_${order.orderId || order.clientOrderId || price}`,
+ label: role === 'stop_loss'
+ ? 'Stop'
+ : role === 'take_profit'
+ ? 'Target'
+ : role === 'entry'
+ ? 'Entry Ord'
+ : role === 'exit'
+ ? 'Exit Ord'
+ : 'Order',
+ tone: role === 'stop_loss'
+ ? 'stop'
+ : role === 'take_profit'
+ ? 'target'
+ : role === 'entry'
+ ? 'entry'
+ : 'mark',
+ price,
+ source: 'linked',
+ kind: role,
+ meta: order.reduceOnly ? 'Reduce only' : '',
+ });
+ });
+ return normalizeOrderContext({
+ source: 'position',
+ label: `${String(position.symbol || '').trim().toUpperCase()} linked orders`,
+ symbol: String(position.symbol || '').trim().toUpperCase(),
+ lines,
+ linkedOrders,
+ position: {
+ symbol: String(position.symbol || '').trim().toUpperCase(),
+ side: String(position.side || position.direction || '').trim().toLowerCase(),
+ size: Number(position.size || position.contracts || position.quantity || 0) || 0,
+ entry: Number(position.entry || position.entryPrice || 0) || 0,
+ markPrice: Number(position.markPrice || position.price || 0) || 0,
+ productId: Number(position.productId || 0) || 0,
+ },
+ });
+ }
+
+ function deriveReplayTimeframe(trade = {}) {
+ const openedAt = normalizeTsMs(trade.openedAt || trade.entryTs || trade.entryTime);
+ const closedAt = normalizeTsMs(trade.closedAt || trade.exitTs || trade.exitTime);
+ const durationMs = Math.max(0, closedAt - openedAt);
+ if (durationMs <= 8 * 60 * 60 * 1000) return '5m';
+ if (durationMs <= 3 * 24 * 60 * 60 * 1000) return '15m';
+ if (durationMs <= 14 * 24 * 60 * 60 * 1000) return '1h';
+ return '4h';
+ }
+
+ function buildReplaySeedFromTrade(trade = {}) {
+ const entryTs = normalizeTsMs(trade.openedAt || trade.entryTs || trade.entryTime);
+ const exitTs = normalizeTsMs(trade.closedAt || trade.exitTs || trade.exitTime);
+ const entryPrice = Number(trade.entryPrice || trade.entry || 0);
+ const exitPrice = Number(trade.exitPrice || trade.exit || 0);
+ const stopPrice = Number(trade.stopLoss || trade.sl || 0);
+ const markers = [
+ { key: 'entry', label: 'Entry', price: entryPrice, ts: entryTs, tone: 'entry' },
+ { key: 'exit', label: 'Exit', price: exitPrice, ts: exitTs, tone: 'target' },
+ { key: 'stop', label: 'Stop', price: stopPrice, ts: exitTs || entryTs, tone: 'mark' },
+ ];
+ (Array.isArray(trade.targetShiftEvents) ? trade.targetShiftEvents : []).forEach((event, index) => {
+ const nextTarget = Number(event?.newTargetPrice || 0);
+ const shiftedAt = normalizeTsMs(event?.shiftedAt || 0);
+ const toLabel = String(event?.toTargetLabel || event?.toStage || `T${index + 2}`).trim().toUpperCase() || `T${index + 2}`;
+ if (nextTarget > 0 && shiftedAt > 0) {
+ markers.push({
+ key: `shift_${index}`,
+ label: `${toLabel} Live`,
+ price: nextTarget,
+ ts: shiftedAt,
+ tone: 'target',
+ });
+ }
+ });
+ return normalizeReplaySeed({
+ source: 'journal',
+ beforeCount: 60,
+ afterCount: 60,
+ entryTs,
+ exitTs,
+ baselineVisibleCount: 121,
+ label: trade.symbol ? `${trade.symbol} replay` : 'Trade replay',
+ markers: markers.filter(marker => marker.price > 0 && marker.ts > 0),
+ });
+ }
+
+ function buildAxisLabels(candles = [], timeframe = '5m', startIndex = 0) {
+ const labels = [];
+ const verticals = [];
+ if (!candles.length) return { labels, verticals };
+ const every = Math.max(1, Math.round(candles.length / 6));
+ candles.forEach((candle, index) => {
+ const date = new Date(Number(candle.time || 0));
+ const leftPct = (index / Math.max(1, candles.length - 1)) * 100;
+ const prev = index > 0 ? new Date(Number(candles[index - 1]?.time || 0)) : null;
+ const dayChanged = prev ? (
+ date.getUTCDate() !== prev.getUTCDate()
+ || date.getUTCMonth() !== prev.getUTCMonth()
+ || date.getUTCFullYear() !== prev.getUTCFullYear()
+ ) : false;
+ const monthChanged = prev ? (
+ date.getUTCMonth() !== prev.getUTCMonth()
+ || date.getUTCFullYear() !== prev.getUTCFullYear()
+ ) : false;
+ const yearChanged = prev ? date.getUTCFullYear() !== prev.getUTCFullYear() : false;
+ let label = '';
+ if (['1m', '5m', '15m'].includes(timeframe)) {
+ if (dayChanged) {
+ label = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+ verticals.push({ leftPct, label });
+ } else if (index % every === 0 || index === candles.length - 1) {
+ label = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+ }
+ } else if (['1h', '4h'].includes(timeframe)) {
+ if (monthChanged || index % every === 0 || index === candles.length - 1) {
+ label = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+ }
+ } else {
+ if (yearChanged) {
+ label = String(date.getUTCFullYear());
+ verticals.push({ leftPct, label });
+ } else if (monthChanged || index % every === 0 || index === candles.length - 1) {
+ label = date.toLocaleDateString([], { month: 'short' });
+ }
+ }
+ if (!label) return;
+ labels.push({
+ key: `${startIndex + index}_${label}`,
+ leftPct,
+ label,
+ });
+ });
+ return { labels, verticals };
+ }
+
+ function buildSvgPath(points = []) {
+ return points.reduce((acc, point, index) => {
+ const x = Number(point.x || 0).toFixed(2);
+ const y = Number(point.y || 0).toFixed(2);
+ return `${acc}${index ? ' L ' : 'M '}${x} ${y}`;
+ }, '');
+ }
+
+ function formatIntelMetric(metric = {}) {
+ if (metric.format === 'price') return `$${formatPrice(metric.value)}`;
+ return String(metric.value == null ? '-' : metric.value);
+ }
+
+ function buildActiveIndicatorChips(state = {}, presetMeta = {}) {
+ const indicators = sanitizeIndicatorState(state.indicators || {});
+ const chips = [];
+ if (indicators.volume) chips.push('Volume');
+ if (indicators.ema || presetMeta.showEma) chips.push('EMA');
+ if (indicators.sma || presetMeta.showSma) chips.push('SMA');
+ if (state.showVwap || indicators.vwap || presetMeta.showVwap) chips.push('VWAP');
+ if (indicators.bollinger || presetMeta.showBollinger) chips.push('Bollinger');
+ if (indicators.supertrend || presetMeta.showSupertrend) chips.push('Supertrend');
+ if (indicators.rsi || presetMeta.showRsi) chips.push('RSI');
+ if (indicators.macd || presetMeta.showMacd) chips.push('MACD');
+ if (indicators.obv || presetMeta.showObv) chips.push('OBV');
+ if (indicators.atr || presetMeta.showAtr) chips.push('ATR');
+ return chips.slice(0, 8);
+ }
+
+ function latestFinite(values = []) {
+ if (!Array.isArray(values)) return null;
+ for (let index = values.length - 1; index >= 0; index -= 1) {
+ const numeric = Number(values[index]);
+ if (Number.isFinite(numeric)) return numeric;
+ }
+ return null;
+ }
+
+ function formatIndicatorValue(value = null, kind = 'price') {
+ const numeric = Number(value);
+ if (!Number.isFinite(numeric)) return '-';
+ if (kind === 'volume') {
+ const abs = Math.abs(numeric);
+ if (abs >= 1e9) return `${(numeric / 1e9).toFixed(2)}B`;
+ if (abs >= 1e6) return `${(numeric / 1e6).toFixed(2)}M`;
+ if (abs >= 1e3) return `${(numeric / 1e3).toFixed(1)}K`;
+ return String(Math.round(numeric));
+ }
+ return formatPrice(numeric);
+ }
+
+ function isIndicatorGroupActive(state = {}, presetMeta = {}, key = '') {
+ const raw = sanitizeIndicatorState(state.indicators || {});
+ const presetId = String(presetMeta.id || state.preset || '').trim().toLowerCase();
+ if ((presetId === 'key' || presetId === 'clean') && ['ema', 'sma', 'bollinger', 'supertrend', 'rsi', 'macd', 'obv', 'atr'].includes(key)) return false;
+ if (raw[`${key}Removed`] === true) return false;
+ if (key === 'ema') return raw.ema === true || !!presetMeta.showEma;
+ if (key === 'sma') return raw.sma === true || !!presetMeta.showSma;
+ if (key === 'vwap') return state.showVwap === true || raw.vwap === true || !!presetMeta.showVwap;
+ if (key === 'bollinger') return raw.bollinger === true || !!presetMeta.showBollinger;
+ if (key === 'supertrend') return raw.supertrend === true || !!presetMeta.showSupertrend;
+ if (key === 'rsi') return raw.rsi === true || !!presetMeta.showRsi;
+ if (key === 'macd') return raw.macd === true || !!presetMeta.showMacd;
+ if (key === 'obv') return raw.obv === true || !!presetMeta.showObv;
+ if (key === 'atr') return raw.atr === true || !!presetMeta.showAtr;
+ return raw[key] === true;
+ }
+
+ function buildIndicatorSettingsPanel(key = '', state = {}) {
+ const indicators = sanitizeIndicatorState(state.indicators || {});
+ const lineButton = (lineKey, label) => `<button class="bsm ${indicators[lineKey] !== false ? 'active' : ''}" type="button" data-ds-indicator-line="${escapeHtml(lineKey)}">${escapeHtml(label)}</button>`;
+ if (key === 'ema') {
+ return `<details class="ds-chart-indicator-settings">
+ <summary title="EMA settings">...</summary>
+ <div class="ds-chart-indicator-settings-panel">
+ <div class="ds-chart-settings-title">EMA Lines</div>
+ <div class="ds-chart-settings-options">
+ ${lineButton('ema9', 'EMA 9')}
+ ${lineButton('ema30', 'EMA 30')}
+ ${lineButton('ema100', 'EMA 100')}
+ </div>
+ </div>
+ </details>`;
+ }
+ if (key === 'obv') {
+ return `<details class="ds-chart-indicator-settings">
+ <summary title="OBV settings">...</summary>
+ <div class="ds-chart-indicator-settings-panel">
+ <div class="ds-chart-settings-title">OBV</div>
+ <div class="ds-chart-settings-options">
+ ${lineButton('obvLine', 'OBV Line')}
+ ${lineButton('obvSma', 'SMA Line')}
+ </div>
+ <label class="ds-indicator-number">SMA <input type="number" min="1" max="500" step="1" value="${escapeHtml(indicators.obvSmaLength || DEFAULT_OBV_SMA_LENGTH)}" data-ds-indicator-number="obvSmaLength" /></label>
+ </div>
+ </details>`;
+ }
+ return `<details class="ds-chart-indicator-settings">
+ <summary title="Indicator settings">...</summary>
+ <div class="ds-chart-indicator-settings-panel">
+ <div class="ds-chart-settings-title">Visibility</div>
+ <button class="bsm active" type="button" data-ds-indicator-action="toggle" data-ds-indicator-target="${escapeHtml(key)}">Visible</button>
+ </div>
+ </details>`;
+ }
+
+ function buildChartIndicatorLegend(state = {}, presetMeta = {}, indicators = {}, model = null) {
+ const raw = sanitizeIndicatorState(state.indicators || {});
+ const rows = [];
+ const showLegend = state.showIndicatorLegend !== false;
+ const addRow = (key, label, value, className = key, kind = 'price') => {
+ const active = isIndicatorGroupActive(state, presetMeta, key);
+ if (!active) return;
+ rows.push(`<div class="ds-chart-indicator-row ${active ? '' : 'is-hidden'} ${escapeHtml(className)}" data-ds-chart-indicator-row="${escapeHtml(`${key}-${className}`)}">
+ <span class="ds-indicator-swatch ${escapeHtml(className)}"></span>
+ <strong>${escapeHtml(label)}</strong>
+ <em>${escapeHtml(formatIndicatorValue(value, kind))}</em>
+ <button type="button" title="Hide ${escapeHtml(label)}" data-ds-indicator-action="toggle" data-ds-indicator-target="${escapeHtml(key)}">${active ? 'Hide' : 'Show'}</button>
+ ${buildIndicatorSettingsPanel(key, state)}
+ <button type="button" title="Remove ${escapeHtml(label)}" data-ds-indicator-action="remove" data-ds-indicator-target="${escapeHtml(key)}">x</button>
+ </div>`);
+ };
+ if (raw.volume) addRow('volume', 'Volume', model?.latestVisibleCandle?.volume, 'volume', 'volume');
+ if (isIndicatorGroupActive(state, presetMeta, 'ema')) {
+ if (raw.ema9 !== false) addRow('ema', 'EMA 9', latestFinite(indicators.ema9), 'ema9');
+ if (raw.ema30 !== false) addRow('ema', 'EMA 30', latestFinite(indicators.ema30), 'ema30');
+ if (raw.ema100 !== false) addRow('ema', 'EMA 100', latestFinite(indicators.ema100), 'ema100');
+ }
+ if (isIndicatorGroupActive(state, presetMeta, 'sma')) addRow('sma', 'SMA', latestFinite(indicators.sma20), 'sma20');
+ addRow('vwap', 'VWAP', latestFinite(indicators.vwap), 'vwap');
+ addRow('bollinger', 'Bollinger', latestFinite(indicators.bbMiddle), 'bollinger');
+ addRow('supertrend', 'Supertrend', latestFinite(indicators.supertrend), 'supertrend');
+ addRow('rsi', 'RSI', latestFinite(indicators.rsi14), 'rsi');
+ addRow('macd', 'MACD', latestFinite(indicators.macdLine), 'macd');
+ addRow('obv', `OBV SMA ${raw.obvSmaLength || DEFAULT_OBV_SMA_LENGTH}`, latestFinite(indicators.obvSma100 || indicators.obv), 'obv', 'volume');
+ addRow('atr', 'ATR 14', latestFinite(indicators.atr14), 'atr');
+ if (!rows.length && showLegend) return '';
+ const toggleLabel = showLegend ? 'Hide legend' : 'Show legend';
+ const toggleTitle = showLegend ? 'Hide all indicator legend labels' : 'Show all indicator legend labels';
+ return `<div class="ds-chart-indicator-legend ${showLegend ? '' : 'is-collapsed'}">
+ <button class="ds-chart-legend-toggle" type="button" title="${escapeHtml(toggleTitle)}" data-ds-chart-setting-toggle="showIndicatorLegend">${escapeHtml(toggleLabel)}</button>
+ ${showLegend ? rows.join('') : ''}
+ </div>`;
+ }
+
+ function buildChartDraftLines(draft = null) {
+ const normalized = normalizeChartTradingDraft(draft);
+ if (!normalized) return [];
+ return [
+ { key: 'draft_entry', label: 'Draft Entry', tone: 'entry', price: normalized.entry, source: 'draft', meta: 'Draft' },
+ { key: 'draft_stop', label: 'Draft Stop', tone: 'stop', price: normalized.stopLoss, source: 'draft', meta: 'Draft' },
+ { key: 'draft_target', label: 'Draft Target', tone: 'target', price: normalized.takeProfit, source: 'draft', meta: 'Draft' },
+ ].map(normalizeOrderLine).filter(Boolean);
+ }
+
+ function buildDraftSummary(state = {}, model = null) {
+ const draft = normalizeChartTradingDraft(state.chartTradingDraft);
+ if (!draft) return '';
+ const entry = Number(draft.entry || model?.lastPrice?.price || 0);
+ const stop = Number(draft.stopLoss || 0);
+ const target = Number(draft.takeProfit || 0);
+ const risk = entry > 0 && stop > 0 ? Math.abs(entry - stop) : 0;
+ const reward = entry > 0 && target > 0 ? Math.abs(target - entry) : 0;
+ const rr = risk > 0 && reward > 0 ? (reward / risk).toFixed(2) : '-';
+ const riskPct = risk > 0 && entry > 0 ? ((risk / entry) * 100).toFixed(2) : '-';
+ const replay = normalizeReplayMode(state.replayMode);
+ return `<div class="ds-chart-draft-summary">
+ <span class="draft">Draft</span>
+ <span>${escapeHtml((draft.side || 'side').toUpperCase())}</span>
+ <span>Entry ${escapeHtml(formatPrice(entry))}</span>
+ <span>Stop ${escapeHtml(formatPrice(stop))}</span>
+ <span>Target ${escapeHtml(formatPrice(target))}</span>
+ <span>R:R ${escapeHtml(rr === '-' ? '-' : `1:${rr}`)}</span>
+ <span>Risk ${escapeHtml(riskPct)}%</span>
+ ${replay?.active ? '<span>Replay preview only</span>' : ''}
+ </div>`;
+ }
+
+ function buildReplayControls(state = {}, model = null) {
+ const replay = normalizeReplayMode(state.replayMode);
+ const active = replay?.active === true;
+ const type = replay?.type || (state.replaySeed ? 'trade' : 'market');
+ const playLabel = active && replay.playing ? 'Pause' : 'Play';
+ const speed = replay?.speedMs || 900;
+ return `<div class="ds-chart-replay">
+ <button class="bsm ${active && type === 'market' ? 'active' : ''}" type="button" data-ds-chart-replay-mode="market" title="Start market replay for this symbol">Market Replay</button>
+ ${state.replaySeed ? `<button class="bsm ${active && type === 'trade' ? 'active' : ''}" type="button" data-ds-chart-replay-mode="trade" title="Replay this trade or backtest result">Trade Replay</button>` : ''}
+ ${active ? '<button class="bsm" type="button" data-ds-chart-replay-mode="off" title="Exit replay">Live</button>' : ''}
+ <button class="bsm" type="button" data-ds-chart-replay="back10" title="Step back 10 candles">&#x219E;</button>
+ <button class="bsm" type="button" data-ds-chart-replay="back" title="Step back one candle">&#x2190;</button>
+ <button class="bsm" type="button" data-ds-chart-replay-play="1" title="${escapeHtml(playLabel)} replay">${escapeHtml(playLabel)}</button>
+ <button class="bsm" type="button" data-ds-chart-replay="forward" title="Step forward one candle">&#x2192;</button>
+ <button class="bsm" type="button" data-ds-chart-replay="forward10" title="Step forward 10 candles">&#x21A0;</button>
+ <button class="bsm" type="button" data-ds-chart-replay="reset" title="Reset replay cursor">Reset</button>
+ <select class="si ds-chart-replay-speed" data-ds-chart-replay-speed title="Replay speed">
+ ${[
+ [1500, '0.5x'],
+ [900, '1x'],
+ [450, '2x'],
+ [220, '4x'],
+ ].map(([value, label]) => `<option value="${value}" ${Number(speed) === value ? 'selected' : ''}>${label}</option>`).join('')}
+ </select>
+ </div>`;
+ }
+
+ function buildChartTradeButtons(state = {}, model = null) {
+ if (isFwdIndexSymbol(state.symbol || '')) {
+ return `<div class="live-order-chart-timeframes ds-chart-trade-controls">
+ <span class="account-inline-note">FWD-10 is a market index. Use it for regime and scanner context, not order placement.</span>
+ </div>`;
+ }
+ const mode = normalizeChartTradingMode(state.chartTradingMode);
+ const replay = normalizeReplayMode(state.replayMode);
+ const modes = [
+ ['select', 'Select'],
+ ['entry', 'Entry'],
+ ['stop', 'Stop'],
+ ['target', 'Target'],
+ ['adjust', 'Adjust'],
+ ].map(([key, label]) => `<button class="bsm ${mode === key ? 'active' : ''}" type="button" title="${escapeHtml(label)} chart tool" data-ds-chart-trading-mode="${key}">${escapeHtml(label)}</button>`).join('');
+ const buyLabel = replay?.active ? 'Preview From Cursor' : 'Preview Buy';
+ return `<div class="live-order-chart-timeframes ds-chart-trade-controls">
+ ${modes}
+ <button class="bsm ds-chart-trade-btn buy" type="button" title="Preview buy from chart (Shift+B)" data-ds-chart-trade="buy">${escapeHtml(buyLabel)}</button>
+ <button class="bsm ds-chart-trade-btn sell" type="button" title="Preview sell from chart (Shift+C)" data-ds-chart-trade="sell">Preview Sell</button>
+ <button class="bsm" type="button" title="Preview stop protection from draft" data-ds-chart-preview-protection="stop">Preview Stop</button>
+ <button class="bsm" type="button" title="Preview target protection from draft" data-ds-chart-preview-protection="target">Preview Target</button>
+ <button class="bsm" type="button" title="Clear chart draft" data-ds-chart-draft-clear="1">Clear Draft</button>
+ </div>`;
+ }
+
+ function buildTradeReadPanel(intelligence = null, state = {}) {
+ const panel = intelligence?.panel;
+ if (!panel || state.rightPanelOpen === false) return '';
+ const decision = intelligence?.decision || {};
+ const decisionBlock = decision.status
+ ? `<div class="ds-decision-card ${escapeHtml(String(decision.status || 'Review').toLowerCase())}">
+ <div class="ds-decision-head">
+ <span>${escapeHtml(decision.status || 'Review')}</span>
+ <strong>${escapeHtml(decision.action || 'Review context')}</strong>
+ </div>
+ <div class="ds-decision-confidence">
+ <i style="width:${Math.max(0, Math.min(100, Number(decision.confidence || 0))).toFixed(0)}%"></i>
+ </div>
+ <div class="ds-decision-meta">
+ <span>${escapeHtml(`${Math.round(Number(decision.confidence || 0))}% confidence`)}</span>
+ <em>${escapeHtml(decision.riskNote || '')}</em>
+ </div>
+ <p>${escapeHtml(decision.reason || 'Decision context is limited')}</p>
+ </div>`
+ : '';
+ const renderDecisionList = (title, rows = [], empty = '') => {
+ const list = Array.isArray(rows) ? rows : [];
+ if (!list.length && !empty) return '';
+ return `<div class="ds-trade-read-block ds-decision-list">
+ <div class="ds-trade-read-kicker">${escapeHtml(title)}</div>
+ ${list.length
+ ? list.map(item => `<div class="ds-decision-item ${escapeHtml(item.tone || 'neutral')}"><span></span><strong>${escapeHtml(item.label || item)}</strong></div>`).join('')
+ : `<div class="ds-decision-item neutral"><span></span><strong>${escapeHtml(empty)}</strong></div>`}
+ </div>`;
+ };
+ return `
+ <aside class="ds-trade-read-panel ${escapeHtml(panel.tone || 'neutral')}" aria-label="Trade read">
+ ${decisionBlock}
+ <div class="ds-trade-read-title">
+ <span>${escapeHtml(panel.title || 'Trade Read')}</span>
+ <strong>${escapeHtml(panel.headline || 'Context')}</strong>
+ </div>
+ <div class="ds-trade-read-grid">
+ ${(Array.isArray(panel.metrics) ? panel.metrics : []).map(metric => `
+ <div class="ds-trade-read-metric">
+ <span>${escapeHtml(metric.label || '')}</span>
+ <strong>${escapeHtml(formatIntelMetric(metric))}</strong>
+ </div>`).join('')}
+ </div>
+ ${(Array.isArray(panel.levels) && panel.levels.length) ? `
+ <div class="ds-trade-read-block">
+ <div class="ds-trade-read-kicker">Levels</div>
+ ${panel.levels.map(level => `
+ <div class="ds-trade-read-row ${escapeHtml(level.tone || '')}">
+ <span>${escapeHtml(level.label || '')}</span>
+ <strong>$${escapeHtml(formatPrice(level.value))}${level.meta ? ` <em>${escapeHtml(level.meta)}</em>` : ''}</strong>
+ </div>`).join('')}
+ </div>` : ''}
+ <div class="ds-trade-read-block">
+ <div class="ds-trade-read-kicker">Checklist</div>
+ ${(Array.isArray(panel.checklist) ? panel.checklist : []).map(item => `
+ <div class="ds-trade-read-row">
+ <span>${escapeHtml(item.label || '')}</span>
+ <strong>${escapeHtml(item.value || '-')}</strong>
+ </div>`).join('')}
+ </div>
+ ${(Array.isArray(panel.reasons) && panel.reasons.length) ? `
+ <div class="ds-trade-read-block">
+ <div class="ds-trade-read-kicker">Reasons</div>
+ ${panel.reasons.map(reason => `<p>${escapeHtml(reason)}</p>`).join('')}
+ </div>` : ''}
+ ${renderDecisionList('Confirmations', decision.confirmations, 'No confirmation yet')}
+ ${renderDecisionList('Warnings', decision.warnings)}
+ ${renderDecisionList('Invalidation', decision.invalidations)}
+ ${Array.isArray(decision.nextWatch) && decision.nextWatch.length ? `
+ <div class="ds-trade-read-block ds-decision-watch">
+ <div class="ds-trade-read-kicker">Next Watch</div>
+ ${decision.nextWatch.map(item => `<p>${escapeHtml(item)}</p>`).join('')}
+ </div>` : ''}
+ ${(Array.isArray(intelligence?.mtf) && intelligence.mtf.length) ? `
+ <div class="ds-trade-read-block">
+ <div class="ds-trade-read-kicker">Multi-Timeframe</div>
+ <div class="ds-mtf-stack">
+ ${intelligence.mtf.map(row => `
+ <div class="ds-mtf-row ${escapeHtml(row.tone || 'neutral')}">
+ <span>${escapeHtml(row.label || '')}</span>
+ <strong>${escapeHtml(row.trend || 'Mixed')}</strong>
+ ${row.meta ? `<em>${escapeHtml(row.meta)}</em>` : ''}
+ </div>`).join('')}
+ </div>
+ </div>` : ''}
+ </aside>`;
+ }
+
+ function decisionRows(rows = [], empty = 'No data yet') {
+ const list = Array.isArray(rows) ? rows : [];
+ if (!list.length) return `<div class="ds-context-empty">${escapeHtml(empty)}</div>`;
+ return list.map(item => `<div class="ds-context-list-row ${escapeHtml(item.tone || 'neutral')}"><span></span><strong>${escapeHtml(item.label || item)}</strong></div>`).join('');
+ }
+
+ function buildDeskWatchlistRows(items = [], activeSymbol = '') {
+ const rows = (Array.isArray(items) ? items : []).filter(item => String(item?.symbol || '').trim()).slice(0, 14);
+ if (!rows.length) return `<div class="ds-context-empty">No symbols in this list.</div>`;
+ return `<div class="ds-context-watch-table">
+ <div class="ds-context-watch-head"><span>Symbol</span><span>LTP</span><span>Chg%</span><span>TQ</span></div>
+ ${rows.map(item => {
+ const symbol = String(item.symbol || '').trim().toUpperCase();
+ const price = Number(item.price || item.markPrice || item.close || 0);
+ const chg = Number(item.change24h || item.changePct || item.percentChange || 0);
+ const tq = Number(item.tradeQuality?.score || item.score || 0);
+ return `<button class="ds-context-watch-row ${symbol === activeSymbol ? 'active' : ''}" type="button" data-ds-context-symbol="${escapeHtml(symbol)}">
+ <strong>${escapeHtml(symbol)}</strong>
+ <span>${escapeHtml(formatPrice(price))}</span>
+ <span class="${chg >= 0 ? 'good' : 'danger'}">${escapeHtml(`${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%`)}</span>
+ <span>${escapeHtml(String(Math.round(tq)))}</span>
+ </button>`;
+ }).join('')}
+ </div>`;
+ }
+
+ function buildDeskContextPanel(state = {}, intelligence = null, signal = null, marketIndex = null, contextData = {}) {
+ const activeTab = normalizeContextTab(state.contextTab);
+ const activeWatch = normalizeWatchlistTab(state.watchlistTab);
+ const panel = intelligence?.panel || {};
+ const decision = intelligence?.decision || {};
+ const metrics = Array.isArray(panel.metrics) ? panel.metrics : [];
+ const levels = Array.isArray(panel.levels) ? panel.levels : [];
+ const reasons = Array.isArray(panel.reasons) ? panel.reasons : [];
+ const symbol = String(state.symbol || '').trim().toUpperCase();
+ const watchSources = {
+ '1': Array.isArray(contextData.decisionShortlist) && contextData.decisionShortlist.length ? contextData.decisionShortlist : contextData.scanResults,
+ '2': Array.isArray(contextData.manualWatchlistSignals) ? contextData.manualWatchlistSignals : [],
+ '3': Array.isArray(contextData.autoWatchlistSignals) && contextData.autoWatchlistSignals.length ? contextData.autoWatchlistSignals : contextData.scanResults,
+ };
+ const tabButton = (key, label) => `<button class="${activeTab === key ? 'active' : ''}" type="button" data-ds-context-tab="${escapeHtml(key)}">${escapeHtml(label)}</button>`;
+ const body = (() => {
+ if (activeTab === 'watchlist') {
+ return `<div class="ds-context-watch-tabs">
+ ${DESK_WATCHLIST_TABS.map(tab => `<button class="${activeWatch === tab ? 'active' : ''}" type="button" data-ds-watchlist-tab="${tab}">${tab}</button>`).join('')}
+ </div>
+ ${buildDeskWatchlistRows(watchSources[activeWatch], symbol)}`;
+ }
+ if (activeTab === 'decision') {
+ return `<div class="ds-decision-card ${escapeHtml(String(decision.status || 'review').toLowerCase())}">
+ <div class="ds-decision-head"><span>${escapeHtml(decision.status || 'Review')}</span><strong>${escapeHtml(decision.action || 'Review context')}</strong></div>
+ <div class="ds-decision-confidence"><i style="width:${Math.max(0, Math.min(100, Number(decision.confidence || 0))).toFixed(0)}%"></i></div>
+ <div class="ds-decision-meta"><span>${escapeHtml(`${Math.round(Number(decision.confidence || 0))}% confidence`)}</span><em>${escapeHtml(decision.riskNote || '')}</em></div>
+ <p>${escapeHtml(decision.reason || 'Decision context is limited')}</p>
+ </div>
+ <div class="ds-context-section"><h4>Confirmations</h4>${decisionRows(decision.confirmations, 'No confirmation yet')}</div>
+ <div class="ds-context-section"><h4>Warnings</h4>${decisionRows(decision.warnings, 'No warning yet')}</div>
+ <div class="ds-context-section"><h4>Invalidation</h4>${decisionRows(decision.invalidations, 'No invalidation rule yet')}</div>
+ <div class="ds-context-section"><h4>Next Watch</h4>${(Array.isArray(decision.nextWatch) && decision.nextWatch.length) ? decision.nextWatch.map(item => `<p>${escapeHtml(item)}</p>`).join('') : '<div class="ds-context-empty">No watch item yet.</div>'}</div>`;
+ }
+ if (activeTab === 'review') {
+ return `<div class="ds-trade-read-title"><span>${escapeHtml(panel.title || 'Trade Read')}</span><strong>${escapeHtml(panel.headline || 'Context needs confirmation')}</strong></div>
+ <div class="ds-trade-read-grid">${metrics.map(metric => `<div class="ds-trade-read-metric"><span>${escapeHtml(metric.label || '')}</span><strong>${escapeHtml(formatIntelMetric(metric))}</strong></div>`).join('')}</div>
+ <div class="ds-context-section"><h4>Reasons</h4>${reasons.length ? reasons.map(reason => `<p>${escapeHtml(reason)}</p>`).join('') : '<div class="ds-context-empty">No reason data yet.</div>'}</div>
+ <div class="ds-context-section"><h4>Setup</h4>${decisionRows([
+ signal?.setupFamilyLabel ? { label: signal.setupFamilyLabel, tone: 'neutral' } : null,
+ signal?.rsLabel ? { label: signal.rsLabel, tone: signal.rsState === 'strong' ? 'good' : signal.rsState === 'weak' ? 'danger' : 'neutral' } : null,
+ signal?.signalPersistence?.label ? { label: signal.signalPersistence.label, tone: 'neutral' } : null,
+ ].filter(Boolean), 'No setup context yet')}</div>`;
+ }
+ if (activeTab === 'levels') {
+ return `<div class="ds-context-section"><h4>Nearest Levels</h4>${levels.length ? levels.map(level => `<div class="ds-trade-read-row ${escapeHtml(level.tone || '')}"><span>${escapeHtml(level.label || '')}</span><strong>$${escapeHtml(formatPrice(level.value))}${level.meta ? ` <em>${escapeHtml(level.meta)}</em>` : ''}</strong></div>`).join('') : '<div class="ds-context-empty">No level data yet.</div>'}</div>
+ <div class="ds-context-section"><h4>Order Context</h4>${(Array.isArray(state.orderContext?.lines) && state.orderContext.lines.length) ? state.orderContext.lines.map(line => `<div class="ds-trade-read-row ${escapeHtml(line.tone || '')}"><span>${escapeHtml(line.label || line.role || 'Line')}</span><strong>$${escapeHtml(formatPrice(line.price))}</strong></div>`).join('') : '<div class="ds-context-empty">No order lines active.</div>'}</div>`;
+ }
+ return `<div class="ds-trade-read-grid">${metrics.map(metric => `<div class="ds-trade-read-metric"><span>${escapeHtml(metric.label || '')}</span><strong>${escapeHtml(formatIntelMetric(metric))}</strong></div>`).join('')}</div>
+ <div class="ds-context-section"><h4>Market Regime</h4><p>${escapeHtml(String(signal?.marketRegime || marketIndex?.regime || 'Unknown').replace(/_/g, ' '))}</p></div>
+ <div class="ds-context-section"><h4>Multi-Timeframe</h4>${Array.isArray(intelligence?.mtf) && intelligence.mtf.length ? `<div class="ds-mtf-stack">${intelligence.mtf.map(row => `<div class="ds-mtf-row ${escapeHtml(row.tone || 'neutral')}"><span>${escapeHtml(row.label || '')}</span><strong>${escapeHtml(row.trend || 'Mixed')}</strong>${row.meta ? `<em>${escapeHtml(row.meta)}</em>` : ''}</div>`).join('')}</div>` : '<div class="ds-context-empty">No MTF data yet.</div>'}</div>`;
+ })();
+ return `<aside class="ds-desk-panel ds-desk-context-panel" data-ds-desk-panel="context">
+ <div class="ds-desk-panel-head">
+ <div><strong>Context</strong><span>${escapeHtml(symbol || 'No symbol')}</span></div>
+ <div class="ds-desk-panel-actions">
+ <button type="button" title="Maximize" data-ds-desk-maximize="context">[]</button>
+ <button type="button" title="Collapse" data-ds-desk-collapse="context">x</button>
+ </div>
+ </div>
+ <div class="ds-context-tabs">
+ ${tabButton('watchlist', 'Watchlist')}
+ ${tabButton('decision', 'Decision')}
+ ${tabButton('review', 'Review')}
+ ${tabButton('levels', 'Levels')}
+ ${tabButton('market', 'Market')}
+ </div>
+ <div class="ds-context-body">${body}</div>
+ </aside>`;
+ }
+
+ function buildDeskChartPanel(panelKey, title, panelState = {}, dataset = {}, model = null, intelligence = null, state = {}, calculatedIndicators = {}) {
+ const tf = normalizeTimeframe(panelState.timeframe || state.timeframe || '5m');
+ const statusText = !panelState.symbol
+ ? 'Choose a symbol'
+ : dataset?.ok
+ ? `${panelState.symbol} | ${RESOLUTION_LABELS[tf]} | ${model?.visibleCount || 0}/${model?.totalCount || 0}`
+ : (dataset?.error || 'Chart unavailable');
+ const chartId = `${state.chartViewMode || 'tab'}-${panelKey}`;
+ const chartMarkup = !model
+ ? `<div class="empty compact"><div class="ei">--</div><div class="eh">${escapeHtml(dataset?.ok ? 'No visible candles' : 'Chart unavailable')}</div><div class="es">${escapeHtml(dataset?.error || 'Public candles will appear here once a symbol is available.')}</div></div>`
+ : `<div class="live-order-chart-shell ds-chart-shell ds-lwc-shell" data-ds-chart-shell="${chartId}">
+ ${buildChartIndicatorLegend(panelState, getPresetMeta(panelState.preset || state.preset), calculatedIndicators, model)}
+ <div class="ds-lwc-chart" data-ds-lwc-chart="${chartId}" role="img" aria-label="${escapeHtml(`${panelState.symbol || 'Symbol'} ${title}`)}"></div>
+ <div class="ds-lwc-attribution">Charts powered by <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer">TradingView</a> Lightweight Charts</div>
+ ${buildChartNavControls(chartId)}
+ ${buildIntelligenceOverlay(model, intelligence, panelState)}
+ </div>`;
+ return `<section class="ds-desk-panel ds-desk-chart-panel" data-ds-desk-panel="${escapeHtml(panelKey)}">
+ <div class="ds-desk-panel-head">
+ <div><strong>${escapeHtml(title)}</strong><span>${escapeHtml(statusText)}</span></div>
+ <div class="ds-desk-panel-actions">
+ <select data-ds-desk-tf="${escapeHtml(panelKey)}">${RESOLUTIONS.map(tfOption => `<option value="${tfOption}" ${tfOption === tf ? 'selected' : ''}>${escapeHtml(RESOLUTION_LABELS[tfOption])}</option>`).join('')}</select>
+ ${buildChartHeaderNavButtons(chartId)}
+ <button type="button" title="Fit" data-ds-chart-fit="1">Fit</button>
+ <button type="button" title="Reset chart view" data-ds-chart-nav="fit" data-ds-chart-nav-target="${escapeHtml(chartId)}">Reset</button>
+ <button type="button" title="Maximize" data-ds-desk-maximize="${escapeHtml(panelKey)}">[]</button>
+ <button type="button" title="Collapse" data-ds-desk-collapse="${escapeHtml(panelKey)}">x</button>
+ </div>
+ </div>
+ ${buildNearestKeyLevelStrip(model)}
+ ${chartMarkup}
+ </section>`;
+ }
+
+ function buildExecutionPulse(intelligence = null) {
+ const pulse = Array.isArray(intelligence?.pulse) ? intelligence.pulse : [];
+ if (!pulse.length) return '';
+ return `<div class="ds-execution-pulse">
+ ${pulse.map(item => `<span class="${escapeHtml(item.tone || 'neutral')}"><em>${escapeHtml(item.label || '')}</em><strong>${escapeHtml(item.value || '-')}</strong></span>`).join('')}
+ </div>`;
+ }
+
+ function buildDecisionBadges(intelligence = null) {
+ const decision = intelligence?.decision || {};
+ if (!decision.status) return '';
+ return `<div class="ds-chart-meta-row ds-decision-badge-row">
+ <span class="${escapeHtml(String(decision.status || 'review').toLowerCase())}">Decision ${escapeHtml(decision.status)}</span>
+ <span>${escapeHtml(decision.action || 'Review context')}</span>
+ <span>${escapeHtml(`${Math.round(Number(decision.confidence || 0))}% confidence`)}</span>
+ <span>${escapeHtml(decision.reason || '')}</span>
+ </div>`;
+ }
+
+ function buildIntelligenceOverlay(model = null, intelligence = null, state = {}) {
+ if (!model || !intelligence || state.intelligenceOverlays === false) return '';
+ const density = normalizeOverlayDensity(state.overlayDensity);
+ const maxZones = density === 'minimal' ? 2 : density === 'trade' ? 4 : density === 'analysis' ? 7 : 12;
+ const maxMarkers = density === 'minimal' ? 0 : density === 'trade' ? 3 : density === 'analysis' ? 8 : 20;
+ const zoneBadges = (Array.isArray(intelligence.zones) ? intelligence.zones : []).slice(0, maxZones).map(zone => {
+ const price = Number(zone.price || 0);
+ const y = price > 0 && model.chartTop != null && model.chartHeight
+ ? model.chartTop + ((model.chartMax - price) / Math.max(1e-8, model.chartMax - model.chartMin)) * model.chartHeight
+ : 0;
+ const topPct = model.chartHeight ? ((y - model.chartTop) / model.chartHeight) * 100 : 50;
+ return `<div class="ds-intel-zone-badge ${escapeHtml(zone.kind || '')}" style="top:${Math.max(0, Math.min(100, topPct)).toFixed(2)}%">
+ <strong>${escapeHtml(zone.shortLabel || zone.label || 'Level')}</strong>
+ <span>$${escapeHtml(formatPrice(zone.price))}</span>
+ ${zone.distancePct ? `<em>${escapeHtml(zone.distancePct)}</em>` : ''}
+ </div>`;
+ }).join('');
+ const allMarkers = [
+ ...(Array.isArray(intelligence.markers) ? intelligence.markers : []),
+ ...(Array.isArray(intelligence.decision?.markers) ? intelligence.decision.markers : []),
+ ].slice(0, maxMarkers);
+ const setupMarkers = allMarkers.map(marker => {
+ const index = findNearestCandleIndex(model.latestVisibleCandle ? model.candles : [], marker.time);
+ const candle = index >= 0 ? model.candles[index] : null;
+ const leftPct = candle ? ((candle.x - model.chartLeft) / Math.max(1, model.chartWidth)) * 100 : 92;
+ const price = Number(marker.price || candle?.close || 0);
+ const y = price > 0 ? model.chartTop + ((model.chartMax - price) / Math.max(1e-8, model.chartMax - model.chartMin)) * model.chartHeight : model.chartTop;
+ const topPct = ((y - model.chartTop) / Math.max(1, model.chartHeight)) * 100;
+ return `<div class="ds-intel-marker ${escapeHtml(marker.tone || 'neutral')}" style="left:${Math.max(0, Math.min(96, leftPct)).toFixed(2)}%;top:${Math.max(0, Math.min(100, topPct)).toFixed(2)}%">
+ ${escapeHtml(marker.label || 'Context')}
+ </div>`;
+ }).join('');
+ const decisionLines = (Array.isArray(intelligence.decision?.lines) ? intelligence.decision.lines : []).map(line => {
+ const price = Number(line.price || 0);
+ if (!(price > 0) || !model.chartHeight) return '';
+ const y = model.chartTop + ((model.chartMax - price) / Math.max(1e-8, model.chartMax - model.chartMin)) * model.chartHeight;
+ const topPct = ((y - model.chartTop) / Math.max(1, model.chartHeight)) * 100;
+ return `<div class="ds-decision-line ${escapeHtml(line.tone || 'neutral')}" style="top:${Math.max(0, Math.min(100, topPct)).toFixed(2)}%">
+ <span>${escapeHtml(line.label || 'Decision')}</span>
+ </div>`;
+ }).join('');
+ return `<div class="ds-chart-intel-layer" aria-hidden="true">${zoneBadges}${decisionLines}${setupMarkers}</div>`;
+ }
+
+ function buildKeyLevelVisualLayer(model = null, settingsInput = {}) {
+ if (!model || !Array.isArray(model.keyZones) || !model.keyZones.length) return '';
+ return `<div class="ds-key-level-layer" aria-hidden="true"></div>`;
+ }
+
+ function buildNearestKeyLevelStrip(model = null) {
+ const level = model?.nearestKeyLevel;
+ if (!level || !(Number(level.price || 0) > 0)) return '';
+ const side = level.kind === 'resistance' ? 'Resistance' : 'Support';
+ const tone = level.tone || (level.kind === 'resistance' ? 'watch' : 'good');
+ const stateText = level.label || 'Near level';
+ const quality = Number(level.reactionQuality || 0);
+ return `<div class="ds-chart-meta-row ds-key-nearest-row">
+ <span class="${escapeHtml(tone)}"><strong>Nearest ${escapeHtml(side)}</strong> ${escapeHtml(level.distanceLabel || '')}</span>
+ <span>${escapeHtml(stateText)}</span>
+ <span>Quality ${escapeHtml(`${quality}%`)}</span>
+ <span>${escapeHtml(formatPrice(level.price))}</span>
+ </div>`;
+ }
+
+ function buildChartNavControls(target = '') {
+ const chartTarget = escapeHtml(target || '');
+ return `<div class="ds-chart-nav-controls" aria-label="Chart navigation controls">
+ <button type="button" title="Zoom out" data-ds-chart-nav="zoom-out" data-ds-chart-nav-target="${chartTarget}">-</button>
+ <button type="button" title="Zoom in" data-ds-chart-nav="zoom-in" data-ds-chart-nav-target="${chartTarget}">+</button>
+ <button type="button" title="Scroll left" data-ds-chart-nav="scroll-left" data-ds-chart-nav-target="${chartTarget}">&lsaquo;</button>
+ <button type="button" title="Scroll right" data-ds-chart-nav="scroll-right" data-ds-chart-nav-target="${chartTarget}">&rsaquo;</button>
+ <button type="button" title="Reset chart view" data-ds-chart-nav="fit" data-ds-chart-nav-target="${chartTarget}">&#8635;</button>
+ </div>`;
+ }
+
+ function buildChartRangeControls(state = {}) {
+ const tf = normalizeTimeframe(state.timeframe || '15m');
+ const activeCount = Number(state.visibleCandleCount || defaultVisibleCount(tf));
+ const oneYear = tf === '1d' ? 365 : MAX_RENDER_CANDLES;
+ const twoYear = tf === '1d' ? 730 : MAX_RENDER_CANDLES;
+ const isActive = count => Math.abs(activeCount - count) <= 2;
+ const buttons = [
+  ['recent', defaultVisibleCount(tf), 'Recent'],
+  ['1y', oneYear, '1Y'],
+  ['2y', twoYear, '2Y'],
+  ['all', MAX_RENDER_CANDLES, 'All'],
+ ];
+ return `<div class="live-order-chart-timeframes ds-chart-range-controls">
+ ${buttons.map(([key, count, label]) => `<button class="bsm ${isActive(count) ? 'active' : ''}" type="button" data-ds-chart-range="${escapeHtml(key)}">${escapeHtml(label)}</button>`).join('')}
+ </div>`;
+ }
+
+ function buildChartHeaderNavButtons(target = '') {
+ const chartTarget = escapeHtml(target || '');
+ return [
+ `<button type="button" title="Zoom out" data-ds-chart-nav="zoom-out" data-ds-chart-nav-target="${chartTarget}">-</button>`,
+ `<button type="button" title="Zoom in" data-ds-chart-nav="zoom-in" data-ds-chart-nav-target="${chartTarget}">+</button>`,
+ `<button type="button" title="Scroll left" data-ds-chart-nav="scroll-left" data-ds-chart-nav-target="${chartTarget}">&lsaquo;</button>`,
+ `<button type="button" title="Scroll right" data-ds-chart-nav="scroll-right" data-ds-chart-nav-target="${chartTarget}">&rsaquo;</button>`,
+ ].join('');
+ }
+
+ function buildChartModel(dataset = {}, state = {}, strategy = {}, orderContext = null) {
+ const candles = Array.isArray(dataset.candles) ? dataset.candles : [];
+ if (!candles.length) return null;
+ const timeframe = normalizeTimeframe(state.timeframe || dataset.timeframe || '5m');
+ const eventCandleTimes = getEventCandleTimes(candles, state);
+ const chartCandles = eventCandleTimes.size
+ ? candles.filter(candle => !eventCandleTimes.has(Number(candle.time || 0)))
+ : candles;
+ const visibleWindow = getVisibleWindow(chartCandles, state);
+ const visibleCandles = visibleWindow.visibleCandles;
+ if (!visibleCandles.length) return null;
+ const presetMeta = getPresetMeta(state.preset);
+ const settings = {
+ ...sanitizeKeyLevelSettings(dataset?.keyLevels?.config || strategy.keyLevelSettings || {}),
+ overlayDensity: normalizeOverlayDensity(state.overlayDensity || 'minimal'),
+ };
+ const visibleIndices = visibleCandles.map(candle => candles.findIndex(source => Number(source.time || 0) === Number(candle.time || 0)));
+ const referencePrice = Number(visibleCandles[visibleCandles.length - 1]?.close || visibleCandles[visibleCandles.length - 1]?.high || 0);
+ const visibleKeyZones = presetMeta.showKeyLevels ? collectVisibleKeyZones(dataset.keyLevels, settings, referencePrice, timeframe) : [];
+ const enrichedKeyZones = visibleKeyZones.map(zone => {
+ const reaction = buildKeyLevelReactionData(zone, visibleCandles, referencePrice);
+ const state = keyLevelState(zone, visibleCandles, referencePrice);
+ const distanceAbs = Math.abs(Number(zone.price || 0) - referencePrice);
+ const distancePct = keyLevelDistancePct(zone, referencePrice);
+ return {
+ ...zone,
+ ...reaction,
+ ...state,
+ distanceAbs,
+ distancePct,
+ distanceLabel: `${formatPrice(distanceAbs)} / ${(distancePct * 100).toFixed(2)}%`,
+ isFar: reaction.isFar && state.state !== 'near',
+ };
+ });
+ const nearestKeyLevel = enrichedKeyZones.length
+ ? enrichedKeyZones.slice().sort((a, b) => Number(a.distancePct || 1) - Number(b.distancePct || 1))[0]
+ : null;
+ const overlayLines = state.showOrders && orderContext?.lines
+ ? orderContext.lines.map(normalizeOrderLine).filter(Boolean)
+ : [];
+ const draftLines = buildChartDraftLines(state.chartTradingDraft);
+ const chartLines = [...overlayLines, ...draftLines];
+ const replayMode = normalizeReplayMode(state.replayMode);
+ const replayCursorTime = replayMode?.active ? Number(visibleCandles[visibleCandles.length - 1]?.time || 0) : 0;
+ const replayMarkers = (Array.isArray(state.replaySeed?.markers) ? state.replaySeed.markers : [])
+ .map(normalizeReplayMarker)
+ .filter(marker => !replayCursorTime || Number(marker.ts || 0) <= replayCursorTime)
+ .filter(Boolean);
+ const priceCandidates = [];
+ visibleCandles.forEach(candle => {
+ priceCandidates.push(Number(candle.high || 0), Number(candle.low || 0));
+ });
+ if (isIndicatorGroupActive(state, presetMeta, 'ema')) {
+ ['ema9', 'ema30', 'ema100'].forEach(key => {
+ const values = Array.isArray(dataset?.studies?.[key]) ? dataset.studies[key] : [];
+ visibleIndices.forEach(index => {
+ const value = Number(values[index]);
+ if (Number.isFinite(value) && value > 0) priceCandidates.push(value);
+ });
+ });
+ }
+ if (isIndicatorGroupActive(state, presetMeta, 'vwap')) {
+ const values = Array.isArray(dataset?.studies?.vwap) ? dataset.studies.vwap : [];
+ visibleIndices.forEach(index => {
+ const value = Number(values[index]);
+ if (Number.isFinite(value) && value > 0) priceCandidates.push(value);
+ });
+ }
+ enrichedKeyZones.forEach(zone => {
+ priceCandidates.push(Number(zone.zoneLow || 0), Number(zone.zoneHigh || 0), Number(zone.price || 0));
+ if (settings.showPivotCircles) {
+ (zone.sourcePivots || []).forEach(pivot => priceCandidates.push(Number(pivot.price || 0)));
+ }
+ (Array.isArray(zone.reactionMarkers) ? zone.reactionMarkers : []).forEach(marker => priceCandidates.push(Number(marker.price || 0)));
+ });
+ chartLines.forEach(line => priceCandidates.push(Number(line.price || 0)));
+ replayMarkers.forEach(marker => priceCandidates.push(Number(marker.price || 0)));
+ const filteredPrices = priceCandidates.filter(value => Number.isFinite(value) && value > 0);
+ const minPrice = Math.min(...filteredPrices);
+ const maxPrice = Math.max(...filteredPrices);
+ const range = Math.max(1e-8, maxPrice - minPrice);
+ const pad = range * 0.08;
+ const chartMin = Math.max(1e-8, minPrice - pad);
+ const chartMax = maxPrice + pad;
+ const width = 960;
+ const height = 360;
+ const chartLeft = 16;
+ const chartTop = 10;
+ const chartWidth = 860;
+ const chartHeight = state.chartViewMode === SURFACE_REVIEW && normalizePreset(state.preset) === 'ema_obv' ? 326 : 306;
+ const priceToY = (price) => chartTop + ((chartMax - price) / Math.max(1e-8, chartMax - chartMin)) * chartHeight;
+ const indexToX = (index) => chartLeft + (chartWidth * index / Math.max(1, visibleCandles.length - 1));
+ const candleBodyWidth = Math.max(3, Math.min(14, chartWidth / Math.max(visibleCandles.length * 1.6, 12)));
+ const gridLines = new Array(5).fill(0).map((_, index) => {
+ const value = chartMin + ((chartMax - chartMin) * index / 4);
+ return {
+ key: `grid_${index}`,
+ y: priceToY(value),
+ value,
+ };
+ });
+ const volumeAreaTop = chartTop + chartHeight * (state.chartViewMode === SURFACE_REVIEW ? 0.88 : 0.82);
+ const volumeAreaHeight = chartHeight * (state.chartViewMode === SURFACE_REVIEW ? 0.12 : 0.18);
+ const maxVolume = Math.max(...visibleCandles.map(c => Number(c.volume || 0)).filter(v => v > 0), 1);
+ const candlePoints = visibleCandles.map((candle, index) => {
+ const x = indexToX(index);
+ const open = Number(candle.open || 0);
+ const close = Number(candle.close || 0);
+ const high = Number(candle.high || 0);
+ const low = Number(candle.low || 0);
+ const volume = Number(candle.volume || 0);
+ const volBarHeight = maxVolume > 0 ? (volume / maxVolume) * volumeAreaHeight : 0;
+ return {
+ index,
+ time: Number(candle.time || 0),
+ x,
+ yHigh: priceToY(high),
+ yLow: priceToY(low),
+ yOpen: priceToY(open),
+ yClose: priceToY(close),
+ open,
+ high,
+ low,
+ close,
+ volume,
+ volBarY: volumeAreaTop + volumeAreaHeight - volBarHeight,
+ volBarHeight,
+ tone: close >= open ? 'up' : 'down',
+ };
+ });
+ const studyLines = [];
+ if (isIndicatorGroupActive(state, presetMeta, 'ema')) {
+ [
+ { key: 'ema9', label: 'EMA 9', className: 'ema9' },
+ { key: 'ema30', label: 'EMA 30', className: 'ema30' },
+ { key: 'ema100', label: 'EMA 100', className: 'ema100' },
+ ].forEach(definition => {
+ const values = Array.isArray(dataset?.studies?.[definition.key]) ? dataset.studies[definition.key] : [];
+ const points = visibleIndices.map((sourceIndex, visibleIndex) => {
+ const value = Number(values[sourceIndex]);
+ if (!Number.isFinite(value) || !(value > 0)) return null;
+ return { x: indexToX(visibleIndex), y: priceToY(value), value };
+ }).filter(Boolean);
+ if (points.length >= 2) {
+ studyLines.push({
+ ...definition,
+ points,
+ path: buildSvgPath(points),
+ latestValue: points[points.length - 1]?.value || 0,
+ });
+ }
+ });
+ }
+ if (isIndicatorGroupActive(state, presetMeta, 'vwap')) {
+ const values = Array.isArray(dataset?.studies?.vwap) ? dataset.studies.vwap : [];
+ const points = visibleIndices.map((sourceIndex, visibleIndex) => {
+ const value = Number(values[sourceIndex]);
+ if (!Number.isFinite(value) || !(value > 0)) return null;
+ return { x: indexToX(visibleIndex), y: priceToY(value), value };
+ }).filter(Boolean);
+ if (points.length >= 2) {
+ studyLines.push({
+ key: 'vwap',
+ label: 'VWAP',
+ className: 'vwap',
+ points,
+ path: buildSvgPath(points),
+ latestValue: points[points.length - 1]?.value || 0,
+ });
+ }
+ }
+ const keyZones = enrichedKeyZones.map((zone, zoneIndex) => {
+ const centerY = priceToY(zone.price);
+ const topY = priceToY(zone.zoneHigh);
+ const bottomY = priceToY(zone.zoneLow);
+ const tfClass = String(zone.tf || '').toUpperCase() === '1D' ? 'day' : 'm15';
+ const badgeLabel = `${zone.tf} ${zone.kind === 'resistance' ? 'R' : 'S'} ${formatStrength(zone, settings.displayStrengthAs)}`;
+ return {
+ ...zone,
+ key: `zone_${zone.tf}_${zone.kind}_${zoneIndex}_${zone.price}`,
+ x: chartLeft,
+ width: chartWidth,
+ centerY,
+ badgeY: centerY,
+ topY: Math.min(topY, bottomY),
+ bottomY: Math.max(topY, bottomY),
+ className: `${tfClass}-${zone.kind}`,
+ badgeLabel,
+ thickness: settings.thickness,
+ detailLabel: `${badgeLabel} | ${formatPrice(zone.price)} | ${zone.label || 'Key level'} | Quality ${zone.reactionQuality || 0}% | Distance ${zone.distanceLabel}`,
+ pivotCircles: settings.showPivotCircles
+ ? (zone.sourcePivots || []).map((pivot, pivotIndex) => {
+ const visibleIndex = findNearestCandleIndex(visibleCandles, pivot.ts);
+ if (visibleIndex < 0 || visibleIndex >= visibleCandles.length) return null;
+ return {
+ key: `${zoneIndex}_pivot_${pivotIndex}`,
+ x: indexToX(visibleIndex),
+ y: priceToY(pivot.price),
+ };
+ }).filter(Boolean)
+ : [],
+ };
+ });
+ const BADGE_HEIGHT = 22;
+ keyZones.sort((a, b) => a.badgeY - b.badgeY);
+ for (let i = 1; i < keyZones.length; i++) {
+ const prev = keyZones[i - 1];
+ if (keyZones[i].badgeY - prev.badgeY < BADGE_HEIGHT) {
+ keyZones[i].badgeY = prev.badgeY + BADGE_HEIGHT;
+ }
+ }
+ const priceAxis = gridLines.map((line, index) => ({
+ key: `price_axis_${index}`,
+ topPct: ((line.y - chartTop) / Math.max(1, chartHeight)) * 100,
+ label: `$${formatPrice(line.value)}`,
+ }));
+ const axis = buildAxisLabels(visibleCandles, timeframe, visibleWindow.startIndex);
+ const orderTags = chartLines.map((line, index) => ({
+ ...line,
+ key: `order_tag_${line.key}_${index}`,
+ topPct: ((priceToY(line.price) - chartTop) / Math.max(1, chartHeight)) * 100,
+ }));
+ const replayMarkerShapes = replayMarkers.map((marker, index) => {
+ const markerIndex = findNearestCandleIndex(visibleCandles, marker.ts);
+ if (markerIndex < 0 || markerIndex >= visibleCandles.length) return null;
+ return {
+ ...marker,
+ key: `replay_${marker.key}_${index}`,
+ x: indexToX(markerIndex),
+ y: priceToY(marker.price),
+ };
+ }).filter(Boolean);
+ const lastCandle = candlePoints[candlePoints.length - 1] || null;
+ const lastPrice = lastCandle ? {
+ price: lastCandle.close,
+ y: priceToY(lastCandle.close),
+ topPct: ((priceToY(lastCandle.close) - chartTop) / Math.max(1, chartHeight)) * 100,
+ tone: lastCandle.tone,
+ } : null;
+ const rrInfo = (() => {
+ if (!chartLines.length) return null;
+ const entryLine = chartLines.find(l => l.tone === 'entry');
+ const stopLine = chartLines.find(l => l.tone === 'stop');
+ const targetLine = chartLines.find(l => l.tone === 'target');
+ if (!entryLine || !stopLine || !targetLine) return null;
+ const entry = entryLine.price;
+ const stop = stopLine.price;
+ const target = targetLine.price;
+ const riskAbs = Math.abs(entry - stop);
+ const rewardAbs = Math.abs(target - entry);
+ if (riskAbs <= 0) return null;
+ return {
+ riskPct: ((riskAbs / entry) * 100).toFixed(2),
+ rewardPct: ((rewardAbs / entry) * 100).toFixed(2),
+ ratio: (rewardAbs / riskAbs).toFixed(2),
+ };
+ })();
+ return {
+ width,
+ height,
+ chartLeft,
+ chartTop,
+ chartWidth,
+ chartHeight,
+ chartMin,
+ chartMax,
+ candles: candlePoints,
+ candleBodyWidth,
+ studyLines,
+ keyZones,
+ orderTags,
+ replayMarkers: replayMarkerShapes,
+ priceAxis,
+ axisLabels: axis.labels,
+ axisVerticals: axis.verticals,
+ baselineCount: visibleWindow.baselineCount,
+ visibleCount: visibleCandles.length,
+ totalCount: candles.length,
+ hiddenEventCandleCount: eventCandleTimes.size,
+ latestVisibleCandle: visibleCandles[visibleCandles.length - 1] || null,
+ replayCursor: replayMode?.active ? {
+ index: visibleWindow.replayCursorIndex ?? visibleWindow.endIndex,
+ time: Number(visibleCandles[visibleCandles.length - 1]?.time || 0),
+ label: replayMode.type === 'trade' ? 'Trade Replay Cursor' : 'Market Replay Cursor',
+ } : null,
+ lastPrice,
+ nearestKeyLevel,
+ rrInfo,
+ rangeLabel: visibleCandles.length
+ ? `${new Date(visibleCandles[0].time).toLocaleString()} -> ${new Date(visibleCandles[visibleCandles.length - 1].time).toLocaleString()}`
+ : '',
+ gridLines,
+ };
+ }
+
+ function buildPresetMenu(state = {}) {
+ const active = getPresetMeta(state.preset);
+ return `<details class="ds-preset-menu">
+ <summary class="bsm">Presets <span>${escapeHtml(active.label)}</span></summary>
+ <div class="ds-preset-menu-panel">
+ ${PRESET_GROUPS.map(group => `<div class="ds-preset-menu-group">
+ <div class="ds-preset-menu-title">${escapeHtml(group.label)}</div>
+ <div class="ds-preset-menu-options">
+ ${group.presets.map(key => PRESET_META[key]).filter(Boolean).map(meta => `<button class="bsm ${state.preset === meta.id ? 'active' : ''}" type="button" data-ds-chart-preset="${escapeHtml(meta.id)}">${escapeHtml(meta.label)}</button>`).join('')}
+ </div>
+ </div>`).join('')}
+ </div>
+ </details>
+ <span class="ds-active-preset-chip">${escapeHtml(active.label)}</span>`;
+ }
+
+ function buildQuickReviewControls(state = {}) {
+ const currentTf = normalizeTimeframe(state.timeframe || '15m');
+ const tfButton = (tf, label) => `<button class="bsm ds-chart-review-tf ${currentTf === tf ? 'active' : ''}" type="button" data-ds-chart-tf="${escapeHtml(tf)}" data-ds-chart-all-candles="1">${escapeHtml(label)}</button>`;
+ const navButton = (action, label, title) => `<button class="bsm ds-chart-review-nav" type="button" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}" data-ds-chart-nav="${escapeHtml(action)}" data-ds-chart-nav-target="${SURFACE_REVIEW}">${escapeHtml(label)}</button>`;
+ return `<div class="ds-chart-review-controls">
+ <div class="ds-chart-review-tfs" aria-label="Quick View timeframe">
+ ${tfButton('15m', '15m')}
+ ${tfButton('4h', '4H')}
+ ${tfButton('1d', '1D')}
+ </div>
+ <div class="ds-chart-review-navs" aria-label="Quick View navigation">
+ ${navButton('zoom-out', '-', 'Zoom out')}
+ ${navButton('zoom-in', '+', 'Zoom in')}
+ ${navButton('scroll-left', '\u2039', 'Scroll left')}
+ ${navButton('scroll-right', '\u203a', 'Scroll right')}
+ </div>
+ <button class="bsm ds-chart-review-detach" type="button" title="Open detached chart" aria-label="Open detached chart" data-ds-chart-open="1"><span aria-hidden="true"></span></button>
+ </div>`;
+ }
+
+ function buildChartSettingsMenu(state = {}, strategy = {}) {
+ const chartType = normalizeChartType(state.chartType);
+ const indicatorStyle = normalizeIndicatorStyle(state.indicatorStyle);
+ const readoutOn = state.showReadout === true;
+ const legendOn = state.showIndicatorLegend !== false;
+ const gridOn = state.showGrid === true;
+ const hideEventsOn = state.hideEventCandles === true;
+ const keySettings = sanitizeKeyLevelSettings(strategy.keyLevelSettings || {});
+ const keyButton = (key, value, label, active = false) => `<button class="bsm ${active ? 'active' : ''}" type="button" data-ds-key-level-setting="${escapeHtml(key)}" data-ds-key-level-value="${escapeHtml(value)}">${escapeHtml(label)}</button>`;
+ return `<details class="ds-chart-settings-menu">
+ <summary class="bsm">Settings <span>${chartType === 'bars' ? 'Bars' : 'Candles'}</span></summary>
+ <div class="ds-chart-settings-panel">
+ <div class="ds-chart-settings-section">
+ <div class="ds-chart-settings-title">Chart Type</div>
+ <div class="ds-chart-settings-options">
+ <button class="bsm ${chartType === 'bars' ? 'active' : ''}" type="button" data-ds-chart-setting="chartType" data-ds-chart-setting-value="bars">Bars</button>
+ <button class="bsm ${chartType === 'candles' ? 'active' : ''}" type="button" data-ds-chart-setting="chartType" data-ds-chart-setting-value="candles">Candles</button>
+ </div>
+ </div>
+ <div class="ds-chart-settings-section">
+ <div class="ds-chart-settings-title">Indicator Display</div>
+ <div class="ds-chart-settings-options">
+ <button class="bsm ${indicatorStyle === 'tradingview' ? 'active' : ''}" type="button" data-ds-chart-setting="indicatorStyle" data-ds-chart-setting-value="tradingview">TV Style</button>
+ <button class="bsm ${indicatorStyle === 'clean' ? 'active' : ''}" type="button" data-ds-chart-setting="indicatorStyle" data-ds-chart-setting-value="clean">Clean</button>
+ </div>
+ <button class="bsm ${legendOn ? 'active' : ''}" type="button" data-ds-chart-setting-toggle="showIndicatorLegend">Indicator Legend</button>
+ <button class="bsm ${readoutOn ? 'active' : ''}" type="button" data-ds-chart-setting-toggle="showReadout">OHLC Readout</button>
+ <button class="bsm ${gridOn ? 'active' : ''}" type="button" data-ds-chart-setting-toggle="showGrid">Grid Lines</button>
+ <button class="bsm ${hideEventsOn ? 'active' : ''}" type="button" data-ds-chart-setting-toggle="hideEventCandles">Hide Event Candles</button>
+ </div>
+ <div class="ds-chart-settings-section">
+ <div class="ds-chart-settings-title">Key Levels</div>
+ <div class="ds-chart-settings-options">
+ ${[2, 4, 6, 8].map(value => keyButton('numberOfLevels', value, `${value} levels`, keySettings.numberOfLevels === value)).join('')}
+ </div>
+ <div class="ds-chart-settings-options">
+ ${[4, 6, 8, 10].map(value => keyButton('pivotLength', value, `Pivot ${value}`, keySettings.pivotLength === value)).join('')}
+ </div>
+ <div class="ds-chart-settings-options">
+ ${[25, 50, 100].map(value => keyButton('pivotMemory', value, `Memory ${value}`, keySettings.pivotMemory === value)).join('')}
+ </div>
+ <div class="ds-chart-settings-options">
+ ${keyButton('displayStrengthAs', 'count', 'Count', keySettings.displayStrengthAs === 'count')}
+ ${keyButton('displayStrengthAs', 'percent', 'Percent', keySettings.displayStrengthAs === 'percent')}
+ ${keyButton('thickness', 1, '1px', keySettings.thickness === 1)}
+ ${keyButton('thickness', 3, '3px', keySettings.thickness === 3)}
+ ${keyButton('thickness', 5, '5px', keySettings.thickness === 5)}
+ </div>
+ <button class="bsm ${keySettings.showPivotCircles ? 'active' : ''}" type="button" data-ds-key-level-toggle="showPivotCircles">Pivot Circles</button>
+ <button class="bsm ${keySettings.showLevelGlow ? 'active' : ''}" type="button" data-ds-key-level-toggle="showLevelGlow">Level Glow</button>
+ </div>
+ </div>
+ </details>`;
+ }
+
+ function buildChartToolsMenu(state = {}, options = {}) {
+ const density = normalizeOverlayDensity(state.overlayDensity);
+ const isDesk = options.desk === true;
+ const isPreview = options.preview === true;
+ const isAdvanced = options.advanced === true;
+ const openLabel = options.openLabel || (options.isTab ? 'Detach' : 'Open Full Chart');
+ const sections = [];
+ if (isDesk) {
+ sections.push(`<div class="ds-chart-tools-section">
+ <div class="ds-chart-tools-title">View Density</div>
+ <div class="ds-chart-tools-options">
+ ${OVERLAY_DENSITIES.map(item => `<button class="bsm ${density === item ? 'active' : ''}" type="button" data-ds-overlay-density="${item}">${escapeHtml(item[0].toUpperCase() + item.slice(1))}</button>`).join('')}
+ </div>
+ </div>`);
+ }
+ const workspaceButtons = [];
+ if (isDesk) {
+ workspaceButtons.push(`<button class="bsm ${state.syncCharts !== false ? 'active' : ''}" type="button" data-ds-desk-sync="1">Sync</button>`);
+ workspaceButtons.push(`<button class="bsm ${state.deskLayoutMode === 'single' ? 'active' : ''}" type="button" data-ds-layout-mode="${state.deskLayoutMode === 'single' ? 'threePart' : 'single'}">${state.deskLayoutMode === 'single' ? 'Desk' : 'Single'}</button>`);
+ } else if (!isPreview && isAdvanced) {
+ workspaceButtons.push(`<button class="bsm ${state.rightPanelOpen !== false ? 'active' : ''}" type="button" data-ds-chart-toggle="right-panel">Trade Read</button>`);
+ }
+ if (!isDesk && (isAdvanced || isPreview)) {
+ workspaceButtons.push(`<button class="bsm" type="button" data-ds-chart-open="1">${escapeHtml(openLabel)}</button>`);
+ }
+ if (workspaceButtons.length) {
+ sections.push(`<div class="ds-chart-tools-section">
+ <div class="ds-chart-tools-title">Workspace</div>
+ <div class="ds-chart-tools-options">${workspaceButtons.join('')}</div>
+ </div>`);
+ }
+ const overlayButtons = [];
+ overlayButtons.push(`<button class="bsm ${state.showVwap ? 'active' : ''}" type="button" data-ds-chart-toggle="vwap">VWAP</button>`);
+ overlayButtons.push(`<button class="bsm ${state.showOrders ? 'active' : ''}" type="button" data-ds-chart-toggle="orders">Orders</button>`);
+ if (isDesk || isAdvanced) overlayButtons.push(`<button class="bsm ${state.intelligenceOverlays !== false ? 'active' : ''}" type="button" data-ds-chart-toggle="intel-overlays">Smart Marks</button>`);
+ sections.push(`<div class="ds-chart-tools-section">
+ <div class="ds-chart-tools-title">Overlays</div>
+ <div class="ds-chart-tools-options">${overlayButtons.join('')}</div>
+ </div>`);
+ const navigationButtons = [
+ `<button class="bsm" type="button" data-ds-chart-zoom="in">Zoom In</button>`,
+ `<button class="bsm" type="button" data-ds-chart-zoom="out">Zoom Out</button>`,
+ `<button class="bsm" type="button" data-ds-chart-nav="scroll-left" data-ds-chart-nav-target="${escapeHtml(options.navTarget || '')}">Left</button>`,
+ `<button class="bsm" type="button" data-ds-chart-nav="scroll-right" data-ds-chart-nav-target="${escapeHtml(options.navTarget || '')}">Right</button>`,
+ `<button class="bsm" type="button" data-ds-chart-fit="1">Fit</button>`,
+ ];
+ if (!isDesk) {
+ sections.push(`<div class="ds-chart-tools-section">
+ <div class="ds-chart-tools-title">Navigation</div>
+ <div class="ds-chart-tools-options">${navigationButtons.join('')}</div>
+ </div>`);
+ }
+ return `<details class="ds-chart-tools-menu">
+ <summary class="bsm">Tools</summary>
+ <div class="ds-chart-tools-panel">${sections.join('')}</div>
+ </details>`;
+ }
+
+ function buildChartTabPicker(state = {}) {
+ const reviewTabs = sanitizeChartReviewTabs(state.chartReviewTabs || []);
+ const activeReviewId = String(state.activeChartReviewTabId || '').trim();
+ const activeReviewTab = reviewTabs.find(tab => tab.id === activeReviewId) || reviewTabs[0] || null;
+ const closeTitle = state.chartReviewOverlayOpen ? 'Close chart review' : 'Close chart and return to Strategy Lab';
+ const reviewClose = activeReviewTab
+ ? `<button class="bsm ds-chart-review-close" type="button" title="${escapeHtml(closeTitle)}" aria-label="${escapeHtml(closeTitle)}" data-ds-review-tab-close="${escapeHtml(activeReviewTab.id)}">x</button>`
+ : '';
+ if (state.chartReviewOverlayOpen) {
+ return `<div class="ds-chart-review-close-slot ${state.symbol ? 'is-loaded' : ''}">
+ ${reviewClose}
+ </div>`;
+ }
+ return `<div class="ds-chart-tab-picker ${state.symbol ? 'is-loaded' : ''}">
+ <form class="ds-chart-symbol-form" data-ds-chart-symbol-form>
+ <input class="si" type="search" data-ds-chart-symbol-input list="dsChartSymbolList" placeholder="Search coin or index, e.g. FWD10, BTC, ETH..." autocomplete="off" value="${escapeHtml(state.symbol || '')}" />
+ <datalist id="dsChartSymbolList" data-ds-chart-symbol-list></datalist>
+ <button class="bsm primary" type="submit">Search</button>
+ </form>
+ ${reviewClose}
+ </div>`;
+ }
+
+ function buildDeskControls(state = {}, strategy = {}) {
+ return `<div class="ds-chart-command-strip ${state.chartFullscreen ? 'is-fullscreen' : ''}">
+ <div class="live-order-chart-timeframes ds-chart-command-presets">
+ ${buildPresetMenu(state)}
+ </div>
+ <div class="live-order-chart-timeframes ds-fullscreen-control-group">
+ <button class="bsm ds-fullscreen-toggle ${state.chartFullscreen ? 'active' : ''}" type="button" data-ds-chart-fullscreen="1">${state.chartFullscreen ? 'Exit Full Screen' : 'Full Screen'}</button>
+ </div>
+ <div class="live-order-chart-timeframes ds-chart-command-tools">
+ ${buildChartToolsMenu(state, { desk: true, openLabel: 'Detach' })}
+ ${buildChartSettingsMenu(state, strategy)}
+ </div>
+ </div>`;
+ }
+
+ function resolveChartInstrumentDescription(symbol = '') {
+ const normalized = String(symbol || '').trim().toUpperCase();
+ if (!normalized) return '';
+ const cached = Array.isArray(chartMarketSymbolsCache) ? chartMarketSymbolsCache : [];
+ const product = cached.find(item => String(item?.symbol || '').trim().toUpperCase() === normalized) || null;
+ const description = product?.instrumentDescription || product?.description || product?.name || '';
+ if (description && String(description).trim().toUpperCase() !== normalized) return String(description).trim();
+ if (typeof globalThis.FWDTradeDeskShared?.describeDeltaInstrument === 'function') {
+ return globalThis.FWDTradeDeskShared.describeDeltaInstrument(normalized);
+ }
+ return normalized;
+ }
+
+ function buildDeskMarkup(surface = SURFACE_TAB, state = {}, strategy = {}, primaryPayload = {}, executionPayload = {}, signal = null, marketIndex = null, contextData = {}) {
+ const isDetached = surface === SURFACE_DETACHED;
+ const isSingleChart = state.chartFullscreen === true || state.deskLayoutMode === 'single';
+ const collapsed = sanitizeCollapsedPanels(state.collapsedPanels);
+ const maximized = normalizeMaximizedPanel(state.maximizedPanel);
+ const widths = sanitizePanelWidths(state.panelWidths);
+ const panelStyle = `--ds-primary:${widths.primary}fr;--ds-execution:${widths.execution}fr;--ds-context:${widths.context}fr;`;
+ const primaryState = primaryPayload.state || state;
+ const executionState = executionPayload.state || state;
+ const primaryPanel = collapsed.primary ? '' : buildDeskChartPanel('primary', isSingleChart ? 'Chart' : 'Primary Chart', primaryState, primaryPayload.dataset, primaryPayload.model, primaryPayload.intelligence, state, primaryPayload.indicators);
+ const executionPanel = isSingleChart || collapsed.execution ? '' : buildDeskChartPanel('execution', 'Execution Chart', executionState, executionPayload.dataset, executionPayload.model, executionPayload.intelligence, state, executionPayload.indicators);
+ const contextPanel = isSingleChart || collapsed.context || state.rightPanelOpen === false ? '' : buildDeskContextPanel(state, executionPayload.intelligence || primaryPayload.intelligence, signal, marketIndex, contextData);
+ const splitterOne = !isSingleChart && !collapsed.primary && !collapsed.execution && !maximized ? '<div class="ds-desk-splitter" data-ds-desk-splitter="primary-execution"></div>' : '';
+ const splitterTwo = !isSingleChart && !collapsed.execution && !collapsed.context && state.rightPanelOpen !== false && !maximized ? '<div class="ds-desk-splitter" data-ds-desk-splitter="execution-context"></div>' : '';
+ const statusClass = !state.symbol ? 'account-inline-note' : (primaryPayload.dataset?.ok || executionPayload.dataset?.ok) ? 'account-inline-note good' : 'account-inline-note bad';
+ const hiddenDeskEvents = Math.max(Number(primaryPayload.model?.hiddenEventCandleCount || 0), Number(executionPayload.model?.hiddenEventCandleCount || 0));
+ const primaryIndex = primaryPayload.dataset?.syntheticIndex || executionPayload.dataset?.syntheticIndex;
+ const deskInstrumentDescription = resolveChartInstrumentDescription(state.symbol || '');
+ const deskInstrumentNote = state.symbol && deskInstrumentDescription && deskInstrumentDescription.toUpperCase() !== String(state.symbol || '').toUpperCase()
+ ? `<div class="account-inline-note ds-instrument-note"><strong>${escapeHtml(state.symbol || '')}</strong> <span>${escapeHtml(deskInstrumentDescription)}</span></div>`
+ : '';
+ const statusText = !state.symbol
+ ? 'Choose a symbol to load the trading desk.'
+ : primaryIndex
+ ? `${FWD_INDEX_SYMBOL} | Market index chart | ${primaryPayload.model?.totalCount || executionPayload.model?.totalCount || 0} scan bars`
+ : `${state.symbol}${deskInstrumentDescription ? ` | ${deskInstrumentDescription}` : ''} | Primary ${RESOLUTION_LABELS[normalizeTimeframe(primaryState.timeframe)]} | Execution ${RESOLUTION_LABELS[normalizeTimeframe(executionState.timeframe)]}${hiddenDeskEvents ? ` | ${hiddenDeskEvents} event candle hidden` : ''}`;
+ const restore = maximized ? `<button class="bsm active" type="button" data-ds-desk-restore="1">Restore Layout</button>` : '';
+ const deskClass = [
+ 'ds-chart-desk',
+ isSingleChart ? 'is-single-clean' : '',
+ maximized ? `is-maximized is-max-${maximized}` : '',
+ collapsed.primary ? 'is-primary-collapsed' : '',
+ (isSingleChart || collapsed.execution) ? 'is-execution-collapsed' : '',
+ (isSingleChart || collapsed.context || state.rightPanelOpen === false) ? 'is-context-collapsed' : '',
+ ].filter(Boolean).join(' ');
+ return `<div class="live-order-chart-card chart-only ${isDetached ? 'ds-chart-card-detached' : 'ds-chart-card-tab'} ds-chart-card-desk ${isSingleChart ? 'ds-clean-chart-mode' : ''} ${state.chartFullscreen ? 'ds-chart-fullscreen-mode' : ''}">
+ <div class="live-order-chart-head ds-desk-head">
+ <div>
+ <div class="mo-section">${state.chartFullscreen ? 'CHART FULL SCREEN' : isSingleChart ? (normalizePreset(state.preset) === 'key' ? 'KEY LEVEL CHART' : 'CLEAN CHART') : (isDetached ? 'DETACHED TRADING DESK' : 'MULTI-PANEL TRADING DESK')}</div>
+ <div class="live-order-chart-copy">${state.chartFullscreen ? 'Chart-only focus mode.' : isSingleChart ? 'Fast 15 minute chart with key levels by default. Switch to Desk for execution and context panels.' : 'Primary chart, execution chart, and tabbed context. Resize panels or maximize any section.'}</div>
+ </div>
+ <div class="live-order-chart-actions">
+ ${buildDeskControls(state, strategy)}
+ ${state.symbol ? buildChartTradeButtons(state, primaryPayload.model || executionPayload.model) : ''}
+ ${restore}
+ <details class="ds-indicator-menu">
+ <summary class="bsm">Indicators</summary>
+ <div class="ds-indicator-grid">
+ ${INDICATOR_DEFS.map(definition => `<button class="bsm ${sanitizeIndicatorState(state.indicators || {})[definition.key] ? 'active' : ''}" type="button" data-ds-chart-indicator="${escapeHtml(definition.key)}">${escapeHtml(definition.label)}</button>`).join('')}
+ </div>
+ </details>
+ <button class="bsm" type="button" data-ds-chart-refresh="1">Refresh</button>
+ </div>
+ </div>
+ <div class="${statusClass}" id="dsChartStatus">${escapeHtml(statusText)}</div>
+ ${deskInstrumentNote}
+ ${surface === SURFACE_TAB ? buildChartTabPicker(state) : ''}
+ ${isSingleChart ? '' : buildDecisionBadges(executionPayload.intelligence || primaryPayload.intelligence)}
+ <div class="ds-desk-collapsed-bar">
+ ${collapsed.primary ? '<button type="button" data-ds-desk-collapse="primary">Show Primary</button>' : ''}
+ ${!isSingleChart && collapsed.execution ? '<button type="button" data-ds-desk-collapse="execution">Show Execution</button>' : ''}
+ ${!isSingleChart && (collapsed.context || state.rightPanelOpen === false) ? '<button type="button" data-ds-desk-collapse="context">Show Context</button>' : ''}
+ </div>
+ <div class="${escapeHtml(deskClass)}" style="${escapeHtml(panelStyle)}">
+ ${maximized && maximized !== 'primary' ? '' : primaryPanel}
+ ${splitterOne}
+ ${maximized && maximized !== 'execution' ? '' : executionPanel}
+ ${splitterTwo}
+ ${maximized && maximized !== 'context' ? '' : contextPanel}
+ </div>
+ </div>`;
+ }
+
+ function buildChartMarkup(surface = SURFACE_PREVIEW, state = {}, strategy = {}, dataset = {}, model = null, signal = null, marketIndex = null, uiMode = 'default', intelligence = null, calculatedIndicators = {}) {
+ const presetMeta = getPresetMeta(state.preset);
+ const keyLevelSettings = sanitizeKeyLevelSettings(dataset?.keyLevels?.config || strategy.keyLevelSettings || {});
+ const isJournalMode = String(uiMode || '').trim().toLowerCase() === 'journal';
+ const isDetached = surface === SURFACE_DETACHED;
+ const isReview = surface === SURFACE_REVIEW;
+ const isTab = surface === SURFACE_TAB || isReview;
+ const isAdvancedSurface = isDetached || isTab;
+ const statusClass = !state.symbol
+ ? 'account-inline-note'
+ : dataset?.ok
+ ? (dataset?.stale ? 'account-inline-note warn' : 'account-inline-note good')
+ : 'account-inline-note bad';
+ const chartInstrumentDescription = resolveChartInstrumentDescription(state.symbol || '');
+ const chartInstrumentNote = !isReview && state.symbol && chartInstrumentDescription && chartInstrumentDescription.toUpperCase() !== String(state.symbol || '').toUpperCase()
+ ? `<div class="account-inline-note ds-instrument-note"><strong>${escapeHtml(state.symbol || '')}</strong> <span>${escapeHtml(chartInstrumentDescription)}</span></div>`
+ : '';
+ const statusText = isReview
+ ? ''
+ : !state.symbol
+ ? 'Choose a symbol to load the chart.'
+ : dataset?.ok
+ ? (dataset?.syntheticIndex
+ ? `${FWD_INDEX_SYMBOL} | market index | showing ${model?.visibleCount || 0}/${model?.totalCount || 0} scan bars${dataset?.marketIndex?.regime ? ` | ${String(dataset.marketIndex.regime).replace(/_/g, ' ')}` : ''}`
+ : `${state.symbol}${chartInstrumentDescription ? ` | ${chartInstrumentDescription}` : ''} | ${RESOLUTION_LABELS[normalizeTimeframe(state.timeframe)]} | loaded ${model?.totalCount || 0} candles${dataset?.candles?.[0]?.time ? ` from ${formatChartDate(dataset.candles[0].time)}` : ''}${dataset?.candles?.length ? ` to ${formatChartDate(dataset.candles[dataset.candles.length - 1].time)}` : ''} | visible ${model?.visibleCount || 0}${model?.hiddenEventCandleCount ? ` | ${model.hiddenEventCandleCount} event candle hidden` : ''}${dataset?.stale ? ' | using cached data' : ''}`)
+ : (dataset?.error || 'Failed to load chart data.');
+ const hasReplay = !!state.replaySeed || !!normalizeReplayMode(state.replayMode);
+ const replayControls = !isReview && model && isAdvancedSurface && state.symbol ? buildReplayControls(state, model) : '';
+ const controls = isJournalMode
+ ? `
+ <div class="live-order-chart-timeframes ds-chart-journal-timeframes">
+ ${RESOLUTIONS.map(tf => `<button class="bsm ${normalizeTimeframe(state.timeframe) === tf ? 'active' : ''}" type="button" data-ds-chart-tf="${tf}">${escapeHtml(RESOLUTION_LABELS[tf])}</button>`).join('')}
+ </div>
+ ${buildChartRangeControls(state)}
+ <div class="live-order-chart-timeframes ds-chart-journal-actions">
+ ${surface === SURFACE_PREVIEW ? '<button class="bsm" type="button" data-ds-chart-open="1">Open Full Chart</button>' : ''}
+ </div>`
+ : surface === SURFACE_PREVIEW
+ ? `
+ <div class="live-order-chart-timeframes">
+ ${RESOLUTIONS.map(tf => `<button class="bsm ${normalizeTimeframe(state.timeframe) === tf ? 'active' : ''}" type="button" data-ds-chart-tf="${tf}">${escapeHtml(RESOLUTION_LABELS[tf])}</button>`).join('')}
+ </div>
+ ${buildChartRangeControls(state)}
+ <div class="live-order-chart-timeframes">
+ ${buildChartToolsMenu(state, { preview: true, navTarget: surface, openLabel: 'Open Full Chart' })}
+ ${buildChartSettingsMenu(state, strategy)}
+ </div>`
+ : isReview
+ ? `
+ <div class="live-order-chart-timeframes ds-chart-review-presets">
+ ${buildQuickReviewControls(state)}
+ </div>`
+ : ` 
+ <div class="live-order-chart-timeframes">
+ ${RESOLUTIONS.map(tf => `<button class="bsm ${normalizeTimeframe(state.timeframe) === tf ? 'active' : ''}" type="button" data-ds-chart-tf="${tf}">${escapeHtml(RESOLUTION_LABELS[tf])}</button>`).join('')}
+ </div>
+ ${buildChartRangeControls(state)}
+ <div class="live-order-chart-timeframes">
+ ${buildPresetMenu(state)}
+ </div>
+ <div class="live-order-chart-timeframes">
+ ${buildChartToolsMenu(state, { advanced: true, isTab, navTarget: surface, openLabel: isTab ? 'Detach' : 'Open Full Chart' })}
+ ${buildChartSettingsMenu(state, strategy)}
+ </div>`;
+ const indicatorState = sanitizeIndicatorState(state.indicators || {});
+ const indicatorControls = !isReview && !isJournalMode && model
+ ? `<details class="ds-indicator-menu">
+ <summary class="bsm">Indicators</summary>
+ <div class="ds-indicator-grid">
+ ${INDICATOR_DEFS.map(definition => `<button class="bsm ${indicatorState[definition.key] ? 'active' : ''}" type="button" data-ds-chart-indicator="${escapeHtml(definition.key)}">${escapeHtml(definition.label)}</button>`).join('')}
+ </div>
+ </details>`
+ : '';
+ const advancedControls = '';
+ const signalBadgeRow = !isReview && !isJournalMode && signal
+ ? `<div class="ds-chart-meta-row">
+ <span>${escapeHtml(String(signal.marketRegime || marketIndex?.regime || 'UNKNOWN').replace(/_/g, ' '))}</span>
+ <span>${escapeHtml(signal.setupFamilyLabel || 'Mixed')}</span>
+ <span>${escapeHtml(signal.rsLabel || 'RS Mixed')}</span>
+ <span>${escapeHtml(signal.signalPersistence?.label || 'Fresh')}</span>
+ <span>${escapeHtml(`TQ ${signal.tradeQuality?.score || 0}`)}</span>
+ </div>`
+ : '';
+ const intelligenceBadges = !isReview && !isJournalMode && intelligence?.badges?.length
+ ? `<div class="ds-chart-meta-row ds-intel-badge-row">
+ ${intelligence.badges.map(badge => `<span class="${escapeHtml(badge.tone || 'neutral')}">${escapeHtml(badge.label || '')}</span>`).join('')}
+ </div>`
+ : '';
+ const indicatorLegend = !isReview && !isJournalMode && model
+ ? buildChartIndicatorLegend(state, presetMeta, calculatedIndicators, model)
+ : '';
+ const signalContextTags = !isReview && !isJournalMode && signal
+ ? `
+ <div class="live-order-study-legend">
+ <span class="live-order-study-pill key"><strong>Setup</strong> ${escapeHtml(signal.setupFamilyLabel || 'Mixed')}</span>
+ <span class="live-order-study-pill ${signal.tradeQuality?.score >= 75 ? 'ema9' : signal.tradeQuality?.score >= 60 ? 'vwap' : 'ema100'}"><strong>Trade Quality</strong> ${escapeHtml(String(signal.tradeQuality?.score || 0))}</span>
+ <span class="live-order-study-pill ${signal.rsState === 'strong' ? 'ema9' : signal.rsState === 'weak' ? 'ema100' : 'vwap'}"><strong>RS</strong> ${escapeHtml(signal.rsLabel || 'RS Mixed')}</span>
+ <span class="live-order-study-pill key"><strong>Persistence</strong> ${escapeHtml(signal.signalPersistence?.label || 'Fresh')}</span>
+ </div>`
+ : '';
+ const studyLegend = !isReview && !isJournalMode && model
+ ? `
+ <div class="live-order-study-legend">
+ ${isIndicatorGroupActive(state, presetMeta, 'ema') ? model.studyLines.filter(line => line.key !== 'vwap').map(line => `<span class="live-order-study-pill ${escapeHtml(line.className)}"><strong>${escapeHtml(line.label)}</strong> $${escapeHtml(formatPrice(line.latestValue))}</span>`).join('') : ''}
+ ${isIndicatorGroupActive(state, presetMeta, 'vwap') ? model.studyLines.filter(line => line.key === 'vwap').map(line => `<span class="live-order-study-pill vwap"><strong>VWAP</strong> $${escapeHtml(formatPrice(line.latestValue))}</span>`).join('') : ''}
+ ${presetMeta.showKeyLevels ? model.keyZones.map(zone => `<span class="live-order-study-pill key"><strong>${escapeHtml(zone.tf)} ${zone.kind === 'resistance' ? 'R' : 'S'}</strong> <em>${escapeHtml(formatStrength(zone, keyLevelSettings.displayStrengthAs))}</em></span>`).join('') : ''}
+ </div>`
+ : '';
+ const chartMarkup = !model
+ ? `<div class="empty compact">
+ <div class="ei">--</div>
+ <div class="eh">${escapeHtml(dataset?.ok ? 'No visible candles' : 'Chart unavailable')}</div>
+ <div class="es">${escapeHtml(dataset?.error || 'Public candles will appear here once a symbol is available.')}</div>
+ </div>`
+ : `
+ ${studyLegend}
+ <div class="live-order-chart-shell ds-chart-shell ds-lwc-shell" data-ds-chart-shell="${surface}">
+ ${indicatorLegend}
+ <div class="ds-lwc-chart" data-ds-lwc-chart="${surface}" role="img" aria-label="${escapeHtml(`${state.symbol || 'Symbol'} chart`)}"></div>
+ <div class="ds-lwc-attribution">Charts powered by <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer">TradingView</a> Lightweight Charts</div>
+ ${isReview ? '' : buildChartNavControls(surface)}
+ ${presetMeta.showKeyLevels ? buildKeyLevelVisualLayer(model, keyLevelSettings) : ''}
+ ${isReview ? '' : buildIntelligenceOverlay(model, intelligence, state)}
+ <div class="live-order-chart-tags">
+ ${isReview ? '' : model.orderTags.map(tag => `<div class="live-order-chart-tag ${escapeHtml(tag.tone)} ${escapeHtml(tag.source || '')}" style="top:${Math.max(0, Math.min(100, tag.topPct)).toFixed(2)}%"><strong>${escapeHtml(tag.label)}</strong><em>$${escapeHtml(formatPrice(tag.price))}${tag.meta ? ` | ${escapeHtml(tag.meta)}` : ''}</em></div>`).join('')}
+ ${!isReview && model.lastPrice ? `<div class="live-order-chart-tag ds-last-price-tag ${escapeHtml(model.lastPrice.tone)}" style="top:${Math.max(0, Math.min(100, model.lastPrice.topPct)).toFixed(2)}%"><strong>Last</strong><em>$${escapeHtml(formatPrice(model.lastPrice.price))}</em></div>` : ''}
+ ${model.replayCursor ? `<div class="live-order-chart-tag replay-cursor" style="top:4%"><strong>Replay Cursor</strong><em>${escapeHtml(new Date(model.replayCursor.time).toLocaleString())}</em></div>` : ''}
+ </div>
+ </div>`;
+ const tradeReadPanel = !isReview && !isJournalMode && isAdvancedSurface && model ? buildTradeReadPanel(intelligence, state) : '';
+ const chartStage = tradeReadPanel
+ ? `<div class="ds-advanced-chart-stage">
+ <div class="ds-advanced-chart-main">${chartMarkup}</div>
+ ${tradeReadPanel}
+ </div>`
+ : chartMarkup;
+ return `
+ <div class="live-order-chart-card ${isDetached ? 'chart-only ds-chart-card-detached' : isReview ? 'chart-only ds-chart-card-tab ds-chart-card-review' : isTab ? 'chart-only ds-chart-card-tab' : 'ds-chart-card-preview'} ${isJournalMode ? 'ds-chart-card-journal' : ''}">
+ <div class="live-order-chart-head">
+ <div>
+ <div class="mo-section">${isJournalMode ? 'TRADE REPLAY CHART' : (isDetached ? 'DETACHED DECISION CHART' : isReview ? `QUICK VIEW | ${state.symbol || 'CHART'}` : isTab ? 'ADVANCED DECISION CHART' : 'LIVE PRICE WORKSPACE')}</div>
+ ${isReview ? '' : `<div class="live-order-chart-copy">${escapeHtml(
+ isDetached && !isJournalMode
+ ? (hasReplay
+ ? 'Detached workspace with setup context, key zones, order lines, replay controls, and storage sync.'
+ : 'Detached workspace with setup context, key zones, trade quality, and storage sync.')
+ : isReview
+ ? 'Fast scanner review chart. Use presets to change the view, then close and continue the list.'
+ : isTab
+ ? 'Direct chart workspace. Best signal opens by default, and scan/watchlist clicks sync here.'
+ : (isJournalMode
+ ? 'Replay-focused journal chart with entry, exit, stop, target ladder, and shift markers.'
+ : 'Shared chart workspace. Preview changes sync into the detached chart window.')
+ )}</div>`}
+ </div>
+ <div class="live-order-chart-actions">
+ ${controls}
+ ${!isReview && !isJournalMode && isAdvancedSurface && state.symbol ? buildChartTradeButtons(state, model) : ''}
+ ${advancedControls}
+ ${indicatorControls}
+ ${isReview ? '' : '<button class="bsm" type="button" data-ds-chart-refresh="1">Refresh</button>'}
+ </div>
+ </div>
+ ${isReview ? buildChartTabPicker(state) : `<div class="${statusClass}" id="dsChartStatus">${escapeHtml(statusText)}</div>`}
+ ${chartInstrumentNote}
+ ${!isReview && isTab ? buildChartTabPicker(state) : ''}
+ ${replayControls}
+ ${!isReview && !isJournalMode && isAdvancedSurface ? buildDraftSummary(state, model) : ''}
+ ${!isReview && !isJournalMode && isAdvancedSurface ? buildDecisionBadges(intelligence) : ''}
+ ${!isReview && !isJournalMode && isAdvancedSurface ? buildExecutionPulse(intelligence) : ''}
+ ${!isReview && !isJournalMode ? buildNearestKeyLevelStrip(model) : ''}
+ ${intelligenceBadges}
+ ${signalBadgeRow}
+ ${signalContextTags}
+ ${!isReview && !isJournalMode && model?.rrInfo ? `<div class="ds-chart-meta-row ds-chart-rr-row">
+ <span class="ds-rr-badge stop">Risk ${escapeHtml(model.rrInfo.riskPct)}%</span>
+ <span class="ds-rr-badge target">Reward ${escapeHtml(model.rrInfo.rewardPct)}%</span>
+ <span class="ds-rr-badge ${Number(model.rrInfo.ratio) >= 2 ? 'good' : Number(model.rrInfo.ratio) >= 1 ? 'neutral' : 'bad'}">R:R 1:${escapeHtml(model.rrInfo.ratio)}</span>
+ </div>` : ''}
+ <div class="live-order-chart-wrap ds-chart-wrap">${chartStage}</div>
+ </div>`;
+ }

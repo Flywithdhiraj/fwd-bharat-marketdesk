@@ -1,0 +1,1494 @@
+// Closed-trade matching, live ledger and setup performance export
+}
+
+function v16FindMatchingClosedOrderForTrade(trade = {}, closedOrders = [], usedIndexes = new Set()) {
+ const symbol = v16NormalizeSymbol(trade.symbol || '');
+ if (!symbol) return null;
+ const exitSide = String(trade.side || '').toLowerCase() === 'short' ? 'buy' : 'sell';
+ const tradeSize = Math.abs(Number(trade.size || 0));
+ const tradeClosedAt = Number(trade.closedAt || 0);
+ const tradeKeys = v16BuildTradeOrderMatchKeys(trade);
+ let bestIndex = -1;
+ let bestScore = Infinity;
+ for (let index = 0; index < closedOrders.length; index += 1) {
+ if (usedIndexes.has(index)) continue;
+ const order = closedOrders[index];
+ if (v16NormalizeSymbol(order.symbol || '') !== symbol) continue;
+ if (String(order.side || '').toLowerCase() !== exitSide) continue;
+ const orderKeys = [
+ order.id,
+ order.orderId,
+ order.clientOrderId,
+ ].map(value => String(value || '').trim()).filter(Boolean);
+ const idMatch = orderKeys.some(token => tradeKeys.has(token));
+ const orderSize = Math.abs(Number(order.size || 0));
+ const timeGapMs = Math.abs(Number(order.createdAt || 0) - tradeClosedAt);
+ const sizeGapPct = Math.abs(orderSize - tradeSize) / Math.max(orderSize, tradeSize, 1);
+ if (!idMatch) {
+ if (tradeClosedAt > 0 && timeGapMs > 15 * 60 * 1000) continue;
+ if (tradeSize > 0 && sizeGapPct > 0.35) continue;
+ }
+ const score = (idMatch ? -1000000000 : 0) + timeGapMs + (sizeGapPct * 60000);
+ if (score < bestScore) {
+ bestScore = score;
+ bestIndex = index;
+ }
+ }
+ if (bestIndex < 0) return null;
+ usedIndexes.add(bestIndex);
+ return closedOrders[bestIndex];
+}
+
+function v16ResolveMatchedOrderCloseAt(order = {}, trade = {}) {
+ const openedAt = Number(trade?.openedAt || 0);
+ const existingClosedAt = Number(trade?.closedAt || 0);
+ const candidates = [
+ Number(order?.updatedAt || 0),
+ Number(order?.createdAt || 0),
+ existingClosedAt,
+ ].filter(value => Number.isFinite(value) && value > 0);
+ if (!candidates.length) return 0;
+ const notBeforeOpen = openedAt > 0
+ ? candidates.filter(value => value >= openedAt)
+ : candidates.slice();
+ if (notBeforeOpen.length) return Math.max(...notBeforeOpen);
+ if (existingClosedAt > 0) return existingClosedAt;
+ return Math.max(...candidates);
+}
+
+function v16DecorateTradeReconciliation(trade = {}, overrides = {}) {
+ const grossMovePnl = Number(overrides.grossMovePnl ?? trade.grossMovePnl ?? trade.grossPnl ?? trade.pnl ?? 0);
+ const fees = Math.abs(Number(overrides.fees ?? trade.fees ?? trade.commission ?? 0));
+ const funding = Number(overrides.funding ?? trade.funding ?? 0);
+ const deltaClosedPnl = Number(overrides.deltaClosedPnl ?? trade.deltaClosedPnl ?? trade.netClosedPnl ?? trade.pnl ?? 0);
+ const matchedCloseOrderIds = Array.from(new Set(
+ Array.isArray(overrides.matchedCloseOrderIds)
+ ? overrides.matchedCloseOrderIds.map(value => String(value || '').trim()).filter(Boolean)
+ : (Array.isArray(trade.matchedCloseOrderIds)
+ ? trade.matchedCloseOrderIds.map(value => String(value || '').trim()).filter(Boolean)
+ : [String(trade.closeOrderId || '').trim()].filter(Boolean))
+ ));
+ return {
+ ...trade,
+ grossMovePnl: +grossMovePnl.toFixed(6),
+ fees: +fees.toFixed(6),
+ funding: +funding.toFixed(6),
+ deltaClosedPnl: +deltaClosedPnl.toFixed(6),
+ netClosedPnl: +deltaClosedPnl.toFixed(6),
+ pnl: +deltaClosedPnl.toFixed(6),
+ expectancyValue: +deltaClosedPnl.toFixed(6),
+ matchedCloseOrderIds,
+ };
+}
+
+function v16ReconcileTradesWithClosedOrders(trades = [], orderHistory = []) {
+ const closedOrders = (orderHistory || [])
+ .filter(v16IsClosedRealizedOrder)
+ .slice()
+ .sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0));
+ if (!closedOrders.length) {
+ return (Array.isArray(trades) ? trades : []).map(trade => v16DecorateTradeReconciliation(trade));
+ }
+ const usedIndexes = new Set();
+ return (Array.isArray(trades) ? trades : []).map(trade => {
+ const match = v16FindMatchingClosedOrderForTrade(trade, closedOrders, usedIndexes);
+ if (!match) return v16DecorateTradeReconciliation(trade);
+ const realizedPnl = +Number(v16ResolveOrderRealizedPnl(match) || 0).toFixed(6);
+ const resolvedClosedAt = v16ResolveMatchedOrderCloseAt(match, trade);
+ return v16DecorateTradeReconciliation({
+ ...trade,
+ pnl: realizedPnl,
+ expectancyValue: realizedPnl,
+ pnlSource: 'delta_order',
+ commission: Math.abs(Number(match.commission || trade.commission || 0)),
+ exitPrice: Number(match.price || 0) > 0 ? Number(match.price) : Number(trade.exitPrice || 0),
+ closedAt: resolvedClosedAt || Number(trade.closedAt || 0),
+ closeOrderId: String(match.orderId || match.id || trade.closeOrderId || ''),
+ closeClientOrderId: String(match.clientOrderId || trade.closeClientOrderId || ''),
+ }, {
+ grossMovePnl: Number(trade.grossMovePnl || trade.grossPnl || trade.pnl || 0),
+ fees: Math.abs(Number(match.commission || trade.commission || 0)),
+ funding: Number(trade.funding || 0),
+ deltaClosedPnl: realizedPnl,
+ matchedCloseOrderIds: [String(match.orderId || match.id || '')],
+ });
+ }).sort((a, b) => Number(b.closedAt || 0) - Number(a.closedAt || 0));
+}
+
+function v16OrderRoleLabel(role = '') {
+ if (role === 'stop_loss') return 'Stop Loss';
+ if (role === 'take_profit') return 'Target';
+ if (role === 'exit') return 'Exit';
+ if (role === 'entry') return 'Entry';
+ return 'Order';
+}
+
+function v16OrderModeLabel(order = {}) {
+ const role = String(order.role || '').toLowerCase();
+ if (role === 'stop_loss') return 'Stop';
+ if (role === 'take_profit') return 'Target';
+ if (order.postOnly) return 'Maker';
+ if (String(order.orderType || '') === 'limit_order') return 'Limit';
+ if (Number(order.stopPrice || 0) > 0) return 'Trigger';
+ return 'Order';
+}
+
+function v16ResolvePlannedExitPrice(order = {}) {
+ if (order.role === 'stop_loss') return Number(order.stopPrice || order.limitPrice || order.price || 0);
+ if (order.role === 'take_profit') return Number(order.limitPrice || order.price || order.stopPrice || 0);
+ if (Number(order.limitPrice || 0) > 0) return Number(order.limitPrice || 0);
+ if (Number(order.stopPrice || 0) > 0) return Number(order.stopPrice || 0);
+ return Number(order.price || 0);
+}
+
+function v16FindManagedPositionForOrder(order = {}, positions = []) {
+ const symbol = v16NormalizeSymbol(order.symbol || order.productSymbol || '');
+ const candidates = (positions || []).filter(position => position.symbol === symbol && Number(position.size || 0) > 0);
+ if (!candidates.length) return null;
+ const side = String(order.side || '').toLowerCase();
+ if (side === 'sell') return candidates.find(position => position.side === 'long') || candidates[0];
+ if (side === 'buy') return candidates.find(position => position.side === 'short') || candidates[0];
+ return candidates[0];
+}
+
+function v16InferManagedOrderRole(order = {}, positions = []) {
+ const baseRole = String(order.role || '').toLowerCase();
+ if (['stop_loss', 'take_profit', 'entry', 'exit'].includes(baseRole)) return baseRole;
+ const linkedPosition = v16FindManagedPositionForOrder(order, positions);
+ const exitPrice = v16ResolvePlannedExitPrice(order);
+ if (linkedPosition && Number(linkedPosition.entry || 0) > 0 && exitPrice > 0) {
+ const entry = Number(linkedPosition.entry || 0);
+ const isStop = linkedPosition.side === 'long' ? exitPrice < entry : exitPrice > entry;
+ const isTarget = linkedPosition.side === 'long' ? exitPrice > entry : exitPrice < entry;
+ if (isStop) return 'stop_loss';
+ if (isTarget) return 'take_profit';
+ }
+ const stopText = `${order.stopOrderType || ''} ${order.reason || ''}`.toLowerCase();
+ if (stopText.includes('loss')) return 'stop_loss';
+ if (stopText.includes('profit') || stopText.includes('target')) return 'take_profit';
+ if (Number(order.stopPrice || 0) > 0 && order.reduceOnly) return 'stop_loss';
+ return baseRole || 'unknown';
+}
+
+function v16DecorateManagedOpenOrder(order = {}, positions = []) {
+ const linkedPosition = v16FindManagedPositionForOrder(order, positions);
+ const resolvedRole = v16InferManagedOrderRole(order, positions);
+ return {
+ ...order,
+ role: resolvedRole,
+ linkedPositionId: linkedPosition?.id || '',
+ linkedPositionSide: linkedPosition?.side || '',
+ linkedEntry: Number(linkedPosition?.entry || 0),
+ inferredRole: resolvedRole !== String(order.role || '').toLowerCase(),
+ };
+}
+
+function v16IsFWDTradeDeskManagedOrder(order = {}) {
+ return String(order.clientOrderId || '').trim().toLowerCase().startsWith('ds_v16_');
+}
+
+function v16BuildLinkedOrderModel(position = {}, openOrders = []) {
+ const exitSide = position.side === 'short' ? 'buy' : 'sell';
+ const all = (openOrders || []).filter(order => order.symbol === position.symbol);
+ const linked = all.filter(order => {
+ if (String(order.linkedPositionId || '') === String(position.id || '')) return true;
+ if (v16IsFWDTradeDeskManagedOrder(order)) {
+ if (order.reduceOnly && String(order.side || '').toLowerCase() === exitSide) return true;
+ if (!order.reduceOnly) return true;
+ }
+ if (order.reduceOnly && String(order.side || '').toLowerCase() === exitSide) return true;
+ return false;
+ });
+ const entry = linked.filter(order => String(order.role || '').toLowerCase() === 'entry');
+ const stop = linked.filter(order => String(order.role || '').toLowerCase() === 'stop_loss');
+ const target = linked.filter(order => String(order.role || '').toLowerCase() === 'take_profit');
+ const exit = linked.filter(order => String(order.role || '').toLowerCase() === 'exit');
+ const knownIds = new Set([...entry, ...stop, ...target, ...exit].map(order => String(order.orderId || order.id || order.clientOrderId || '')));
+ const orphan = linked.filter(order => !knownIds.has(String(order.orderId || order.id || order.clientOrderId || '')));
+ const dsManaged = linked.filter(v16IsFWDTradeDeskManagedOrder);
+ return {
+ all: linked,
+ entry,
+ stop,
+ target,
+ exit,
+ orphan,
+ dsManaged,
+ };
+}
+
+function v16OrderSupportsStopPrice(order = {}) {
+ return (
+ Number(order.stopPrice || 0) > 0
+ || !!String(order.stopOrderType || '').trim()
+ || ['stop_loss', 'take_profit', 'unknown'].includes(String(order.role || '').toLowerCase())
+ );
+}
+
+function v16BuildOpenOrderEditMeta(order = {}) {
+ const role = String(order.role || '').toLowerCase();
+ if (role === 'stop_loss') {
+ return {
+ title: 'Edit Stop Loss',
+ limitLabel: 'Limit Price',
+ stopLabel: 'Stop Price',
+ helper: 'Edit the protective stop trigger here. Delta will try an in-place update first, then fall back to cancel and replace if needed.',
+ previewStopLabel: 'Stop Price',
+ previewLimitLabel: 'Limit Price',
+ editLabel: 'Edit Stop',
+ };
+ }
+ if (role === 'take_profit') {
+ return {
+ title: 'Edit Target Order',
+ limitLabel: Number(order.limitPrice || 0) > 0 ? 'Target Limit' : 'Limit Price',
+ stopLabel: 'Target Trigger',
+ helper: 'Edit the take-profit trigger here. Delta will try an in-place update first, then fall back to cancel and replace if needed.',
+ previewStopLabel: 'Target Trigger',
+ previewLimitLabel: Number(order.limitPrice || 0) > 0 ? 'Target Limit' : 'Limit Price',
+ editLabel: 'Edit Target',
+ };
+ }
+ if (v16OrderSupportsStopPrice(order)) {
+ return {
+ title: 'Edit Trigger Order',
+ limitLabel: 'Limit Price',
+ stopLabel: 'Trigger Price',
+ helper: 'Edit the trigger price here. Delta will try an in-place update first, then fall back to cancel and replace if needed.',
+ previewStopLabel: 'Trigger Price',
+ previewLimitLabel: 'Limit Price',
+ editLabel: 'Edit Trigger',
+ };
+ }
+ return {
+ title: 'Edit Live Order',
+ limitLabel: 'Limit Price',
+ stopLabel: 'Trigger / Stop',
+ helper: 'Editable order desk. Delta update is attempted first. If the order cannot be edited in place, the extension will show a cancel-and-replace preview.',
+ previewStopLabel: 'Trigger Price',
+ previewLimitLabel: 'Limit Price',
+ editLabel: 'Edit',
+ };
+}
+
+function v16OrderEditChangeLabel(change = '') {
+ const labels = {
+ size: 'size',
+ limit_price: 'limit price',
+ stop_price: 'stop price',
+ post_only: 'post only',
+ reduce_only: 'reduce only',
+ };
+ return labels[change] || String(change || '').replace(/_/g, ' ');
+}
+
+function v16ResolvePositionExitShortcut(position = {}, kind = 'stop') {
+ const exposurePlan = position.exposurePlan || {};
+ const orders = kind === 'target' ? exposurePlan.targetOrders : exposurePlan.stopOrders;
+ return Array.isArray(orders) && orders.length ? orders[0] : null;
+}
+
+function v16BuildProtectionOrderSeed(position = {}, kind = 'stop') {
+ const exposurePlan = position.exposurePlan || {};
+ const uncoveredQty = kind === 'target'
+ ? Number(exposurePlan.uncoveredTargetQty || 0)
+ : Number(exposurePlan.uncoveredStopQty || 0);
+ return {
+ kind,
+ symbol: position.symbol || '',
+ positionId: position.id || '',
+ positionSide: position.side || 'long',
+ entryPrice: Number(position.entry || 0),
+ markPrice: Number(position.markPrice || 0),
+ triggerPrice: 0,
+ size: Math.max(1, Math.round(uncoveredQty > 0 ? uncoveredQty : Number(position.size || 1))),
+ positionSize: Math.max(1, Math.round(Number(position.size || 1))),
+ baseUrl: v16LiveAccountView.data?.baseUrl || '',
+ };
+}
+
+function v16ReadProtectionOrderDraftFromForm() {
+ const existing = v16LiveAccountView.protectionOrder || {};
+ return {
+ kind: existing.kind || 'stop',
+ symbol: existing.symbol || '',
+ positionId: existing.positionId || '',
+ positionSide: existing.positionSide || 'long',
+ entryPrice: Number(existing.entryPrice || 0),
+ markPrice: Number(existing.markPrice || 0),
+ positionSize: Math.max(1, Math.round(Number(existing.positionSize || existing.size || 1))),
+ size: Math.max(1, Math.round(Number(document.getElementById('liveProtectionSize')?.value || existing.size || existing.positionSize || 1))),
+ triggerPrice: Math.max(0, Number(document.getElementById('liveProtectionTriggerPrice')?.value || existing.triggerPrice || 0)),
+ baseUrl: existing.baseUrl || v16LiveAccountView.data?.baseUrl || '',
+ };
+}
+
+function v16ComputePlannedExitPnl(position = {}, exitPrice = 0, size = 0) {
+ const multiplier = Math.max(0, Number(position.displaySize || 0)) > 0 && Math.max(0, Number(position.size || 0)) > 0
+ ? (Number(position.displaySize || 0) / Math.max(1e-12, Number(position.size || 0)))
+ : 1;
+ const qty = Math.max(0, Number(size || 0)) * multiplier;
+ const entry = Number(position.entry || 0);
+ const price = Number(exitPrice || 0);
+ if (!qty || entry <= 0 || price <= 0) return 0;
+ return +(position.side === 'short' ? (entry - price) * qty : (price - entry) * qty).toFixed(4);
+}
+
+function v16CollectExposureOrders(position = {}, orders = [], tone = 'profit') {
+ const size = Math.max(0, Number(position.size || 0));
+ let coveredQty = 0;
+ let totalPnl = 0;
+ const usedOrders = [];
+ const sorted = [...(orders || [])].sort((a, b) => (
+ tone === 'loss'
+ ? Number(a.plannedPnl || 0) - Number(b.plannedPnl || 0)
+ : Number(b.plannedPnl || 0) - Number(a.plannedPnl || 0)
+ ));
+ sorted.forEach(order => {
+ if (coveredQty >= size) return;
+ const remainingQty = Math.max(0, Number(order.remainingSize || order.size || 0));
+ const appliedQty = Math.max(0, Math.min(size - coveredQty, remainingQty));
+ if (!appliedQty) return;
+ const appliedPnl = v16ComputePlannedExitPnl(position, order.exitPrice, appliedQty);
+ coveredQty += appliedQty;
+ totalPnl += appliedPnl;
+ usedOrders.push({
+ ...order,
+ appliedQty,
+ appliedPnl,
+ });
+ });
+ return {
+ coveredQty: +coveredQty.toFixed(8),
+ coveragePct: size > 0 ? +(coveredQty / size * 100).toFixed(2) : 0,
+ totalPnl: +totalPnl.toFixed(4),
+ orders: usedOrders,
+ };
+}
+
+function v16ResolvePositionProtectionFallback(position = {}, sources = []) {
+ const entrySide = position.side === 'short' ? 'sell' : 'buy';
+ const exitSide = position.side === 'short' ? 'buy' : 'sell';
+ const positionUpdatedAt = Number(position.updatedAt || position.createdAt || 0);
+ const candidates = (sources || [])
+ .filter(source => source && source.symbol === position.symbol)
+ .map(source => {
+ const protection = resolveBracketProtectionLevels(source);
+ const side = String(source.side || '').toLowerCase();
+ const role = String(source.role || '').toLowerCase();
+ let matchScore = 0;
+ if (protection.hasFullProtection) matchScore += 4;
+ if (side === entrySide && (!role || role === 'entry' || role === 'unknown')) matchScore += 3;
+ if (role === 'stop_loss' || role === 'take_profit') matchScore += 2;
+ if (source.reduceOnly && side === exitSide) matchScore += 2;
+ if (v16IsFWDTradeDeskManagedOrder(source)) matchScore += 1;
+ return {
+ ...source,
+ protection,
+ matchScore,
+ };
+ })
+ .filter(source => source.protection.hasStop || source.protection.hasTakeProfit)
+ .filter(source => !positionUpdatedAt || !Number(source.createdAt || 0) || Number(source.createdAt || 0) <= positionUpdatedAt + (5 * 60 * 1000))
+ .sort((a, b) => (Number(b.matchScore || 0) - Number(a.matchScore || 0)) || (Number(b.createdAt || 0) - Number(a.createdAt || 0)));
+ const best = candidates[0];
+ if (!best) return null;
+ return {
+ ...best.protection,
+ sourceOrderId: String(best.orderId || best.id || best.clientOrderId || ''),
+ sourceRole: String(best.role || ''),
+ sourceState: String(best.state || ''),
+ };
+}
+
+function v16BuildFallbackExposureOrder(position = {}, kind = 'stop_loss', protection = null) {
+ const size = Math.max(0, Number(position.size || 0));
+ if (!size || !protection) return null;
+ const exitSide = position.side === 'short' ? 'buy' : 'sell';
+ const exitPrice = kind === 'stop_loss'
+ ? Number(protection.stopLoss || 0)
+ : Number(protection.takeProfit || 0);
+ if (!(exitPrice > 0)) return null;
+ const limitPrice = kind === 'stop_loss'
+ ? Number(protection.stopLimitPrice || 0)
+ : Number(protection.takeProfitLimitPrice || 0);
+ return {
+ id: `fallback_${position.id}_${kind}`,
+ orderId: String(protection.sourceOrderId || ''),
+ clientOrderId: String(protection.sourceOrderId || ''),
+ symbol: position.symbol,
+ side: exitSide,
+ reduceOnly: true,
+ role: kind,
+ state: 'fallback',
+ fallback: true,
+ remainingSize: size,
+ size,
+ stopPrice: kind === 'stop_loss' ? exitPrice : 0,
+ limitPrice: kind === 'take_profit' ? (limitPrice > 0 ? limitPrice : exitPrice) : limitPrice,
+ exitPrice,
+ plannedQty: size,
+ plannedPnl: v16ComputePlannedExitPnl(position, exitPrice, size),
+ tone: kind === 'stop_loss' ? 'loss' : 'profit',
+ };
+}
+
+function v16BuildPositionExposurePlan(position = {}, openOrders = [], protectionSources = []) {
+ const size = Math.max(0, Number(position.size || 0));
+ const entry = Number(position.entry || 0);
+ if (!size || entry <= 0) {
+ return {
+ maxProfit: 0,
+ maxLoss: 0,
+ stopCoverageQty: 0,
+ stopCoveragePct: 0,
+ targetCoverageQty: 0,
+ targetCoveragePct: 0,
+ hasStop: false,
+ hasTarget: false,
+ uncoveredStopQty: size,
+ uncoveredTargetQty: size,
+ protectionFallback: null,
+ exitOrders: [],
+ stopOrders: [],
+ targetOrders: [],
+ };
+ }
+ const exitSide = position.side === 'short' ? 'buy' : 'sell';
+ const exitOrders = (openOrders || [])
+ .filter(order => order.symbol === position.symbol)
+ .filter(order => String(order.side || '').toLowerCase() === exitSide)
+ .filter(order => Number(order.remainingSize || order.size || 0) > 0)
+ .filter(order => order.reduceOnly || order.role !== 'entry')
+ .map(order => {
+ const exitPrice = v16ResolvePlannedExitPrice(order);
+ const plannedQty = Math.max(0, Number(order.remainingSize || order.size || 0));
+ const plannedPnl = v16ComputePlannedExitPnl(position, exitPrice, plannedQty);
+ const tone = order.role === 'stop_loss'
+ ? 'loss'
+ : order.role === 'take_profit'
+ ? 'profit'
+ : plannedPnl > 0
+ ? 'profit'
+ : plannedPnl < 0
+ ? 'loss'
+ : 'flat';
+ return {
+ ...order,
+ exitPrice,
+ plannedQty,
+ plannedPnl,
+ tone,
+ };
+ })
+ .filter(order => order.exitPrice > 0 && order.plannedQty > 0);
+ const stopPlan = v16CollectExposureOrders(position, exitOrders.filter(order => order.tone === 'loss'), 'loss');
+ const targetPlan = v16CollectExposureOrders(position, exitOrders.filter(order => order.tone === 'profit'), 'profit');
+ const protectionFallback = (stopPlan.coveredQty > 0 && targetPlan.coveredQty > 0)
+ ? null
+ : v16ResolvePositionProtectionFallback(position, protectionSources);
+ const fallbackStopPlan = stopPlan.coveredQty > 0
+ ? stopPlan
+ : v16CollectExposureOrders(position, [v16BuildFallbackExposureOrder(position, 'stop_loss', protectionFallback)].filter(Boolean), 'loss');
+ const fallbackTargetPlan = targetPlan.coveredQty > 0
+ ? targetPlan
+ : v16CollectExposureOrders(position, [v16BuildFallbackExposureOrder(position, 'take_profit', protectionFallback)].filter(Boolean), 'profit');
+ const effectiveStopPlan = stopPlan.coveredQty > 0 ? stopPlan : fallbackStopPlan;
+ const effectiveTargetPlan = targetPlan.coveredQty > 0 ? targetPlan : fallbackTargetPlan;
+ return {
+ maxProfit: +Math.max(0, Number(effectiveTargetPlan.totalPnl || 0)).toFixed(4),
+ maxLoss: +Math.min(0, Number(effectiveStopPlan.totalPnl || 0)).toFixed(4),
+ stopCoverageQty: effectiveStopPlan.coveredQty,
+ stopCoveragePct: effectiveStopPlan.coveragePct,
+ targetCoverageQty: effectiveTargetPlan.coveredQty,
+ targetCoveragePct: effectiveTargetPlan.coveragePct,
+ hasStop: effectiveStopPlan.coveredQty > 0,
+ hasTarget: effectiveTargetPlan.coveredQty > 0,
+ uncoveredStopQty: +Math.max(0, size - effectiveStopPlan.coveredQty).toFixed(8),
+ uncoveredTargetQty: +Math.max(0, size - effectiveTargetPlan.coveredQty).toFixed(8),
+ protectionFallback,
+ exitOrders,
+ stopOrders: effectiveStopPlan.orders,
+ targetOrders: effectiveTargetPlan.orders,
+ };
+}
+
+function v16SummarizeExposure(positions = []) {
+ const summary = {
+ maxProfit: 0,
+ maxLoss: 0,
+ totalSize: 0,
+ stopCoverageQty: 0,
+ targetCoverageQty: 0,
+ stopCoveragePct: 0,
+ targetCoveragePct: 0,
+ positionsWithStops: 0,
+ positionsWithTargets: 0,
+ };
+ (positions || []).forEach(position => {
+ const plan = position.exposurePlan || {};
+ summary.maxProfit += Math.max(0, Number(plan.maxProfit || 0));
+ summary.maxLoss += Math.min(0, Number(plan.maxLoss || 0));
+ summary.totalSize += Math.max(0, Number(position.size || 0));
+ summary.stopCoverageQty += Math.max(0, Number(plan.stopCoverageQty || 0));
+ summary.targetCoverageQty += Math.max(0, Number(plan.targetCoverageQty || 0));
+ if (plan.hasStop) summary.positionsWithStops += 1;
+ if (plan.hasTarget) summary.positionsWithTargets += 1;
+ });
+ summary.maxProfit = +summary.maxProfit.toFixed(4);
+ summary.maxLoss = +summary.maxLoss.toFixed(4);
+ summary.stopCoveragePct = summary.totalSize > 0 ? +(summary.stopCoverageQty / summary.totalSize * 100).toFixed(2) : 0;
+ summary.targetCoveragePct = summary.totalSize > 0 ? +(summary.targetCoverageQty / summary.totalSize * 100).toFixed(2) : 0;
+ return summary;
+}
+
+function v16ExposureCoverageLabel(label = '', pct = 0) {
+ const value = Math.max(0, Number(pct || 0));
+ if (value >= 99.5) return `${label} 100%`;
+ if (value <= 0) return `${label} missing`;
+ return `${label} ${Math.round(value)}%`;
+}
+
+function v16BuildPseudoFillsFromOrderHistory(orderHistory = []) {
+ return (orderHistory || [])
+ .map(v16NormalizeOrderHistoryItem)
+ .filter(order => order.symbol && order.createdAt > 0 && order.size > 0 && order.price > 0)
+ .filter(order => ['closed', 'filled', 'fully_filled'].includes(String(order.state || '').toLowerCase()))
+ .map(order => ({
+ id: order.id,
+ symbol: order.symbol,
+ side: order.side,
+ size: order.size,
+ price: order.price,
+ commission: Number(order.commission || 0),
+ createdAt: order.createdAt,
+ raw: order.raw,
+ }));
+}
+
+function v16BuildJournalFallbackFromOrderHistory(orderHistory = [], notesMap = {}) {
+ return (orderHistory || [])
+ .map(v16NormalizeOrderHistoryItem)
+ .filter(order => order.symbol && v16IsClosedRealizedOrder(order))
+ .sort((a, b) => b.createdAt - a.createdAt)
+ .slice(0, 40)
+ .map(order => {
+ const effectiveRealized = v16ResolveOrderRealizedPnl(order);
+ const tradeId = `order_${String(order.id || `${order.symbol}_${order.createdAt}`)}`.replace(/[^A-Za-z0-9_]/g, '');
+ const review = v16NormalizeJournalRecord(notesMap?.[tradeId] || '');
+ return {
+ id: tradeId,
+ symbol: order.symbol,
+ side: order.side === 'sell' ? 'short' : 'long',
+ size: Number(order.size || 0),
+ entryPrice: Number(order.price || 0),
+ exitPrice: Number(order.price || 0),
+ pnl: effectiveRealized,
+ expectancyValue: effectiveRealized,
+ openedAt: order.createdAt,
+ closedAt: order.createdAt,
+ commission: Number(order.commission || 0),
+ closeFillId: order.id,
+ closeOrderId: order.orderId || order.id,
+ closeClientOrderId: order.clientOrderId || '',
+ pnlSource: 'delta_order',
+ grossMovePnl: effectiveRealized,
+ fees: Math.abs(Number(order.commission || 0)),
+ funding: 0,
+ deltaClosedPnl: effectiveRealized,
+ netClosedPnl: effectiveRealized,
+ matchedCloseOrderIds: [String(order.orderId || order.id || '')].filter(Boolean),
+ review,
+ notes: review.notes,
+ hasNotes: !!review.notes.trim(),
+ fills: [order],
+ fallbackOnly: true,
+ };
+ });
+}
+
+function v16MergeUniqueRecords(primary = [], secondary = [], keys = []) {
+ const merged = [];
+ const seen = new Set();
+ [...(primary || []), ...(secondary || [])].forEach(item => {
+ const stable = keys.map(key => item?.[key]).find(value => value != null && String(value).trim() !== '') || JSON.stringify(item || {});
+ const token = String(stable);
+ if (seen.has(token)) return;
+ seen.add(token);
+ merged.push(item);
+ });
+ return merged;
+}
+
+function v16BuildPriceLookup(scanResults = []) {
+ const lookup = new Map();
+ (scanResults || []).forEach(result => {
+ const symbol = v16NormalizeSymbol(result?.symbol);
+ if (!symbol) return;
+ lookup.set(symbol, Number(result?.price || result?.entry || 0));
+ });
+ return lookup;
+}
+
+function v16ReconstructTrades(fills = [], notesMap = {}, productDefinitions = new Map()) {
+ const ordered = (fills || [])
+ .map(v16NormalizeFill)
+ .filter(fill => fill.symbol && fill.size > 0 && fill.price > 0 && fill.createdAt > 0)
+ .sort((a, b) => a.createdAt - b.createdAt);
+ const openBySymbol = new Map();
+ const trades = [];
+
+ for (const fill of ordered) {
+ const delta = fill.side === 'buy' ? fill.size : -fill.size;
+ const existing = openBySymbol.get(fill.symbol);
+ if (!existing || !existing.net) {
+ openBySymbol.set(fill.symbol, {
+ symbol: fill.symbol,
+ net: delta,
+ avgEntry: fill.price,
+ openAt: fill.createdAt,
+ openedSide: delta > 0 ? 'long' : 'short',
+ openCommission: fill.commission,
+ fills: [fill],
+ });
+ continue;
+ }
+
+ const sameDirection = Math.sign(existing.net) === Math.sign(delta);
+ if (sameDirection) {
+ const nextSize = Math.abs(existing.net) + Math.abs(delta);
+ existing.avgEntry = (((Math.abs(existing.net) * existing.avgEntry) + (fill.size * fill.price)) / nextSize);
+ existing.net += delta;
+ existing.openCommission += fill.commission;
+ existing.fills.push(fill);
+ openBySymbol.set(fill.symbol, existing);
+ continue;
+ }
+
+ let remaining = fill.size;
+ const netBefore = Math.abs(existing.net);
+ const closingQty = Math.min(netBefore, remaining);
+ const openFeeAlloc = netBefore > 0 ? existing.openCommission * (closingQty / netBefore) : 0;
+ const closeFeeAlloc = fill.commission * (closingQty / fill.size);
+ // Apply contract multiplier for options (e.g. 0.001 BTC per contract)
+ const productDef = productDefinitions.get(v16NormalizeSymbol(fill.symbol));
+ const contractMultiplier = Number(productDef?.displayMultiplier || 1);
+ const pnlQty = contractMultiplier !== 1 && contractMultiplier > 0
+ ? closingQty * contractMultiplier
+ : closingQty;
+ const grossPnl = existing.openedSide === 'long'
+ ? (fill.price - existing.avgEntry) * pnlQty
+ : (existing.avgEntry - fill.price) * pnlQty;
+ const pnl = grossPnl - openFeeAlloc - closeFeeAlloc;
+ const tradeId = `live_${fill.symbol}_${existing.openAt}_${fill.createdAt}_${closingQty.toFixed(4)}`.replace(/[^A-Za-z0-9_]/g, '');
+ const review = v16NormalizeJournalRecord(notesMap?.[tradeId] || '');
+ trades.push({
+ id: tradeId,
+ symbol: fill.symbol,
+ side: existing.openedSide,
+ size: +closingQty.toFixed(6),
+ entryPrice: +existing.avgEntry.toFixed(8),
+ exitPrice: +fill.price.toFixed(8),
+ pnl: +pnl.toFixed(6),
+ grossPnl: +grossPnl.toFixed(6),
+ expectancyValue: +pnl.toFixed(6),
+ openedAt: existing.openAt,
+ closedAt: fill.createdAt,
+ commission: +(openFeeAlloc + closeFeeAlloc).toFixed(6),
+ closeFillId: fill.id,
+ closeOrderId: fill.orderId || fill.id,
+ closeClientOrderId: fill.clientOrderId || '',
+ pnlSource: 'reconstructed',
+ grossMovePnl: +grossPnl.toFixed(6),
+ fees: +(openFeeAlloc + closeFeeAlloc).toFixed(6),
+ funding: 0,
+ deltaClosedPnl: +pnl.toFixed(6),
+ netClosedPnl: +pnl.toFixed(6),
+ matchedCloseOrderIds: [String(fill.orderId || fill.id || '')].filter(Boolean),
+ review,
+ notes: review.notes,
+ hasNotes: !!review.notes.trim(),
+ fills: existing.fills.concat(fill),
+ });
+
+ const remainder = fill.size - closingQty;
+ if (remainder <= 0) {
+ const nextNet = existing.net + delta;
+ if (Math.abs(nextNet) > 0) {
+ existing.net = nextNet;
+ existing.openCommission = Math.max(0, existing.openCommission - openFeeAlloc);
+ existing.fills.push(fill);
+ openBySymbol.set(fill.symbol, existing);
+ } else {
+ openBySymbol.delete(fill.symbol);
+ }
+ continue;
+ }
+
+ openBySymbol.set(fill.symbol, {
+ symbol: fill.symbol,
+ net: fill.side === 'buy' ? remainder : -remainder,
+ avgEntry: fill.price,
+ openAt: fill.createdAt,
+ openedSide: fill.side === 'buy' ? 'long' : 'short',
+ openCommission: fill.commission - closeFeeAlloc,
+ fills: [fill],
+ });
+ }
+
+ return {
+ trades: trades.sort((a, b) => b.closedAt - a.closedAt),
+ openTradeState: openBySymbol,
+ fills: ordered.slice().sort((a, b) => b.createdAt - a.createdAt),
+ };
+}
+
+function v16ComputeSessionMetrics(snapshot = {}, scanResults = [], notesMap = {}, productDefinitions = new Map()) {
+ const priceLookup = v16BuildPriceLookup(scanResults);
+ const balances = (snapshot.walletBalances || []).map(v16NormalizeWalletBalance);
+ const basePositions = (snapshot.marginedPositions?.length ? snapshot.marginedPositions : snapshot.positions || [])
+ .map(position => v16NormalizePosition(position, priceLookup))
+ .filter(position => position.symbol && position.size > 0);
+ const sizedPositions = basePositions.map(position => {
+ const decorated = v16DecorateDisplaySizing(position, productDefinitions);
+ // Fix UPNL for options/straddles: use displaySize (BTC qty) instead of raw contract count
+ // Options have contractValue != 1 (e.g. 0.001 BTC per contract for BTC options)
+ const cv = Number(decorated.contractValue || 1);
+ if (cv !== 1 && cv > 0 && decorated.entry > 0 && decorated.markPrice > 0 && decorated.size > 0) {
+ const displayQty = Math.abs(Number(decorated.displaySize || decorated.size));
+ decorated.unrealized = +(decorated.side === 'short'
+ ? (decorated.entry - decorated.markPrice) * displayQty
+ : (decorated.markPrice - decorated.entry) * displayQty
+ ).toFixed(6);
+ }
+ return decorated;
+ });
+ const orderHistory = (snapshot.orderHistory || [])
+ .map(v16NormalizeOrderHistoryItem)
+ .filter(order => order.symbol && order.createdAt > 0)
+ .sort((a, b) => b.createdAt - a.createdAt);
+ const openOrders = (snapshot.openOrders || [])
+ .map(v16NormalizeOrderHistoryItem)
+ .filter(order => order.symbol && ['open', 'pending'].includes(String(order.state || '').toLowerCase()))
+ .map(order => v16DecorateManagedOpenOrder(order, sizedPositions))
+ .map(order => v16DecorateDisplaySizing(order, productDefinitions))
+ .sort((a, b) => b.createdAt - a.createdAt);
+ const protectionSources = [...openOrders, ...orderHistory];
+ const positions = sizedPositions.map(position => ({
+ ...position,
+ exposurePlan: v16BuildPositionExposurePlan(position, openOrders, protectionSources),
+ }));
+ const normalizedFills = (snapshot.fills || [])
+ .map(v16NormalizeFill)
+ .filter(fill => fill.symbol && fill.createdAt > 0)
+ .sort((a, b) => b.createdAt - a.createdAt);
+ const walletTransactions = (snapshot.walletTransactions || [])
+ .map(v16NormalizeWalletTransaction)
+ .filter(item => item.createdAt > 0)
+ .sort((a, b) => b.createdAt - a.createdAt);
+ const reconstructedFromFills = v16ReconstructTrades(snapshot.fills || [], notesMap, productDefinitions);
+ const orderHistoryPseudoFills = v16BuildPseudoFillsFromOrderHistory(snapshot.orderHistory || []);
+ const reconstructedFromOrders = orderHistoryPseudoFills.length
+ ? v16ReconstructTrades(orderHistoryPseudoFills, notesMap, productDefinitions)
+ : { trades: [], fills: [], openTradeState: new Map() };
+ const reconstructed = reconstructedFromFills.trades.length
+ ? reconstructedFromFills
+ : reconstructedFromOrders;
+ const fallbackJournalTrades = !reconstructed.trades.length
+ ? v16BuildJournalFallbackFromOrderHistory(snapshot.orderHistory || [], notesMap)
+ : [];
+ const baseResolvedTrades = reconstructed.trades.length
+ ? v16ReconcileTradesWithClosedOrders(reconstructed.trades, orderHistory)
+ : fallbackJournalTrades;
+ const resolvedTrades = baseResolvedTrades.map(trade => ({
+ ...trade,
+ sourceLabel: (String(trade.closeClientOrderId || trade.clientOrderId || trade.id || '').includes('AT_') || String(trade.closeClientOrderId || trade.clientOrderId || trade.id || '').includes('AT2')) ? 'Auto' : 'Manual',
+ closeReasonLabel: v16ResolveJournalCloseReason(trade, null, orderHistory) || 'closed'
+ }));
+ const todayStart = v16StartOfToday();
+ const todayTrades = resolvedTrades.filter(trade => Number(trade.closedAt || 0) >= todayStart);
+ const realizedOrdersToday = orderHistory.filter(order => Number(order.createdAt || 0) >= todayStart && v16IsClosedRealizedOrder(order));
+ const walletTransactionsToday = walletTransactions.filter(item => Number(item.createdAt || 0) >= todayStart);
+ const walletFeeTransactionsToday = walletTransactionsToday.filter(item => v16WalletTransactionRole(item) === 'fee');
+ const walletRebateTransactionsToday = walletTransactionsToday.filter(item => v16WalletTransactionRole(item) === 'rebate');
+ const walletFundingTransactionsToday = walletTransactionsToday.filter(item => v16WalletTransactionRole(item) === 'funding');
+ const walletRealizedTransactionsToday = walletTransactionsToday.filter(item => v16WalletTransactionRole(item) === 'realized');
+ const fillsToday = normalizedFills.filter(fill => Number(fill.createdAt || 0) >= todayStart);
+ const todayClosedSeries = realizedOrdersToday.length
+ ? realizedOrdersToday.map(order => ({
+ closedAt: order.createdAt,
+ pnl: v16ResolveOrderRealizedPnl(order),
+ }))
+ : todayTrades.map(trade => ({
+ closedAt: trade.closedAt,
+ pnl: v16TradeDisplayPnl(trade),
+ }));
+ const wins = todayClosedSeries.filter(trade => trade.pnl > 0);
+ const losses = todayClosedSeries.filter(trade => trade.pnl <= 0);
+ const avgWin = wins.length ? (wins.reduce((sum, trade) => sum + Number(trade.pnl || 0), 0) / wins.length) : 0;
+ const avgLoss = losses.length ? (losses.reduce((sum, trade) => sum + Number(trade.pnl || 0), 0) / losses.length) : 0;
+ const todayTradeCloseReasons = todayTrades.map(trade => String(v16ResolveJournalCloseReason(trade, trade, orderHistory) || '').toLowerCase());
+ const targetHits = todayTradeCloseReasons.filter(reason => reason.includes('target')).length;
+ const stopHits = todayTradeCloseReasons.filter(reason => reason.includes('stop')).length;
+ const ledgerRealizedToday = walletRealizedTransactionsToday.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+ const realizedToday = Math.abs(ledgerRealizedToday) > 0
+ ? ledgerRealizedToday
+ : realizedOrdersToday.length
+ ? realizedOrdersToday.reduce((sum, order) => sum + v16ResolveOrderRealizedPnl(order), 0)
+ : todayTrades.reduce((sum, trade) => sum + v16TradeDisplayPnl(trade), 0);
+ const fillFeesToday = fillsToday.reduce((sum, fill) => sum + Math.max(0, Number(fill.commission || 0)), 0);
+ const fillFeeCreditsToday = fillsToday.reduce((sum, fill) => sum + Math.abs(Math.min(0, Number(fill.commission || 0))), 0);
+ const orderFeesToday = realizedOrdersToday.reduce((sum, order) => sum + Math.max(0, Number(order.commission || 0)), 0);
+ const orderFeeCreditsToday = realizedOrdersToday.reduce((sum, order) => sum + Math.abs(Math.min(0, Number(order.commission || 0))), 0);
+ const feesPaidToday = walletFeeTransactionsToday.length
+ ? walletFeeTransactionsToday.reduce((sum, item) => sum + Math.max(0, Math.abs(Number(item.amount || item.commission || 0))), 0)
+ : (fillFeesToday || orderFeesToday);
+ const feeCreditsToday = walletRebateTransactionsToday.length
+ ? walletRebateTransactionsToday.reduce((sum, item) => sum + Math.max(0, Math.abs(Number(item.amount || item.commission || 0))), 0)
+ : (fillFeeCreditsToday || orderFeeCreditsToday);
+ const fundingToday = walletFundingTransactionsToday.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+ const unrealized = positions.reduce((sum, position) => sum + Number(position.unrealized || 0), 0);
+ const netClosedToday = realizedToday - feesPaidToday + feeCreditsToday + fundingToday;
+ const todayPnl = netClosedToday + unrealized;
+ const closedCount = todayClosedSeries.length;
+ const expectancy = closedCount ? (realizedToday / closedCount) : 0;
+ const winRate = closedCount ? +((wins.length / closedCount) * 100).toFixed(1) : 0;
+ const realizedJournalSource = Math.abs(ledgerRealizedToday) > 0
+ ? 'Wallet realized'
+ : (realizedOrdersToday.length ? 'Delta realized' : 'Loaded journal');
+
+ let streakCount = 0;
+ let streakTone = 'flat';
+ let streakLabel = 'Flat';
+ for (const trade of todayClosedSeries.sort((a, b) => Number(b.closedAt || 0) - Number(a.closedAt || 0))) {
+ const tone = trade.pnl > 0 ? 'win' : 'loss';
+ if (!streakCount) {
+ streakCount = 1;
+ streakTone = tone;
+ continue;
+ }
+ if (streakTone === tone) {
+ streakCount += 1;
+ } else {
+ break;
+ }
+ }
+ if (streakCount > 0) streakLabel = `${streakCount} ${streakTone === 'win' ? 'win' : 'loss'}${streakCount > 1 ? 's' : ''}`;
+
+ const primaryWallet = balances.find(item => ['USD', 'USDT', 'INR'].includes(item.symbol)) || balances[0] || { balance: 0, available: 0, symbol: 'USD' };
+ return {
+ balances,
+ positions,
+ exposure: v16SummarizeExposure(positions),
+ fills: reconstructed.fills,
+ rawFillCount: Array.isArray(snapshot?.fills) ? snapshot.fills.length : 0,
+ orderHistory,
+ openOrders,
+ rawOrderCount: Array.isArray(snapshot?.orderHistory) ? snapshot.orderHistory.length : 0,
+ walletTransactions,
+ trades: resolvedTrades,
+ todayTrades,
+ wins,
+ losses,
+ closedCount,
+ realizedToday,
+ feesPaidToday,
+ feeCreditsToday,
+ fundingToday,
+ netClosedToday,
+ unrealized,
+ openPnl: unrealized,
+ closedPnl: realizedToday,
+ netPnl: todayPnl,
+ todayPnl,
+ expectancy,
+ winRate,
+ avgWin,
+ avgLoss,
+ targetHits,
+ stopHits,
+ realizedJournalSource,
+ streakLabel,
+ streakTone,
+ walletBalance: Number(primaryWallet.balance || 0),
+ walletAvailable: Number(primaryWallet.available || 0),
+ walletSymbol: primaryWallet.symbol,
+ historyDiagnostics: snapshot?.historyDiagnostics || {},
+ snapshot,
+ };
+}
+
+async function v16AppendEquityHistory(metrics) {
+ const existing = await storeGet(V16_LIVE_EQUITY_HISTORY_KEY);
+ let history = Array.isArray(existing?.[V16_LIVE_EQUITY_HISTORY_KEY]) ? existing[V16_LIVE_EQUITY_HISTORY_KEY] : [];
+ const point = {
+ ts: Date.now(),
+ equity: +(Number(metrics.walletBalance || 0) + Number(metrics.unrealized || 0)).toFixed(4),
+ realizedToday: +Number(metrics.realizedToday || 0).toFixed(4),
+ unrealized: +Number(metrics.unrealized || 0).toFixed(4),
+ feesPaidToday: +Number(metrics.feesPaidToday || 0).toFixed(4),
+ feeCreditsToday: +Number(metrics.feeCreditsToday || 0).toFixed(4),
+ fundingToday: +Number(metrics.fundingToday || 0).toFixed(4),
+ tradeCount: metrics.todayTrades.length,
+ };
+ const last = history[history.length - 1];
+ if (!last || Math.abs(Number(last.equity || 0) - point.equity) > 0.01 || (point.ts - Number(last.ts || 0)) > 60000) {
+ history = history.concat(point);
+ await storeSet({ [V16_LIVE_EQUITY_HISTORY_KEY]: history });
+ }
+ return history;
+}
+function v16GetEquityChartModel(history = []) {
+ if (!Array.isArray(history) || !history.length) return null;
+ const width = 760;
+ const height = 180;
+ const pad = 18;
+ const baseEquity = Number(history[0]?.equity || 0);
+ const pnlValues = history.map(point => +(Number(point.equity || 0) - baseEquity).toFixed(4));
+ const min = Math.min(0, ...pnlValues);
+ const max = Math.max(0, ...pnlValues);
+ const range = Math.max(max - min, 1);
+ const zeroY = height - pad - (((0 - min) / range) * (height - pad * 2));
+ const points = history.map((point, index) => {
+ const pnl = +(Number(point.equity || 0) - baseEquity).toFixed(4);
+ const x = pad + ((width - pad * 2) * index / Math.max(1, history.length - 1));
+ const y = height - pad - (((pnl - min) / range) * (height - pad * 2));
+ return {
+ x,
+ y,
+ ts: Number(point.ts || 0),
+ equity: Number(point.equity || 0),
+ pnl,
+ realizedToday: Number(point.realizedToday || 0),
+ unrealized: Number(point.unrealized || 0),
+ feesPaidToday: Number(point.feesPaidToday || 0),
+ feeCreditsToday: Number(point.feeCreditsToday || 0),
+ fundingToday: Number(point.fundingToday || 0),
+ tradeCount: Number(point.tradeCount || 0),
+ };
+ });
+ return {
+ width,
+ height,
+ pad,
+ zeroY,
+ points,
+ isNegative: pnlValues[pnlValues.length - 1] < 0,
+ gradientOffset: Math.max(0, Math.min(1, (zeroY - pad) / Math.max(1, height - pad * 2))),
+ };
+}
+
+async function v16SyncLiveManageHistory(metrics, history = []) {
+ const liveTrades = (metrics?.trades || []).map(trade => ({
+ ...trade,
+ review: v16NormalizeJournalRecord(trade.review || trade.notes || ''),
+ source: 'live',
+ }));
+ await Promise.all([
+ manageStoreSet(V16_MANAGE_STORE_KEYS.liveLedger, {
+ trades: liveTrades,
+ fills: metrics?.fills || [],
+ orderHistory: metrics?.orderHistory || [],
+ openOrders: metrics?.openOrders || [],
+ rawFills: Array.isArray(metrics?.snapshot?.fills) ? metrics.snapshot.fills : [],
+ rawOrderHistory: Array.isArray(metrics?.snapshot?.orderHistory) ? metrics.snapshot.orderHistory : [],
+ balances: metrics?.balances || [],
+ positions: metrics?.positions || [],
+ historyWindowDays: Number(metrics?.snapshot?.historyWindowDays || 0),
+ candidateSnapshots: Array.isArray(metrics?.snapshot?.candidateSnapshots) ? metrics.snapshot.candidateSnapshots : [],
+ historyDiagnostics: metrics?.historyDiagnostics || {},
+ lastOrderAction: v16LiveAccountView.lastOrderAction || null,
+ updatedAt: Date.now(),
+ }),
+ manageStoreSet(V16_MANAGE_STORE_KEYS.liveEquity, {
+ points: Array.isArray(history) ? history : [],
+ updatedAt: Date.now(),
+ }),
+ ]);
+}
+
+// Live analytics, setup performance and equity/risk visual models
+async function v16EnsureLiveManageHistory(forceRefresh = false) {
+ const existing = await v16GetManageHistoryBundle();
+ const ledgerUpdatedAt = Number(existing?.liveLedger?.updatedAt || 0);
+ const existingHasHistory = !!(
+ existing?.liveLedger?.trades?.length
+ || existing?.liveLedger?.fills?.length
+ || existing?.liveLedger?.orderHistory?.length
+ || existing?.liveLedger?.openOrders?.length
+ || existing?.liveLedger?.rawFills?.length
+ || existing?.liveLedger?.rawOrderHistory?.length
+ );
+ if (!forceRefresh && ledgerUpdatedAt && (Date.now() - ledgerUpdatedAt) < 15000 && (existingHasHistory || !v16CapabilityAllowsAccountRead())) {
+ return existing;
+ }
+
+ const snapshot = forceRefresh
+ ? await refreshV16PrivateAccountData(true)
+ : (await refreshV16PrivateAccountData(false)) || (await storeGet(V16_LIVE_SNAPSHOT_KEY))?.[V16_LIVE_SNAPSHOT_KEY] || null;
+ const historyLooksEmpty = !!snapshot
+ && !forceRefresh
+ && !(Array.isArray(snapshot?.fills) && snapshot.fills.length)
+ && !(Array.isArray(snapshot?.orderHistory) && snapshot.orderHistory.length)
+ && v16CapabilityAllowsAccountRead();
+ const resolvedSnapshot = historyLooksEmpty
+ ? (await refreshV16PrivateAccountData(true).catch(() => snapshot)) || snapshot
+ : snapshot;
+ if (!resolvedSnapshot) return existing;
+
+ const scanResults = (await getV16Snapshot())?.scanResults || [];
+ const notesStore = await storeGet(V16_LIVE_JOURNAL_NOTES_KEY);
+ const notesMap = notesStore?.[V16_LIVE_JOURNAL_NOTES_KEY] || {};
+ const productDefinitions = await v16BuildProductDefinitionsForSnapshot(resolvedSnapshot);
+ const metrics = v16ComputeSessionMetrics(resolvedSnapshot, scanResults, notesMap, productDefinitions);
+ const history = await v16AppendEquityHistory(metrics);
+ await v16SyncLiveManageHistory(metrics, history);
+ return v16GetManageHistoryBundle();
+}
+
+function v16NormalizeLiveAnalyticsView(value = {}) {
+ const base = {
+ rangeDays: 7,
+ range: '7d',
+ instrument: 'all',
+ setupMode: 'all',
+ setupSort: 'impact',
+ autoRefresh: false,
+ legend: {
+ deposits: true,
+ withdrawals: true,
+ liquidationFees: true,
+ },
+ };
+ const normalized = {
+ ...base,
+ ...(value && typeof value === 'object' ? value : {}),
+ };
+ const legacyRangeMatch = String(normalized.range || '').match(/^(\d{1,3})d$/i);
+ const requestedRangeDays = Number(
+ normalized.rangeDays
+ ?? (legacyRangeMatch ? legacyRangeMatch[1] : base.rangeDays)
+ );
+ normalized.rangeDays = Math.min(365, Math.max(1, Number.isFinite(requestedRangeDays) ? Math.round(requestedRangeDays) : base.rangeDays));
+ normalized.range = `${normalized.rangeDays}d`;
+ normalized.instrument = ['all', 'futures', 'options'].includes(String(normalized.instrument || ''))
+ ? String(normalized.instrument)
+ : 'all';
+ normalized.setupMode = ['all', 'closed', 'live', 'regime'].includes(String(normalized.setupMode || ''))
+ ? String(normalized.setupMode)
+ : 'all';
+ normalized.setupSort = ['impact', 'expectancy', 'live', 'winRate'].includes(String(normalized.setupSort || ''))
+ ? String(normalized.setupSort)
+ : 'impact';
+ normalized.autoRefresh = normalized.autoRefresh === true;
+ normalized.legend = {
+ deposits: normalized.legend?.deposits !== false,
+ withdrawals: normalized.legend?.withdrawals !== false,
+ liquidationFees: normalized.legend?.liquidationFees !== false,
+ };
+ return normalized;
+}
+
+function v16BuildAnalyticsSetupState(setup = {}) {
+ const trades = Number(setup.trades || 0);
+ const liveCount = Number(setup.liveCount || 0);
+ const regimeFitCount = Number(setup.regimeFitCount || 0);
+ const expectancy = Number(setup.expectancy || 0);
+
+ if (setup.edgeStatusLabel) return { label: setup.edgeStatusLabel, tone: setup.edgeTone || (expectancy > 0 ? 'good' : 'warn') };
+ if (liveCount > 0 && regimeFitCount === 0) return { label: 'Out Of Regime', tone: 'bad' };
+ if (trades >= 4 && expectancy > 0) return { label: 'Validated', tone: 'good' };
+ if (trades >= 4) return { label: 'Needs Work', tone: 'bad' };
+ if (liveCount > 0 && trades > 0) return { label: 'Building', tone: 'warn' };
+ if (liveCount > 0) return { label: 'Live Only', tone: regimeFitCount > 0 ? 'info' : 'warn' };
+ if (trades > 0) return { label: 'History Only', tone: 'muted' };
+ return { label: 'Quiet', tone: 'muted' };
+}
+
+function v16SortAnalyticsSetupRows(rows = [], sort = 'impact') {
+ const normalizedSort = ['impact', 'expectancy', 'live', 'winRate'].includes(String(sort || ''))
+ ? String(sort)
+ : 'impact';
+ const safeRows = Array.isArray(rows) ? [...rows] : [];
+ return safeRows.sort((a, b) => {
+ if (normalizedSort === 'expectancy') {
+ return (
+ Number(b.trades || 0) - Number(a.trades || 0)
+ || Number(b.expectancy || 0) - Number(a.expectancy || 0)
+ || Number(b.pnl || 0) - Number(a.pnl || 0)
+ || Number(b.liveCount || 0) - Number(a.liveCount || 0)
+ );
+ }
+ if (normalizedSort === 'live') {
+ const aFit = Number(a.liveCount || 0) > 0 ? Number(a.regimeFitCount || 0) / Number(a.liveCount || 1) : 0;
+ const bFit = Number(b.liveCount || 0) > 0 ? Number(b.regimeFitCount || 0) / Number(b.liveCount || 1) : 0;
+ return (
+ Number(b.liveCount || 0) - Number(a.liveCount || 0)
+ || bFit - aFit
+ || Number(b.liveTradeQuality || 0) - Number(a.liveTradeQuality || 0)
+ || Number(b.liveScore || 0) - Number(a.liveScore || 0)
+ || Number(b.trades || 0) - Number(a.trades || 0)
+ );
+ }
+ if (normalizedSort === 'winRate') {
+ return (
+ Number(b.trades || 0) - Number(a.trades || 0)
+ || Number(b.winRate || 0) - Number(a.winRate || 0)
+ || Number(b.expectancy || 0) - Number(a.expectancy || 0)
+ || Number(b.liveCount || 0) - Number(a.liveCount || 0)
+ );
+ }
+ return (
+ Math.abs(Number(b.pnl || 0)) - Math.abs(Number(a.pnl || 0))
+ || Number(b.liveCount || 0) - Number(a.liveCount || 0)
+ || Number(b.trades || 0) - Number(a.trades || 0)
+ || Math.abs(Number(b.expectancy || 0)) - Math.abs(Number(a.expectancy || 0))
+ );
+ });
+}
+
+function v16BuildAnalyticsSetupRows(manageModel = {}, scanResults = [], setupPerformance = null) {
+ const liveSetupMap = new Map();
+ (Array.isArray(scanResults) ? scanResults : []).forEach(signal => {
+ const baseFamilyKey = String(signal?.setupFamily || signal?.setupFamilyLabel || '').trim().toLowerCase().replace(/\s+/g, '_');
+ const familyLabel = String(signal?.setupFamilyLabel || v16HumanizeSetupFamily(signal?.setupFamily || '') || 'Live Watch').trim();
+ if (!baseFamilyKey || !familyLabel) return;
+ const timeframe = String(signal?.lower?.label || signal?.tf2 || signal?.timeframe || '15m').trim() || '15m';
+ const marketRegime = String(signal?.marketRegime || 'UNKNOWN').trim().toUpperCase() || 'UNKNOWN';
+ const familyKey = `${baseFamilyKey}|${timeframe.toLowerCase()}|${marketRegime}`;
+ const entry = liveSetupMap.get(familyKey) || {
+ familyKey,
+ family: `${familyLabel} | ${timeframe} | ${marketRegime}`,
+ liveCount: 0,
+ liveTradeQuality: 0,
+ liveScore: 0,
+ regimeFitCount: 0,
+ };
+ entry.liveCount += 1;
+ entry.liveTradeQuality = Math.max(entry.liveTradeQuality, Number(signal?.tradeQuality?.score || 0));
+ entry.liveScore = Math.max(entry.liveScore, Number(signal?.score || 0));
+ if (signal?.setupFamilyAllowedInRegime !== false) entry.regimeFitCount += 1;
+ liveSetupMap.set(familyKey, entry);
+ });
+ const setupBreakdown = Array.isArray(setupPerformance?.list) && setupPerformance.list.length
+ ? setupPerformance.list.map(item => ({
+ familyKey: item.key,
+ family: `${item.family} | ${item.timeframe} | ${item.marketRegime}`,
+ trades: item.trades,
+ pnl: item.expectancy * item.trades,
+ wins: item.wins,
+ winRate: item.winRate,
+ expectancy: item.expectancy,
+ symbolCount: 0,
+ avgTradeQuality: item.avgTradeQuality,
+ avgScore: null,
+ avgR: item.avgR,
+ paperTrades: item.paperTrades,
+ liveTrades: item.liveTrades,
+ edgeStatus: item.status,
+ edgeStatusLabel: item.statusLabel,
+ edgeTone: item.tone,
+ maxDrawdown: item.maxDrawdown,
+ lastClosedAt: item.lastClosedAt,
+ }))
+ : (Array.isArray(manageModel?.setupBreakdown) ? manageModel.setupBreakdown : []);
+ const manageSetupMap = new Map(
+ setupBreakdown.map(item => [String(item.familyKey || item.family || '').trim().toLowerCase(), { ...item }])
+ );
+ return Array.from(new Set([
+ ...manageSetupMap.keys(),
+ ...liveSetupMap.keys(),
+ ])).map(key => {
+ const historical = manageSetupMap.get(key) || null;
+ const liveMeta = liveSetupMap.get(key) || null;
+ return {
+ familyKey: key,
+ family: liveMeta?.family || historical?.family || 'Live Watch',
+ trades: historical?.trades || 0,
+ pnl: historical?.pnl || 0,
+ wins: historical?.wins || 0,
+ winRate: historical?.winRate || 0,
+ expectancy: historical?.expectancy || 0,
+ symbolCount: historical?.symbolCount || 0,
+ avgTradeQuality: historical?.avgTradeQuality ?? null,
+ avgScore: historical?.avgScore ?? null,
+ avgR: historical?.avgR ?? null,
+ paperTrades: Number(historical?.paperTrades || 0),
+ liveTrades: Number(historical?.liveTrades || 0),
+ edgeStatus: String(historical?.edgeStatus || '').trim(),
+ edgeStatusLabel: String(historical?.edgeStatusLabel || '').trim(),
+ edgeTone: String(historical?.edgeTone || '').trim(),
+ maxDrawdown: Number(historical?.maxDrawdown || 0),
+ lastClosedAt: historical?.lastClosedAt || 0,
+ liveCount: Number(liveMeta?.liveCount || 0),
+ liveTradeQuality: Number(liveMeta?.liveTradeQuality || 0),
+ liveScore: Number(liveMeta?.liveScore || 0),
+ regimeFitCount: Number(liveMeta?.regimeFitCount || 0),
+ };
+ });
+}
+
+function v16RenderAnalyticsSetupBreakdown(preloaded = null) {
+ const setupEl = document.getElementById('liveAnalyticsSetupBreakdown');
+ if (!setupEl) return;
+ const cache = v16LiveAnalyticsSetupCache || {};
+ const mergedSetupRows = Array.isArray(cache.rows) ? cache.rows : [];
+ const analyticsModel = cache.analyticsModel || { view: v16LiveAnalyticsView || {} };
+ const setupMode = String(analyticsModel.view?.setupMode || 'all');
+ const setupSort = String(analyticsModel.view?.setupSort || 'impact');
+ const setupSortLabelMap = {
+ impact: 'Impact',
+ expectancy: 'Expectancy',
+ live: 'Live Edge',
+ winRate: 'Win Rate',
+ };
+ const filteredSetupRows = mergedSetupRows.filter(item => {
+ if (setupMode === 'closed') return Number(item.trades || 0) > 0;
+ if (setupMode === 'live') return Number(item.liveCount || 0) > 0;
+ if (setupMode === 'regime') return Number(item.liveCount || 0) > 0 && Number(item.regimeFitCount || 0) > 0;
+ return true;
+ });
+ const sortedSetupRows = v16SortAnalyticsSetupRows(filteredSetupRows, setupSort);
+ const displayedSetupRows = sortedSetupRows.slice(0, 8);
+ const setupClosedTrades = filteredSetupRows.reduce((sum, item) => sum + Number(item.trades || 0), 0);
+ const setupNetPnl = filteredSetupRows.reduce((sum, item) => sum + Number(item.pnl || 0), 0);
+ const setupPaperTrades = filteredSetupRows.reduce((sum, item) => sum + Number(item.paperTrades || 0), 0);
+ const setupLiveTrades = filteredSetupRows.reduce((sum, item) => sum + Number(item.liveTrades || 0), 0);
+ const liveFamilyCount = filteredSetupRows.filter(item => Number(item.liveCount || 0) > 0).length;
+ const validatedFamilyCount = filteredSetupRows.filter(item => String(item.edgeStatus || '') === 'positive_edge').length;
+ const avgExpectancy = setupClosedTrades ? +(setupNetPnl / setupClosedTrades).toFixed(2) : 0;
+ const strongestLiveFamily = v16SortAnalyticsSetupRows(
+ filteredSetupRows.filter(item => Number(item.liveCount || 0) > 0),
+ 'live'
+ )[0] || null;
+ const worstClosedFamily = [...filteredSetupRows]
+ .filter(item => Number(item.trades || 0) > 0)
+ .sort((a, b) => Number(a.pnl || 0) - Number(b.pnl || 0))[0] || null;
+ const outOfRegimeCount = filteredSetupRows.filter(item => Number(item.liveCount || 0) > 0 && Number(item.regimeFitCount || 0) === 0).length;
+ const hiddenFamilyCount = Math.max(0, sortedSetupRows.length - displayedSetupRows.length);
+ const hasAnyClosedHistory = mergedSetupRows.some(item => Number(item.trades || 0) > 0);
+ const emptyCopy = !mergedSetupRows.length
+ ? 'No closed trades in range yet. Current live scanner setup families will appear here as signals populate.'
+ : (setupMode === 'closed' && !hasAnyClosedHistory
+ ? 'No closed setup-family history yet in the selected range. Families will move here once live trades close and journal sync catches them.'
+ : 'No setup families match this view right now. Try All or Live Now.');
+ setupEl.innerHTML = `
+ <div class="risk-manage-setup-shell">
+ <div class="risk-manage-section-label">SETUP FAMILY PERFORMANCE (30D)</div>
+ <div class="risk-manage-setup-toolbar">
+ <div class="live-analytics-filter-group">
+ <span class="live-analytics-filter-label">Scope</span>
+ <div class="live-analytics-chip-row">
+ <button class="live-analytics-chip ${setupMode === 'all' ? 'active' : ''}" data-analytics-setup-mode="all">All</button>
+ <button class="live-analytics-chip ${setupMode === 'closed' ? 'active' : ''}" data-analytics-setup-mode="closed">Closed Only</button>
+ <button class="live-analytics-chip ${setupMode === 'live' ? 'active' : ''}" data-analytics-setup-mode="live">Live Now</button>
+ <button class="live-analytics-chip ${setupMode === 'regime' ? 'active' : ''}" data-analytics-setup-mode="regime">Regime Fit</button>
+ </div>
+ </div>
+ <div class="live-analytics-filter-group">
+ <span class="live-analytics-filter-label">Rank By</span>
+ <div class="live-analytics-chip-row">
+ <button class="live-analytics-chip ${setupSort === 'impact' ? 'active' : ''}" data-analytics-setup-sort="impact">Impact</button>
+ <button class="live-analytics-chip ${setupSort === 'expectancy' ? 'active' : ''}" data-analytics-setup-sort="expectancy">Expectancy</button>
+ <button class="live-analytics-chip ${setupSort === 'live' ? 'active' : ''}" data-analytics-setup-sort="live">Live Edge</button>
+ <button class="live-analytics-chip ${setupSort === 'winRate' ? 'active' : ''}" data-analytics-setup-sort="winRate">Win Rate</button>
+ </div>
+ </div>
+ </div>
+ <div class="risk-manage-setup-summary">
+ <article class="risk-manage-setup-summary-card tone-info">
+ <span>Families In View</span>
+ <strong>${filteredSetupRows.length}</strong>
+ <small>${liveFamilyCount} active | ${validatedFamilyCount} positive edge</small>
+ </article>
+ <article class="risk-manage-setup-summary-card ${setupClosedTrades > 0 ? (setupNetPnl >= 0 ? 'tone-good' : 'tone-bad') : 'tone-info'}">
+ <span>Paper + Live Sample</span>
+ <strong>${setupClosedTrades > 0 ? `${setupClosedTrades}T` : 'NONE'}</strong>
+ <small>${setupClosedTrades > 0 ? `${setupPaperTrades} paper | ${setupLiveTrades} live | Exp ${avgExpectancy >= 0 ? '+' : ''}${avgExpectancy}` : 'No paper/live setup-family sample yet'}</small>
+ </article>
+ <article class="risk-manage-setup-summary-card ${strongestLiveFamily ? 'tone-good' : 'tone-muted'}">
+ <span>Best Active</span>
+ <strong>${v16Esc(strongestLiveFamily?.family || '--')}</strong>
+ <small>${strongestLiveFamily ? `TQ ${v16FmtNumber(strongestLiveFamily.liveTradeQuality || 0, 0)} | Fit ${strongestLiveFamily.regimeFitCount}/${strongestLiveFamily.liveCount}` : 'No live families in scope'}</small>
+ </article>
+ <article class="risk-manage-setup-summary-card ${outOfRegimeCount > 0 || (worstClosedFamily && Number(worstClosedFamily.pnl || 0) < 0) ? 'tone-warn' : 'tone-good'}">
+ <span>Caution</span>
+ <strong>${outOfRegimeCount > 0 ? `${outOfRegimeCount} live mismatch` : v16Esc(worstClosedFamily?.family || 'No blocker')}</strong>
+ <small>${outOfRegimeCount > 0 ? 'Signals are live but not regime-approved' : worstClosedFamily ? `${v16FmtSigned(worstClosedFamily.pnl || 0)} net | ${worstClosedFamily.trades} trades` : 'No negative family pressure in view'}</small>
+ </article>
+ </div>
+ <div class="risk-manage-setup-header"><span>Setup</span><span>Sample</span><span>Win% / Fit</span><span>Paper / Live</span><span>Edge</span></div>
+ <div class="risk-manage-setup-rows">${
+ displayedSetupRows.length
+ ? displayedSetupRows.map(s => {
+ const state = v16BuildAnalyticsSetupState(s);
+ const promotion = v16ResolveSetupPromotion(s);
+ const liveFitPct = Number(s.liveCount || 0) > 0
+ ? Math.round((Number(s.regimeFitCount || 0) / Math.max(1, Number(s.liveCount || 0))) * 100)
+ : 0;
+ const lastClosedCopy = Number(s.lastClosedAt || 0) > 0
+ ? ` | Last ${v16FormatDurationShort(Math.max(0, Date.now() - Number(s.lastClosedAt || 0)))} ago`
+ : '';
+ const setupMeta = s.liveCount > 0
+ ? `Live ${s.liveCount} now${s.liveTradeQuality > 0 ? ` | TQ ${v16FmtNumber(s.liveTradeQuality, 0)}` : ''}${s.liveScore > 0 ? ` | Score ${v16FmtNumber(s.liveScore, 0)}` : ''}${s.regimeFitCount > 0 ? ` | Fit ${s.regimeFitCount}/${s.liveCount}` : ''}`
+ : `${s.symbolCount || 0} symbol${Number(s.symbolCount || 0) === 1 ? '' : 's'}${s.avgTradeQuality != null ? ` | Avg TQ ${v16FmtNumber(s.avgTradeQuality, 1)}` : ''}${lastClosedCopy}`;
+ return `<div class="risk-manage-setup-row state-${state.tone}">
+ <span class="rsf-name">
+ <span class="rsf-name-main">${v16Esc(s.family)} <span class="rsf-badge tone-${state.tone}">${v16Esc(state.label)}</span></span>
+ <small class="rsf-name-meta">${setupMeta}</small>
+ </span>
+ <span class="rsf-trades">
+ <strong class="rsf-cell-main">${s.trades > 0 ? `${s.trades}T` : (s.liveCount > 0 ? 'LIVE' : '--')}</strong>
+ <small class="rsf-cell-meta">${s.trades > 0 ? `${s.symbolCount || 0} sym` : (s.liveCount > 0 ? `${s.liveCount} live` : 'No sample')}</small>
+ </span>
+ <span class="rsf-wr" style="color:${s.trades > 0 ? (s.winRate >= 50 ? '#00e5a0' : '#ff4560') : (s.liveCount > 0 && liveFitPct >= 50 ? '#00e5a0' : '#ffc840')}">
+ <strong class="rsf-cell-main">${s.trades > 0 ? `${s.winRate}%` : (s.liveCount > 0 ? `${liveFitPct}%` : '--')}</strong>
+ <small class="rsf-cell-meta">${s.trades > 0 ? `${s.wins}/${s.trades} wins` : (s.liveCount > 0 ? `Fit ${s.regimeFitCount}/${s.liveCount}` : 'No live read')}</small>
+ </span>
+ <span class="rsf-pnl" style="color:${s.trades > 0 ? (s.pnl >= 0 ? '#00e5a0' : '#ff4560') : '#7a8ab0'}">
+ <strong class="rsf-cell-main">${s.trades > 0 ? `${s.paperTrades || 0}/${s.liveTrades || 0}` : '--'}</strong>
+ <small class="rsf-cell-meta">${s.trades > 0 ? `DD ${v16FmtNumber(s.maxDrawdown || 0, 2)}` : 'Needs closes'}</small>
+ </span>
+ <span class="rsf-exp" style="color:${s.trades > 0 ? (s.expectancy >= 0 ? '#00e5a0' : '#ff4560') : (s.liveScore > 0 ? '#13d8d2' : '#7a8ab0')}">
+ <strong class="rsf-cell-main">${s.trades > 0 ? `${s.expectancy >= 0 ? '+' : ''}${s.expectancy}` : (s.liveScore > 0 ? `Score ${v16FmtNumber(s.liveScore, 0)}` : '--')}</strong>
+ <small class="rsf-cell-meta">${v16Esc(promotion.label)} | ${s.trades > 0 ? `${s.avgR != null ? `Avg ${s.avgR >= 0 ? '+' : ''}${s.avgR}R` : 'Expectancy'}` : (s.liveTradeQuality > 0 ? `Live TQ ${v16FmtNumber(s.liveTradeQuality, 0)}` : 'No score yet')}</small>
+ </span>
+ </div>`;
+ }).join('')
+ : `<div class="account-inline-note">${v16Esc(emptyCopy)}</div>`
+ }</div>
+ <div class="account-inline-note">${displayedSetupRows.length ? `Showing top ${displayedSetupRows.length} of ${sortedSetupRows.length} families by ${setupSortLabelMap[setupSort] || 'Impact'}.` : 'Setup families update from both the live scanner and closed-trade journal.'}${hiddenFamilyCount > 0 ? ` ${hiddenFamilyCount} lower-ranked families are hidden to keep this view focused.` : ''}</div>
+ </div>`;
+ setupEl.querySelectorAll('[data-analytics-setup-mode]').forEach(button => {
+ button.onclick = async () => {
+ await v16PersistLiveAnalyticsView({ setupMode: button.dataset.analyticsSetupMode || 'all' });
+ if (v16LiveAnalyticsSetupCache) {
+ v16LiveAnalyticsSetupCache.analyticsModel = {
+ ...(v16LiveAnalyticsSetupCache.analyticsModel || {}),
+ view: { ...(v16LiveAnalyticsSetupCache.analyticsModel?.view || {}), setupMode: button.dataset.analyticsSetupMode || 'all' },
+ };
+ }
+ v16RenderAnalyticsSetupBreakdown(preloaded);
+ };
+ });
+ setupEl.querySelectorAll('[data-analytics-setup-sort]').forEach(button => {
+ button.onclick = async () => {
+ await v16PersistLiveAnalyticsView({ setupSort: button.dataset.analyticsSetupSort || 'impact' });
+ if (v16LiveAnalyticsSetupCache) {
+ v16LiveAnalyticsSetupCache.analyticsModel = {
+ ...(v16LiveAnalyticsSetupCache.analyticsModel || {}),
+ view: { ...(v16LiveAnalyticsSetupCache.analyticsModel?.view || {}), setupSort: button.dataset.analyticsSetupSort || 'impact' },
+ };
+ }
+ v16RenderAnalyticsSetupBreakdown(preloaded);
+ };
+ });
+}
+
+function v16ResolveSetupPromotion(row = {}) {
+ const trades = Number(row?.trades || 0);
+ const expectancy = Number(row?.expectancy || 0);
+ const liveCount = Number(row?.liveCount || 0);
+ if (trades <= 0 && liveCount > 0) return { label: 'Stage 1 Watch', tone: 'info', copy: 'Live signal only; wait for paper closes.' };
+ if (trades < 20) return { label: 'Stage 2 Paper', tone: 'warn', copy: `${trades}/20 closed samples before edge validation.` };
+ if (expectancy > 0) return { label: 'Stage 3 Small Live', tone: 'good', copy: 'Positive sample; keep size controlled until manually promoted.' };
+ return { label: 'Stage 1 Watch', tone: 'bad', copy: 'Weak sample; avoid live promotion.' };
+}
+
+function v16RenderAnalyticsReliabilityPanel(snapshot = {}, analyticsModel = null, shadowLedger = {}) {
+ const wrap = document.getElementById('liveAnalyticsReliabilityPanel');
+ if (!wrap) return;
+ storeGet(['autoScan', 'autoScanInterval', 'scanStatus', 'scanActive', 'lastScan', 'lastScanTs', 'autoTradeSettings', V16_SHADOW_TRADE_LEDGER_KEY, 'apiCircuitBreaker']).then(store => {
+ const now = Date.now();
+ const lastScanTs = Number(store?.lastScanTs || 0);
+ const scanAgeMs = lastScanTs > 0 ? now - lastScanTs : 0;
+ const autoScan = store?.autoScan === true;
+ const settings = sanitizeAutoTradeSettings(store?.autoTradeSettings || {});
+ const ledger = shadowLedger && typeof shadowLedger === 'object' ? shadowLedger : (store?.[V16_SHADOW_TRADE_LEDGER_KEY] || {});
+ const ledgerUpdatedAt = Number(ledger?.updatedAt || 0);
+ const paperFresh = ledgerUpdatedAt > 0 && (now - ledgerUpdatedAt) < Math.max(20 * 60 * 1000, Number(store?.autoScanInterval || 5) * 3 * 60 * 1000);
+ const apiBlocked = !!store?.apiCircuitBreaker?.blockedUntil && Number(store.apiCircuitBreaker.blockedUntil || 0) > now;
+ const items = [
+ { label: 'Auto Scan', value: autoScan ? 'Running' : 'Stopped', tone: autoScan ? 'good' : 'bad', detail: autoScan ? `Every ${Number(store?.autoScanInterval || 0) || '?'} min | last ${store?.lastScan || 'pending'}` : 'Enable auto scan to collect paper data.' },
+ { label: 'Paper Tracking', value: settings.paperTrackingEnabled ? 'On' : 'Off', tone: settings.paperTrackingEnabled ? 'good' : 'bad', detail: settings.paperTrackingEnabled ? `${Number(ledger?.open?.length || 0)} open | ${Number(ledger?.closed?.length || 0)} closed` : 'Paper ledger is disabled in Settings.' },
+ { label: 'Last Paper Update', value: ledgerUpdatedAt ? v16FormatDurationShort(now - ledgerUpdatedAt) : 'None', tone: paperFresh ? 'good' : (ledgerUpdatedAt ? 'warn' : 'bad'), detail: ledgerUpdatedAt ? `Updated ${v16FormatTs(ledgerUpdatedAt)}` : 'No paper ledger update yet.' },
+ { label: 'App Lock', value: 'Safe for paper', tone: 'info', detail: 'The 15-minute app lock does not close the background scanner while the app stays open and Windows is awake.' },
+ { label: 'Sleep Risk', value: 'PC must stay awake', tone: 'warn', detail: 'Closing the app or Windows sleep stops scan, paper tracking, and live automation.' },
+ { label: 'API/Data', value: apiBlocked ? 'Blocked' : (lastScanTs ? (scanAgeMs < 20 * 60 * 1000 ? 'Fresh' : 'Stale') : 'Pending'), tone: apiBlocked ? 'bad' : (lastScanTs && scanAgeMs < 20 * 60 * 1000 ? 'good' : 'warn'), detail: apiBlocked ? 'API circuit breaker is active.' : (lastScanTs ? `Last scan ${v16FormatDurationShort(scanAgeMs)} ago.` : 'No scan timestamp yet.') },
+ ];
+ wrap.innerHTML = `
+ <section class="risk-manage-setup-shell">
+ <div class="risk-manage-section-label">BACKGROUND RELIABILITY</div>
+ <div class="live-order-audit-grid live-system-health-grid compact">
+ ${items.map(item => `<div class="live-system-health-item live-system-health-item--${v16Esc(item.tone)}"><span>${v16Esc(item.label)}</span><strong class="${v16Esc(item.tone)}">${v16Esc(item.value)}</strong><small>${v16Esc(item.detail)}</small></div>`).join('')}
+ </div>
+ </section>`;
+ }).catch(() => {
+ wrap.innerHTML = `<div class="account-inline-note warn">Background reliability status is unavailable right now.</div>`;
+ });
+}
+
+function v16RenderAnalyticsDailyControlPanel(analyticsModel = {}, shadowLedger = {}) {
+ const wrap = document.getElementById('liveAnalyticsDailyControlPanel');
+ if (!wrap) return;
+ const dayStart = v16LocalStartOfDay(Date.now());
+ const paperClosedToday = (Array.isArray(shadowLedger?.closed) ? shadowLedger.closed : []).filter(trade => Number(trade.closedAt || 0) >= dayStart);
+ const paperWins = paperClosedToday.filter(trade => Number(trade.rMultiple ?? trade.pnl ?? 0) > 0).length;
+ const paperR = paperClosedToday.reduce((sum, trade) => sum + Number(trade.rMultiple ?? 0), 0);
+ const liveClosed = Number(analyticsModel?.tradeCount || 0);
+ const livePnl = Number(analyticsModel?.realized || 0);
+ const winRate = Number(analyticsModel?.winRate || 0);
+ wrap.innerHTML = `
+ <section class="risk-manage-setup-shell">
+ <div class="risk-manage-section-label">DAILY CONTROL DASHBOARD</div>
+ <div class="risk-manage-setup-summary">
+ <article class="risk-manage-setup-summary-card ${livePnl >= 0 ? 'tone-good' : 'tone-bad'}"><span>Live Closed P&amp;L</span><strong>${v16FmtSigned(livePnl)}</strong><small>${liveClosed} closed in selected range | ${v16FmtNumber(winRate, 1)}% win</small></article>
+ <article class="risk-manage-setup-summary-card ${paperR >= 0 ? 'tone-good' : 'tone-bad'}"><span>Paper Today</span><strong>${paperClosedToday.length ? `${paperR >= 0 ? '+' : ''}${v16FmtNumber(paperR, 2)}R` : 'NONE'}</strong><small>${paperClosedToday.length} closed | ${paperWins}/${paperClosedToday.length || 0} wins | ${Number(shadowLedger?.open?.length || 0)} open</small></article>
+ <article class="risk-manage-setup-summary-card tone-info"><span>Kill / Slots</span><strong>Review</strong><small>Use Orders health strip for live slot, kill switch, and profile state.</small></article>
+ <article class="risk-manage-setup-summary-card tone-warn"><span>Best Use</span><strong>Paper first</strong><small>Promote only setups with enough closed samples and positive expectancy.</small></article>
+ </div>
+ </section>`;
+}
+
+function v16RenderPaperLedgerPanel(shadowLedger = {}) {
+ const wrap = document.getElementById('liveAnalyticsPaperLedger');
+ if (!wrap) return;
+ const open = Array.isArray(shadowLedger?.open) ? shadowLedger.open : [];
+ const closed = Array.isArray(shadowLedger?.closed) ? shadowLedger.closed : [];
+ const rows = [...open.slice(0, 12), ...closed.slice(0, 18)].slice(0, 24);
+ const renderRow = trade => {
+ const isClosed = String(trade?.status || '').toLowerCase() === 'closed';
+ const r = trade?.rMultiple === null || trade?.rMultiple === undefined ? '-' : `${Number(trade.rMultiple) >= 0 ? '+' : ''}${v16FmtNumber(Number(trade.rMultiple || 0), 2)}R`;
+ const triggerText = trade?.trigger?.label || trade?.triggerType || '-';
+ return `<div class="risk-manage-setup-row state-${isClosed ? (Number(trade?.rMultiple || trade?.pnl || 0) >= 0 ? 'good' : 'bad') : 'warn'}">
+ <span class="rsf-name"><span class="rsf-name-main">${v16Esc(trade.symbol || '-')} <span class="rsf-badge tone-${isClosed ? 'info' : 'warn'}">${isClosed ? 'CLOSED' : 'OPEN'}</span></span><small class="rsf-name-meta">${v16Esc(String(trade.side || '').toUpperCase())} | ${v16Esc(trade.setupFamilyLabel || trade.setupFamily || 'setup')} | ${v16Esc(trade.timeframe || '15m')}</small></span>
+ <span><strong class="rsf-cell-main">${v16FmtPrice(Number(trade.entryPrice || 0))}</strong><small class="rsf-cell-meta">Entry</small></span>
+ <span><strong class="rsf-cell-main">${v16FmtPrice(Number(trade.stopLoss || 0))}</strong><small class="rsf-cell-meta">SL</small></span>
+ <span><strong class="rsf-cell-main">${v16FmtPrice(Number(trade.takeProfit || 0))}</strong><small class="rsf-cell-meta">TP</small></span>
+ <span><strong class="rsf-cell-main ${Number(trade?.rMultiple || trade?.pnl || 0) >= 0 ? 'good' : 'bad'}">${v16Esc(isClosed ? r : 'OPEN')}</strong><small class="rsf-cell-meta">${v16Esc(triggerText)}</small></span>
+ </div>`;
+ };
+ wrap.innerHTML = `
+ <section class="risk-manage-setup-shell">
+ <div class="risk-manage-section-label">PAPER / SHADOW LEDGER</div>
+ <div class="risk-manage-setup-summary">
+ <article class="risk-manage-setup-summary-card tone-info"><span>Open Paper</span><strong>${open.length}</strong><small>Simulated trades still active.</small></article>
+ <article class="risk-manage-setup-summary-card ${closed.length ? 'tone-good' : 'tone-muted'}"><span>Closed Paper</span><strong>${closed.length}</strong><small>Stored locally, max 1000 rows.</small></article>
+ <article class="risk-manage-setup-summary-card tone-warn"><span>Ledger Rule</span><strong>No orders</strong><small>Paper mode never sends Delta orders.</small></article>
+ </div>
+ <div class="risk-manage-setup-header"><span>Trade</span><span>Entry</span><span>SL</span><span>TP</span><span>Outcome</span></div>
+ <div class="risk-manage-setup-rows">${rows.length ? rows.map(renderRow).join('') : `<div class="account-inline-note">No paper trades yet. Keep Auto Scan and Paper Tracking enabled while the app stays open.</div>`}</div>
+ </section>`;
+}
+
+function v16DownloadCsv(filename = '', headers = [], rows = []) {
+ const csvEsc = v => `"${String(v ?? '').replace(/"/g, '""').replace(/\n/g, ' ')}"`;
+ const csv = [headers.map(csvEsc).join(','), ...rows.map(row => row.map(csvEsc).join(','))].join('\n');
+ const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+ const url = URL.createObjectURL(blob);
+ const a = document.createElement('a');
+ a.href = url;
+ a.download = filename || `fwd_tradedesk_report_${new Date().toISOString().slice(0, 10)}.csv`;
+ document.body.appendChild(a);
+ a.click();
+ document.body.removeChild(a);

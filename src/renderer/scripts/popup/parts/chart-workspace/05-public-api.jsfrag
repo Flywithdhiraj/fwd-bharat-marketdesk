@@ -1,0 +1,260 @@
+// Mount/unmount helpers and public chart workspace API
+ async function mountPreviewChart(options = {}) {
+ previewSurface.root = options.root || null;
+ previewSurface.mounted = !!previewSurface.root;
+ previewSurface.getOrderContext = typeof options.getOrderContext === 'function' ? options.getOrderContext : null;
+ previewSurface.getDisplaySymbol = typeof options.getDisplaySymbol === 'function' ? options.getDisplaySymbol : null;
+ previewSurface.uiMode = String(options.uiMode || 'default').trim().toLowerCase() || 'default';
+ bindStorageListener();
+ if (!previewSurface.root) return;
+ const strategy = await getStrategy();
+ const defaults = sanitizeChartDefaults(strategy.chartDefaults || {});
+ const replaySeed = normalizeReplaySeed(options.replaySeed);
+ const patch = {
+ symbol: String(options.symbol || previewSurface.getDisplaySymbol?.() || '').trim().toUpperCase(),
+ timeframe: normalizeTimeframe(options.timeframe || '5m'),
+ preset: normalizePreset(options.preset || defaults.defaultPreset || 'clean'),
+ showOrders: Object.prototype.hasOwnProperty.call(options, 'showOrders') ? !!options.showOrders : !!defaults.showOrders,
+ showVwap: Object.prototype.hasOwnProperty.call(options, 'showVwap') ? !!options.showVwap : !!defaults.showVwap,
+ indicators: sanitizeIndicatorState({
+ ...(options.indicators || {}),
+ vwap: Object.prototype.hasOwnProperty.call(options, 'showVwap') ? !!options.showVwap : !!defaults.showVwap,
+ }),
+ replaySeed,
+ orderContext: normalizeOrderContext(typeof options.getOrderContext === 'function' ? options.getOrderContext() : options.orderContext),
+ visibleCandleCount: Math.max(
+ 24,
+ Number(options.visibleCandleCount || replaySeed?.baselineVisibleCount || defaultVisibleCount(options.timeframe || '5m'))
+ ),
+ uiMode: previewSurface.uiMode,
+ chartViewMode: 'preview',
+ };
+ await setChartState(patch);
+ await queueSurfaceRender(SURFACE_PREVIEW, !!options.forceRefresh);
+ }
+
+ function unmountPreviewChart() {
+ previewSurface.mounted = false;
+ previewSurface.root = null;
+ previewSurface.getOrderContext = null;
+ previewSurface.getDisplaySymbol = null;
+ previewSurface.uiMode = 'default';
+ }
+
+ async function requestPreviewRender(force = false) {
+ if (!previewSurface.mounted) return;
+ await queueSurfaceRender(SURFACE_PREVIEW, !!force);
+ }
+
+ async function mountChartTab(options = {}) {
+ tabSurface.root = options.root || null;
+ tabSurface.mounted = !!tabSurface.root;
+ tabSurface.uiMode = String(options.uiMode || 'default').trim().toLowerCase() || 'default';
+ bindStorageListener();
+ if (!tabSurface.root) return;
+ if (options.autoSelectBest !== false && (!tabSurface.autoSelectedBest || options.forceAutoSelect)) {
+ await autoSelectBestSignalForChart(!!options.forceAutoSelect);
+ tabSurface.autoSelectedBest = true;
+ }
+ await setChartState(currentState => ({
+ preset: currentState.keyDefaultAppliedV1 ? normalizePreset(currentState.preset || 'key') : 'key',
+ timeframe: currentState.cleanDefaultAppliedV1 ? normalizeTimeframe(currentState.timeframe || '15m') : '15m',
+ visibleCandleCount: currentState.cleanDefaultAppliedV1 ? (currentState.visibleCandleCount || defaultVisibleCount(currentState.timeframe || '15m')) : defaultVisibleCount('15m'),
+ chartViewMode: 'tab',
+ uiMode: tabSurface.uiMode,
+ rightPanelOpen: currentState.cleanDefaultAppliedV1 ? currentState.rightPanelOpen !== false : false,
+ intelligenceOverlays: currentState.cleanDefaultAppliedV1 ? currentState.intelligenceOverlays !== false : false,
+ deskLayoutMode: currentState.cleanDefaultAppliedV1 ? (currentState.deskLayoutMode || 'single') : 'single',
+ primaryTimeframe: currentState.cleanDefaultAppliedV1 ? (currentState.primaryTimeframe || currentState.timeframe || '15m') : '15m',
+ executionTimeframe: currentState.cleanDefaultAppliedV1 ? (currentState.executionTimeframe || currentState.timeframe || '15m') : '15m',
+ syncCharts: currentState.syncCharts !== false,
+ contextTab: currentState.contextTab || 'watchlist',
+ watchlistTab: currentState.watchlistTab || '1',
+ overlayDensity: currentState.cleanDefaultAppliedV1 ? (currentState.overlayDensity || 'minimal') : 'minimal',
+ panelWidths: currentState.panelWidths || { ...DEFAULT_PANEL_WIDTHS },
+ collapsedPanels: currentState.cleanDefaultAppliedV1 ? (currentState.collapsedPanels || {}) : { execution: true, context: true },
+ maximizedPanel: normalizeMaximizedPanel(currentState.maximizedPanel),
+ indicators: currentState.keyDefaultAppliedV1
+ ? sanitizeIndicatorState(currentState.indicators || {})
+ : buildCleanIndicatorState(),
+ showOrders: currentState.cleanDefaultAppliedV1 ? !!currentState.showOrders : false,
+ showVwap: currentState.cleanDefaultAppliedV1 ? !!currentState.showVwap : false,
+ chartFullscreen: currentState.chartFullscreen === true,
+ chartType: currentState.cleanDefaultAppliedV1 ? normalizeChartType(currentState.chartType || 'bars') : 'bars',
+ indicatorStyle: currentState.cleanDefaultAppliedV1 ? normalizeIndicatorStyle(currentState.indicatorStyle || 'tradingview') : 'tradingview',
+ showReadout: currentState.cleanDefaultAppliedV1 ? currentState.showReadout === true : false,
+ showIndicatorLegend: currentState.cleanDefaultAppliedV1 ? currentState.showIndicatorLegend !== false : true,
+ showGrid: currentState.cleanDefaultAppliedV1 ? currentState.showGrid === true : false,
+ cleanDefaultAppliedV1: true,
+ keyDefaultAppliedV1: true,
+ }), { forceRender: false });
+ await queueSurfaceRender(SURFACE_TAB, !!options.forceRefresh);
+ }
+
+ function unmountChartTab() {
+ tabSurface.mounted = false;
+ tabSurface.root = null;
+ tabSurface.uiMode = 'default';
+ }
+
+ async function requestChartTabRender(force = false) {
+ if (!tabSurface.mounted) return;
+ await queueSurfaceRender(SURFACE_TAB, !!force);
+ }
+
+ function ensureChartReviewOverlayRoot() {
+ let overlay = document.getElementById('dsChartReviewOverlay');
+ if (!overlay) {
+ overlay = document.createElement('div');
+ overlay.id = 'dsChartReviewOverlay';
+ overlay.className = 'overlay ds-chart-review-overlay';
+ overlay.innerHTML = '<div class="modal ds-chart-review-modal"><div id="dsChartReviewRoot" class="ds-chart-review-root"></div></div>';
+ overlay.addEventListener('click', event => {
+ if (event.target === overlay) {
+ closeChartReviewOverlay({ clearTabs: true }).catch(() => {});
+ }
+ });
+ document.body.appendChild(overlay);
+ }
+ overlay.hidden = false;
+ overlay.style.display = 'flex';
+ return overlay.querySelector('#dsChartReviewRoot');
+ }
+
+ async function mountChartReviewOverlay(options = {}) {
+ reviewSurface.root = ensureChartReviewOverlayRoot();
+ reviewSurface.mounted = !!reviewSurface.root;
+ reviewSurface.uiMode = String(options.uiMode || 'default').trim().toLowerCase() || 'default';
+ bindStorageListener();
+ if (!reviewSurface.root) return;
+ document.body.classList.add('ds-chart-review-open');
+ await queueSurfaceRender(SURFACE_REVIEW, !!options.forceRefresh);
+ }
+
+ function unmountChartReviewOverlay() {
+ const overlay = document.getElementById('dsChartReviewOverlay');
+ if (overlay) {
+ overlay.hidden = true;
+ overlay.style.display = 'none';
+ }
+ document.body.classList.remove('ds-chart-review-open');
+ reviewSurface.mounted = false;
+ reviewSurface.root = null;
+ reviewSurface.uiMode = 'default';
+ reviewSurface.refreshNonce = 0;
+ reviewSurface.lastMarkup = '';
+ }
+
+ async function closeChartReviewOverlay(options = {}) {
+ const current = await getChartState();
+ const patch = {
+ chartReviewOverlayOpen: false,
+ chartTradingDraft: null,
+ chartTradingMode: 'select',
+ };
+ if (options.clearTabs !== false) {
+ patch.chartReviewTabs = [];
+ patch.activeChartReviewTabId = '';
+ }
+ const next = await setChartState(patch, { current });
+ unmountChartReviewOverlay();
+ return next;
+ }
+
+ async function openDetachedChart(options = {}) {
+ const strategy = await getStrategy();
+ const current = await getChartState();
+ const next = sanitizeDetachedChartState({
+ ...current,
+ ...options,
+ symbol: String(options.symbol || current.symbol || previewSurface.getDisplaySymbol?.() || '').trim().toUpperCase(),
+ orderContext: normalizeOrderContext(options.orderContext || current.orderContext || (typeof previewSurface.getOrderContext === 'function' ? previewSurface.getOrderContext() : null)),
+ preset: normalizePreset(options.preset || current.preset || (String(options.uiMode || current.uiMode || '').toLowerCase() === 'journal' ? current.preset : 'clean')),
+ showOrders: Object.prototype.hasOwnProperty.call(options, 'showOrders') ? !!options.showOrders : !!current.showOrders,
+ chartViewMode: 'detached',
+ rightPanelOpen: Object.prototype.hasOwnProperty.call(options, 'rightPanelOpen') ? options.rightPanelOpen !== false : current.rightPanelOpen !== false,
+ intelligenceOverlays: Object.prototype.hasOwnProperty.call(options, 'intelligenceOverlays') ? options.intelligenceOverlays !== false : current.intelligenceOverlays !== false,
+ deskLayoutMode: options.deskLayoutMode || current.deskLayoutMode || 'single',
+ primaryTimeframe: options.primaryTimeframe || current.primaryTimeframe || current.timeframe || '15m',
+ executionTimeframe: options.executionTimeframe || current.executionTimeframe || current.timeframe || '15m',
+ syncCharts: Object.prototype.hasOwnProperty.call(options, 'syncCharts') ? options.syncCharts !== false : current.syncCharts !== false,
+ contextTab: options.contextTab || current.contextTab || 'watchlist',
+ watchlistTab: options.watchlistTab || current.watchlistTab || '1',
+ overlayDensity: options.overlayDensity || current.overlayDensity || 'minimal',
+ panelWidths: options.panelWidths || current.panelWidths || { ...DEFAULT_PANEL_WIDTHS },
+ collapsedPanels: options.collapsedPanels || current.collapsedPanels || {},
+ maximizedPanel: options.maximizedPanel || current.maximizedPanel || null,
+ chartFullscreen: Object.prototype.hasOwnProperty.call(options, 'chartFullscreen') ? options.chartFullscreen === true : current.chartFullscreen === true,
+ }, strategy.chartDefaults || {});
+ detachedSurface.uiMode = String(next.uiMode || 'default').trim().toLowerCase() || 'default';
+ await localSet({ [DS_V17_CHART_STATE_KEY]: next });
+ await runtimeSend('openChartWindow');
+ }
+
+ async function openReplayForTrade(trade = {}) {
+ const timeframe = deriveReplayTimeframe(trade);
+ const replaySeed = buildReplaySeedFromTrade(trade);
+ const strategy = await getStrategy();
+ const defaults = sanitizeChartDefaults(strategy.chartDefaults || {});
+ await openDetachedChart({
+ symbol: String(trade.symbol || '').trim().toUpperCase(),
+ timeframe,
+ preset: defaults.defaultPreset || 'clean',
+ showOrders: true,
+ showVwap: false,
+ indicators: sanitizeIndicatorState({ volume: true, ema: true, vwap: false }),
+ visibleCandleCount: replaySeed?.baselineVisibleCount || defaultVisibleCount(timeframe),
+ replaySeed,
+ replayMode: normalizeReplayMode({ active: true, type: 'trade', playing: false, speedMs: 900, cursorIndex: null }),
+ chartTradingDraft: null,
+ chartTradingMode: 'select',
+ orderContext: null,
+ refreshNonce: Date.now(),
+ uiMode: 'journal',
+ });
+ }
+
+ async function initDetachedChartWorkspace() {
+ const root = document.getElementById('chartWorkspaceRoot');
+ if (!root) return;
+ const appRoot = document.getElementById('app');
+ if (appRoot) appRoot.hidden = true;
+ root.hidden = false;
+ document.body.classList.add('chart-mode');
+ detachedSurface.root = root;
+ detachedSurface.mounted = true;
+ detachedSurface.uiMode = String((await getChartState()).uiMode || 'default').trim().toLowerCase() || 'default';
+ bindStorageListener();
+ bindKeyboardShortcuts(SURFACE_DETACHED);
+ await queueSurfaceRender(SURFACE_DETACHED, true);
+ }
+
+ globalThis.DS_V17_CHART_STATE_KEY = DS_V17_CHART_STATE_KEY;
+ globalThis.DS_V17_CHART_CACHE_KEY = DS_V17_CHART_CACHE_KEY;
+ globalThis.FWDTradeDeskChartWorkspace = Object.freeze({
+ DS_V17_CHART_STATE_KEY,
+ DS_V17_CHART_CACHE_KEY,
+ mountPreviewChart,
+ unmountPreviewChart,
+ requestPreviewRender,
+ mountChartTab,
+ unmountChartTab,
+ requestChartTabRender,
+ mountChartReviewOverlay,
+ closeChartReviewOverlay,
+ setChartSymbolFromSignal,
+ openChartReviewTab,
+ activateChartReviewTab,
+ closeChartReviewTab,
+ openDetachedChart,
+ openChartTradePreview,
+ openReplayForTrade,
+ initDetachedChartWorkspace,
+ buildOrderContextFromDraft,
+ buildOrderContextFromPosition,
+ deriveReplayTimeframe,
+ buildReplaySeedFromTrade,
+ getChartState,
+ setChartState,
+ });
+})();

@@ -1,0 +1,327 @@
+/* ================================================================
+ Color refresh for FWD TradeDesk Pro.
+ Keeps the dense trader layout intact while replacing the flat
+ blue-gray look with a richer multi-accent command-desk theme.
+ ================================================================ */
+:root {
+ --bg: #0b1018;
+ --bg-2: #101824;
+ --panel: #101a27;
+ --panel-2: #142033;
+ --panel-3: #1b2940;
+ --panel-glass: rgba(18, 29, 45, 0.9);
+ --surface-0: #0b1018;
+ --surface-1: #101a27;
+ --surface-2: #16243a;
+ --surface-line: rgba(147, 171, 216, 0.2);
+ --surface-line-strong: rgba(147, 171, 216, 0.34);
+ --border: rgba(147, 171, 216, 0.22);
+ --border-strong: rgba(147, 171, 216, 0.38);
+ --text: #f4f8ff;
+ --text-soft: #d6e1f2;
+ --muted: #a6b5cf;
+ --muted-2: #7f91b0;
+ --accent: #5bb8ff;
+ --accent-2: #27d8b8;
+ --accent-warm: #ffb84d;
+ --accent-rose: #ff6f91;
+ --accent-violet: #9a8cff;
+ --accent-bg: rgba(91, 184, 255, 0.16);
+ --accent-br: rgba(91, 184, 255, 0.34);
+ --tone-good: #34e6a9;
+ --tone-good-bg: rgba(52, 230, 169, 0.14);
+ --tone-good-br: rgba(52, 230, 169, 0.32);
+ --tone-warn: #ffc857;
+ --tone-warn-bg: rgba(255, 200, 87, 0.14);
+ --tone-warn-br: rgba(255, 200, 87, 0.32);
+ --tone-bad: #ff6f91;
+ --tone-bad-bg: rgba(255, 111, 145, 0.14);
+ --tone-bad-br: rgba(255, 111, 145, 0.32);
+ --tone-info: #7ad7ff;
+ --tone-info-bg: rgba(122, 215, 255, 0.14);
+ --tone-info-br: rgba(122, 215, 255, 0.32);
+ --shadow-soft: 0 14px 30px rgba(4, 10, 20, 0.34);
+ --shadow-card: 0 20px 46px rgba(3, 9, 20, 0.42), 0 0 30px rgba(39, 216, 184, 0.05);
+}
+
+body {
+ background:
+  radial-gradient(circle at 12% -8%, rgba(39, 216, 184, 0.16), transparent 30%),
+  radial-gradient(circle at 88% 0%, rgba(255, 184, 77, 0.12), transparent 26%),
+  linear-gradient(135deg, #0b1018 0%, #111827 42%, #0c1420 100%);
+}
+
+body::before {
+ content: "";
+ position: fixed;
+ inset: 0;
+ pointer-events: none;
+ z-index: -1;
+ background-image:
+  linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+  linear-gradient(90deg, rgba(255,255,255,0.018) 1px, transparent 1px);
+ background-size: 28px 28px;
+ mask-image: linear-gradient(180deg, rgba(0,0,0,0.36), rgba(0,0,0,0.08));
+}
+
+.hdr {
+ background:
+  radial-gradient(circle at 10% 0%, rgba(39, 216, 184, 0.28), transparent 34%),
+  radial-gradient(circle at 62% -10%, rgba(91, 184, 255, 0.22), transparent 30%),
+  linear-gradient(135deg, rgba(14, 24, 38, 0.98), rgba(26, 39, 61, 0.98));
+ border-bottom-color: rgba(122, 215, 255, 0.22);
+ box-shadow: 0 16px 42px rgba(2, 8, 18, 0.34);
+}
+
+.hn span {
+ color: var(--accent-warm);
+ text-shadow: 0 0 20px rgba(255, 184, 77, 0.25);
+}
+
+.hsub {
+ color: #b7c9e6;
+}
+
+.hdr-status-group,
+.hdr-action-group {
+ background:
+  linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.025)),
+  radial-gradient(circle at top right, rgba(255, 184, 77, 0.12), transparent 42%);
+ border: 1px solid rgba(147, 171, 216, 0.2);
+ box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
+}
+
+.hs span {
+ color: var(--accent-warm);
+}
+
+.session-badge,
+.api-usage-meter {
+ border-color: rgba(39, 216, 184, 0.32);
+ background: rgba(39, 216, 184, 0.12);
+ color: #b8fff0;
+}
+
+.sbar {
+ background:
+  linear-gradient(90deg, rgba(39, 216, 184, 0.12), rgba(91, 184, 255, 0.1), rgba(255, 184, 77, 0.08)),
+  rgba(11, 18, 29, 0.94);
+ border-bottom-color: rgba(147, 171, 216, 0.2);
+}
+
+.sdot {
+ box-shadow: 0 0 18px rgba(52, 230, 169, 0.65);
+}
+
+.workspace-shell {
+ background:
+  linear-gradient(180deg, rgba(18, 29, 45, 0.94), rgba(12, 20, 32, 0.96)),
+  radial-gradient(circle at top left, rgba(91, 184, 255, 0.12), transparent 34%),
+  radial-gradient(circle at bottom right, rgba(255, 184, 77, 0.1), transparent 38%);
+ border-color: rgba(147, 171, 216, 0.22);
+ box-shadow: var(--shadow-card);
+}
+
+.workspace-label {
+ color: var(--accent-warm);
+}
+
+.workspace-title {
+ color: #ffffff;
+}
+
+.workspace-group,
+.tab,
+.workspace-focus-btn,
+.bsm,
+.btn-autoscan,
+.btn-csv,
+.d10-detail-btn {
+ background:
+  linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.025)),
+  rgba(16, 26, 41, 0.88);
+ border-color: rgba(147, 171, 216, 0.24);
+ color: #dce8f8;
+}
+
+.workspace-group:hover,
+.tab:hover,
+.workspace-focus-btn:hover,
+.bsm:hover,
+.btn-autoscan:hover,
+.btn-csv:hover,
+.d10-detail-btn:hover {
+ border-color: rgba(122, 215, 255, 0.44);
+ color: #ffffff;
+ background:
+  linear-gradient(180deg, rgba(122, 215, 255, 0.12), rgba(39, 216, 184, 0.08)),
+  rgba(18, 30, 47, 0.95);
+}
+
+.workspace-group.active,
+.tab.active {
+ border-color: rgba(255, 184, 77, 0.42);
+ color: #fff6e2;
+ background:
+  linear-gradient(135deg, rgba(255, 184, 77, 0.2), rgba(91, 184, 255, 0.13)),
+  rgba(22, 35, 54, 0.96);
+ box-shadow: inset 0 -2px 0 rgba(255, 184, 77, 0.75), 0 10px 28px rgba(255, 184, 77, 0.08);
+}
+
+.btn-scan,
+.od-primary-btn,
+.pane .od-primary-btn,
+.btn-save {
+ background: linear-gradient(135deg, #34e6a9, #5bb8ff 56%, #ffb84d);
+ color: #06111d;
+ border-color: transparent;
+ box-shadow: 0 14px 30px rgba(39, 216, 184, 0.22);
+}
+
+.btn-scan:hover,
+.od-primary-btn:hover,
+.pane .od-primary-btn:hover,
+.btn-save:hover {
+ filter: saturate(1.08) brightness(1.08);
+ box-shadow: 0 18px 36px rgba(91, 184, 255, 0.22);
+}
+
+.pane,
+.modal,
+.settings-drawer,
+.command-palette,
+.app-lock-card,
+.capability-shell,
+.decision-engine-shell {
+ background:
+  linear-gradient(180deg, rgba(18, 29, 45, 0.94), rgba(12, 20, 32, 0.98)),
+  radial-gradient(circle at top right, rgba(122, 215, 255, 0.08), transparent 38%);
+ border-color: rgba(147, 171, 216, 0.22);
+}
+
+.phdr,
+.research-pane-head,
+.od-workflow-strip,
+.diagnostics-export-card {
+ background:
+  linear-gradient(180deg, rgba(23, 37, 58, 0.96), rgba(13, 22, 35, 0.98)),
+  radial-gradient(circle at top right, rgba(255, 184, 77, 0.12), transparent 42%);
+ border-color: rgba(147, 171, 216, 0.22);
+}
+
+.card,
+.overview-card,
+.cap-card,
+.settings-health-item,
+.settings-recovery-item,
+.od-workflow-step,
+.d10-benchmark-card,
+.research-pane-strip-item {
+ background:
+  linear-gradient(180deg, rgba(24, 38, 59, 0.94), rgba(15, 25, 39, 0.98)),
+  radial-gradient(circle at top right, rgba(122, 215, 255, 0.075), transparent 38%);
+ border-color: rgba(147, 171, 216, 0.22);
+ box-shadow: 0 12px 28px rgba(4, 10, 20, 0.28);
+}
+
+.card:hover,
+.overview-card:hover,
+.cap-card:hover,
+.od-workflow-step:hover {
+ border-color: rgba(255, 184, 77, 0.34);
+ background:
+  linear-gradient(180deg, rgba(30, 48, 73, 0.96), rgba(17, 28, 44, 0.99)),
+  radial-gradient(circle at top right, rgba(255, 184, 77, 0.1), transparent 42%);
+}
+
+.card.long-card,
+.mo-emerging.long,
+.var-alloc-col.long {
+ border-left-color: var(--tone-good);
+}
+
+.card.short-card,
+.mo-emerging.short,
+.var-alloc-col.short {
+ border-left-color: var(--tone-bad);
+}
+
+.d10-bar,
+.sector-bar,
+.api-rate-limit-banner {
+ background:
+  linear-gradient(90deg, rgba(255, 184, 77, 0.12), rgba(39, 216, 184, 0.1), rgba(91, 184, 255, 0.1)),
+  rgba(13, 22, 35, 0.96);
+ border-color: rgba(147, 171, 216, 0.22);
+}
+
+.d10-logo,
+.sector-bar-label {
+ background: linear-gradient(135deg, #ffb84d, #34e6a9);
+ color: #06111d;
+ box-shadow: 0 10px 22px rgba(255, 184, 77, 0.16);
+}
+
+.d10-name,
+.card-sym,
+.an-sym,
+.overview-card-value,
+.rc-title,
+.mo-title {
+ color: #ffffff;
+}
+
+.d10-composite,
+.card-score-val,
+.an-sv,
+.rc-mr-value,
+.fr-sv,
+.sb-val {
+ color: var(--accent-warm);
+}
+
+.prog-fill {
+ background: linear-gradient(90deg, #34e6a9, #5bb8ff, #ffb84d);
+ box-shadow: 0 0 18px rgba(91, 184, 255, 0.32);
+}
+
+input,
+select,
+textarea,
+.fi,
+.si {
+ background: rgba(8, 16, 27, 0.88);
+ border-color: rgba(147, 171, 216, 0.24);
+ color: var(--text);
+}
+
+input:focus,
+select:focus,
+textarea:focus,
+.fi:focus,
+.si:focus,
+button:focus-visible {
+ outline: 2px solid rgba(255, 184, 77, 0.58);
+ outline-offset: 2px;
+ border-color: rgba(255, 184, 77, 0.44);
+}
+
+.empty {
+ color: #7284a0;
+}
+
+.eh {
+ color: #c8d6eb;
+}
+
+.es {
+ color: #92a3bf;
+}
+
+@media (max-width: 760px) {
+ body {
+  background:
+   radial-gradient(circle at 15% -6%, rgba(39, 216, 184, 0.14), transparent 34%),
+   linear-gradient(135deg, #0b1018 0%, #111827 100%);
+ }
+}

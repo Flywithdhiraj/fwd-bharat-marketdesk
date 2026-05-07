@@ -1,0 +1,411 @@
+// Options state, normalization, strategy summaries and basket mutation
+'use strict';
+
+(() => {
+ const api = globalThis.FWDTradeDeskOptions || globalThis.FWDTradeDeskOptionsShared || {};
+ const KEY = 'dsOptionsWorkspaceStateV17';
+ const DEFAULT_ENTRY = api.sanitizeOptionEntryMode?.('limit') || 'limit';
+ const ANALYSIS_TABS = Object.freeze(['payoff', 'pnl', 'greeks', 'strategy', 'scenarios']);
+ const BUILDER_LEFT_TABS = Object.freeze(['ready', 'positions', 'saved', 'drafts']);
+ const BUILDER_PANELS = Object.freeze(['summary', 'charts', 'greeks']);
+ const WORKSPACE_MODES = Object.freeze(['market', 'builder', 'analyzer', 'compare', 'execute', 'volatility']);
+ const BIAS = Object.freeze(['neutral', 'bullish', 'bearish', 'all']);
+ const FILTERS = Object.freeze(['defined', 'undefined', 'theta']);
+ const QUICK_FILTERS = Object.freeze(['itm_only', 'high_oi', 'tight_spread']);
+ const LINE_MODES = Object.freeze(['both', 'expiry', 'target']);
+ const STRADDLE_DESK_TABS = Object.freeze(['find', 'analyze', 'manage', 'history']);
+ const SKEW_VIEWS = Object.freeze(['snapshot', 'term', 'trade']);
+ const SKEW_AXES = Object.freeze(['moneyness', 'strike', 'delta']);
+ const PRESETS = Object.freeze([
+ { id: 'short_strangle', label: 'Short Strangle', bias: 'neutral', risk: 'undefined', theta: 'high', auto: false, market: 'Range / IV rich', tone: 'neutral', group: 'primary', copy: 'Wide premium capture with more room than a straddle.' },
+ { id: 'iron_condor', label: 'Iron Condor', bias: 'neutral', risk: 'defined', theta: 'high', auto: true, market: 'Range / controlled risk', tone: 'success', group: 'primary', copy: 'Defined-risk short-volatility structure with capped wings.' },
+ { id: 'iron_fly', label: 'Iron Fly', bias: 'neutral', risk: 'defined', theta: 'high', auto: true, market: 'ATM premium / range', tone: 'warn', group: 'primary', copy: 'Dense ATM premium capture with explicit wing protection.' },
+ { id: 'short_put_spread', label: 'Bull Put Spread', bias: 'bullish', risk: 'defined', theta: 'high', auto: true, market: 'Mild bullish / IV rich', tone: 'accent', group: 'primary', copy: 'Short-premium bullish spread with limited downside risk.' },
+ { id: 'short_call_spread', label: 'Bear Call Spread', bias: 'bearish', risk: 'defined', theta: 'high', auto: true, market: 'Mild bearish / IV rich', tone: 'danger', group: 'primary', copy: 'Short-premium bearish spread with capped upside risk.' },
+ { id: 'jade_lizard', label: 'Jade Lizard', bias: 'bullish', risk: 'defined', theta: 'high', auto: false, market: 'Bullish to sideways', tone: 'success', group: 'primary', copy: 'Short put plus capped short-call spread for bullish theta.' },
+ { id: 'short_straddle', label: 'Short Straddle', bias: 'neutral', risk: 'undefined', theta: 'high', auto: false, market: 'Range / ATM premium', tone: 'neutral', group: 'primary', copy: 'Highest theta near spot with the tightest break-even band.' },
+ { id: 'long_call', label: 'Long Call', bias: 'bullish', risk: 'defined', theta: 'negative', auto: false, market: 'Directional upside', tone: 'accent', group: 'extended', copy: 'Premium-paid upside expression with limited outlay.' },
+ { id: 'long_put', label: 'Long Put', bias: 'bearish', risk: 'defined', theta: 'negative', auto: false, market: 'Directional downside', tone: 'danger', group: 'extended', copy: 'Premium-paid bearish expression with convex downside.' },
+ { id: 'bull_call_spread', label: 'Bull Call Spread', bias: 'bullish', risk: 'defined', theta: 'negative', auto: false, market: 'Bullish / capped upside', tone: 'accent', group: 'extended', copy: 'Defined-risk debit spread with controlled premium outlay.' },
+ { id: 'bear_put_spread', label: 'Bear Put Spread', bias: 'bearish', risk: 'defined', theta: 'negative', auto: false, market: 'Bearish / capped downside', tone: 'danger', group: 'extended', copy: 'Defined-risk debit spread for directional bearish setups.' },
+ ]);
+ const DEFAULT = Object.freeze({
+ initialized: false, loadingUniverse: false, loadingChain: false, placing: false,
+ underlying: 'BTC', expiryKey: '', search: '', strikeWindow: 10, densityMode: 'compact',
+ workspaceMode: 'market', activeView: 'payoff',
+ builderLeftTab: 'ready', builderOpenPanels: ['summary', 'charts', 'greeks'],
+ presetFamily: 'neutral', presetFilters: ['defined', 'theta'], presetId: 'iron_condor',
+ entryMode: DEFAULT_ENTRY, allowUndefinedRisk: false, targetDays: 1, targetPrice: 0,
+ scenarioIvShiftPct: 0, scenarioDecayMode: 'base', chainHoverStrike: 0, selectedContract: '',
+ showExtendedPresets: false, showBuilderHelp: false, showBookedPnl: false, pendingRollSnapshot: null, legs: [], universe: [], chain: null, analysis: null, builderStatus: null, error: '', chainError: '',
+ chainQuickFilters: [], payoffLineMode: 'both', payoffZoom: 0.24, pnlRangePct: 0.05, pnlStepPct: 0.01,
+ straddleChain: null, straddleLoading: false, straddleError: '', straddleTargetUSD: 100, straddleSelectedSymbol: '',
+ straddleViewMode: 'simple', straddleDeskTab: 'find', straddlePayoffExpanded: false,
+ straddleSettings: null, straddleDashboard: null, straddleDashboardLoading: false, straddlePreview: null, straddlePreviewLoading: false,
+ skewData: null, skewLoading: false, skewError: '', skewHoveredStrike: 0, skewView: 'snapshot', skewAxis: 'moneyness',
+ executionHealth: null, executionHealthLoading: false,
+ });
+
+ let state;
+ let bootPromise = null;
+ let straddlePreviewRequestId = 0;
+
+ const esc = value => String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+ const n = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
+ const clamp = (value, fallback, min, max, digits = 0) => Number(Math.max(min, Math.min(max, n(value, fallback))).toFixed(digits));
+ const money = (value, digits = 2) => Number.isFinite(Number(value)) ? `${n(value) < 0 ? '-' : ''}$${Math.abs(n(value)).toFixed(digits)}` : 'NA';
+ const pct = (value, digits = 1) => Number.isFinite(Number(value)) ? `${n(value).toFixed(digits)}%` : 'NA';
+ const compact = value => Math.abs(n(value)) >= 1e6 ? `${(n(value) / 1e6).toFixed(2)}M` : Math.abs(n(value)) >= 1e3 ? `${(n(value) / 1e3).toFixed(1)}K` : `${n(value).toFixed(0)}`;
+ const days = value => n(value) < 1 ? `${Math.max(0, Math.round(n(value) * 24))}h` : `${n(value).toFixed(n(value) >= 10 ? 0 : 1)}d`;
+ const hasRuntime = () => typeof chrome !== 'undefined' && !!chrome.runtime && typeof chrome.runtime.sendMessage === 'function';
+ const msShort = value => {
+ const ms = Math.max(0, n(value));
+ if (!ms) return '0m';
+ const hours = Math.floor(ms / 3600000);
+ const minutes = Math.ceil((ms % 3600000) / 60000);
+ if (hours > 0) return `${hours}h ${minutes}m`;
+ return `${minutes}m`;
+ };
+ const normalizeWorkspaceMode = value => {
+ const raw = String(value || '').toLowerCase();
+ const aliases = { chain: 'market', straddle: 'execute', skew: 'volatility' };
+ const mode = aliases[raw] || raw;
+ return WORKSPACE_MODES.includes(mode) ? mode : DEFAULT.workspaceMode;
+ };
+ const toneClass = value => {
+ const raw = String(value || '').toLowerCase();
+ if (['profit', 'success', 'ok'].includes(raw)) return 'profit';
+ if (['loss', 'danger', 'error'].includes(raw)) return 'loss';
+ if (['warn', 'warning'].includes(raw)) return 'warn';
+ return 'info';
+ };
+ const sparkPath = (values = [], width = 112, height = 30) => {
+ const nums = (Array.isArray(values) ? values : []).map(v => n(v)).filter(v => Number.isFinite(v));
+ if (!nums.length) return '';
+ if (nums.length === 1) return `M0,${(height / 2).toFixed(1)} L${width},${(height / 2).toFixed(1)}`;
+ const min = Math.min(...nums);
+ const max = Math.max(...nums);
+ return nums.map((value, index) => {
+ const x = (index / Math.max(1, nums.length - 1)) * width;
+ const y = max === min ? height / 2 : height - (((value - min) / (max - min)) * (height - 4)) - 2;
+ return `${index ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`;
+ }).join(' ');
+ };
+
+ state = normalize({});
+
+ function localGet(keys) { return new Promise(resolve => { try { chrome.storage.local.get(keys, data => resolve(data || {})); } catch { resolve({}); } }); }
+ function localSet(payload) { return new Promise(resolve => { try { chrome.storage.local.set(payload, () => resolve()); } catch { resolve(); } }); }
+ function send(action, payload = {}) {
+ if (!hasRuntime()) return Promise.resolve({ ok: false, previewRuntimeUnavailable: true, error: 'Extension runtime unavailable' });
+ return new Promise(resolve => {
+ try {
+ chrome.runtime.sendMessage({ action, ...payload }, response => resolve(chrome.runtime.lastError ? { ok: false, error: chrome.runtime.lastError.message || 'Runtime request failed' } : (response || { ok: false, error: 'No response returned' })));
+ } catch (error) {
+ resolve({ ok: false, error: error?.message || 'Runtime request failed' });
+ }
+ });
+ }
+
+ function normalize(raw = {}) {
+ const safe = raw || {};
+ return {
+ ...DEFAULT,
+ ...safe,
+ initialized: !!safe.initialized,
+ loadingUniverse: !!safe.loadingUniverse,
+ loadingChain: !!safe.loadingChain,
+ placing: !!safe.placing,
+ underlying: String(safe.underlying || DEFAULT.underlying).trim().toUpperCase() || DEFAULT.underlying,
+ expiryKey: String(safe.expiryKey || '').trim(),
+ search: String(safe.search || ''),
+ strikeWindow: clamp(safe.strikeWindow, DEFAULT.strikeWindow, 6, 28, 0),
+ densityMode: 'compact',
+ workspaceMode: normalizeWorkspaceMode(safe.workspaceMode),
+ activeView: ANALYSIS_TABS.includes(String(safe.activeView || '').toLowerCase()) ? String(safe.activeView).toLowerCase() : DEFAULT.activeView,
+ builderLeftTab: BUILDER_LEFT_TABS.includes(String(safe.builderLeftTab || '').toLowerCase()) ? String(safe.builderLeftTab).toLowerCase() : DEFAULT.builderLeftTab,
+ builderOpenPanels: BUILDER_PANELS.filter(panel => (Array.isArray(safe.builderOpenPanels) ? safe.builderOpenPanels : DEFAULT.builderOpenPanels).includes(panel)),
+ presetFamily: BIAS.includes(String(safe.presetFamily || '').toLowerCase()) ? String(safe.presetFamily).toLowerCase() : DEFAULT.presetFamily,
+ presetFilters: FILTERS.filter(filter => (Array.isArray(safe.presetFilters) ? safe.presetFilters : DEFAULT.presetFilters).includes(filter)),
+ presetId: PRESETS.some(preset => preset.id === safe.presetId) ? safe.presetId : DEFAULT.presetId,
+ entryMode: api.sanitizeOptionEntryMode?.(safe.entryMode) || DEFAULT_ENTRY,
+ allowUndefinedRisk: !!safe.allowUndefinedRisk,
+ targetDays: clamp(safe.targetDays, DEFAULT.targetDays, 0, 365, 0),
+ targetPrice: Math.max(0, n(safe.targetPrice)),
+ scenarioIvShiftPct: clamp(safe.scenarioIvShiftPct, 0, -50, 50, 0),
+ scenarioDecayMode: ['base', 'fast', 'slow'].includes(String(safe.scenarioDecayMode || '').toLowerCase()) ? String(safe.scenarioDecayMode).toLowerCase() : 'base',
+ chainHoverStrike: Math.max(0, n(safe.chainHoverStrike)),
+ selectedContract: String(safe.selectedContract || '').trim(),
+ showExtendedPresets: !!safe.showExtendedPresets,
+ showBuilderHelp: !!safe.showBuilderHelp,
+ showBookedPnl: !!safe.showBookedPnl,
+ pendingRollSnapshot: safe.pendingRollSnapshot || null,
+ legs: Array.isArray(safe.legs) ? safe.legs.map(leg => api.sanitizeOptionLeg?.(leg) || leg).filter(Boolean) : [],
+ universe: Array.isArray(safe.universe) ? safe.universe : [],
+ chain: safe.chain || null,
+ analysis: safe.analysis || null,
+ builderStatus: safe.builderStatus || null,
+ error: String(safe.error || ''),
+ chainError: String(safe.chainError || ''),
+ chainQuickFilters: Array.isArray(safe.chainQuickFilters) ? safe.chainQuickFilters.filter(f => QUICK_FILTERS.includes(f)) : [],
+ payoffLineMode: LINE_MODES.includes(String(safe.payoffLineMode || '')) ? String(safe.payoffLineMode) : DEFAULT.payoffLineMode,
+ payoffZoom: clamp(safe.payoffZoom, DEFAULT.payoffZoom, 0.08, 0.60, 2),
+ pnlRangePct: clamp(safe.pnlRangePct, DEFAULT.pnlRangePct, 0.02, 0.30, 2),
+ pnlStepPct: clamp(safe.pnlStepPct, DEFAULT.pnlStepPct, 0.005, 0.05, 3),
+ straddleChain: safe.straddleChain || null,
+ straddleLoading: !!safe.straddleLoading,
+ straddleError: String(safe.straddleError || ''),
+ straddleTargetUSD: clamp(safe.straddleTargetUSD, 100, 1, 1000000, 0),
+ straddleSelectedSymbol: String(safe.straddleSelectedSymbol || ''),
+ straddleViewMode: ['simple', 'advanced'].includes(String(safe.straddleViewMode || '')) ? String(safe.straddleViewMode) : DEFAULT.straddleViewMode,
+ straddleDeskTab: STRADDLE_DESK_TABS.includes(String(safe.straddleDeskTab || '').toLowerCase()) ? String(safe.straddleDeskTab).toLowerCase() : DEFAULT.straddleDeskTab,
+ straddlePayoffExpanded: !!safe.straddlePayoffExpanded,
+ straddleSettings: api.sanitizeOptionsAutoTradeSettings?.(safe.straddleSettings || globalThis.__fwdTradeDeskOptionsAutoSettings || {}) || null,
+ straddleDashboard: safe.straddleDashboard || null,
+ straddleDashboardLoading: !!safe.straddleDashboardLoading,
+ straddlePreview: safe.straddlePreview || null,
+ straddlePreviewLoading: !!safe.straddlePreviewLoading,
+ skewData: safe.skewData || null,
+ skewLoading: !!safe.skewLoading,
+ skewError: String(safe.skewError || ''),
+ skewHoveredStrike: Math.max(0, n(safe.skewHoveredStrike)),
+ skewView: SKEW_VIEWS.includes(String(safe.skewView || '').toLowerCase()) ? String(safe.skewView).toLowerCase() : DEFAULT.skewView,
+ skewAxis: SKEW_AXES.includes(String(safe.skewAxis || '').toLowerCase()) ? String(safe.skewAxis).toLowerCase() : DEFAULT.skewAxis,
+ executionHealth: safe.executionHealth || null,
+ executionHealthLoading: !!safe.executionHealthLoading,
+ };
+ }
+
+ function snapshot() {
+ return {
+ underlying: state.underlying, expiryKey: state.expiryKey, search: state.search, strikeWindow: state.strikeWindow, densityMode: state.densityMode,
+ workspaceMode: state.workspaceMode, activeView: state.activeView, builderLeftTab: state.builderLeftTab, builderOpenPanels: state.builderOpenPanels,
+ presetFamily: state.presetFamily, presetFilters: state.presetFilters, presetId: state.presetId, entryMode: state.entryMode,
+ allowUndefinedRisk: state.allowUndefinedRisk, targetDays: state.targetDays, targetPrice: state.targetPrice, scenarioIvShiftPct: state.scenarioIvShiftPct,
+ scenarioDecayMode: state.scenarioDecayMode, selectedContract: state.selectedContract, showExtendedPresets: state.showExtendedPresets, showBuilderHelp: state.showBuilderHelp, showBookedPnl: state.showBookedPnl, legs: state.legs,
+ chainQuickFilters: state.chainQuickFilters, payoffLineMode: state.payoffLineMode, payoffZoom: state.payoffZoom, pnlRangePct: state.pnlRangePct, pnlStepPct: state.pnlStepPct,
+ straddleViewMode: state.straddleViewMode, straddleDeskTab: state.straddleDeskTab, straddlePayoffExpanded: state.straddlePayoffExpanded, skewView: state.skewView, skewAxis: state.skewAxis,
+ };
+ }
+
+ const pane = () => document.getElementById('pane-options');
+ const autoSettings = () => api.sanitizeOptionsAutoTradeSettings?.(globalThis.__fwdTradeDeskOptionsAutoSettings || {}) || {};
+ const presetMeta = () => PRESETS.find(preset => preset.id === state.presetId) || null;
+ const underlyingMeta = () => (state.universe || []).find(item => item.underlying === state.underlying) || null;
+ const expiryMeta = () => (state.chain?.expiries || []).find(item => item.key === state.expiryKey) || state.chain?.expiries?.[0] || null;
+ const contracts = rows => (Array.isArray(rows) ? rows : (state.chain?.rows || [])).flatMap(row => [row.call, row.put]).filter(Boolean);
+ const spreadPct = contract => ((Math.max(0, n(contract?.askPrice || contract?.ask) - n(contract?.bidPrice || contract?.bid)) / Math.max(n(contract?.markPrice || contract?.premium), ((n(contract?.askPrice || contract?.ask) + n(contract?.bidPrice || contract?.bid)) / 2), 0.01)) * 100);
+ const deltaScore = contract => Math.max(0, 100 - (Math.abs(Math.abs(n(contract?.delta)) - Math.max(0, n(autoSettings().shortStrikeTargetDelta, 0.16))) / Math.max(0.01, n(autoSettings().deltaTolerance, 0.08))) * 100);
+ const hedgeTarget = contract => n(contract?.strike) + (String(contract?.optionType || '').toLowerCase() === 'call' ? step() * 2 : -step() * 2);
+
+ function step(rows = state.chain?.rows) {
+ const strikes = (rows || []).map(row => n(row?.strike)).filter(Boolean).sort((a, b) => a - b);
+ const diffs = strikes.map((value, index) => index ? Math.abs(value - strikes[index - 1]) : 0).filter(Boolean);
+ return diffs.length ? Math.min(...diffs) : 100;
+ }
+
+ function decorate(contract) {
+ if (!contract) return null;
+ const base = api.sanitizeOptionLeg?.(contract) || contract;
+ return { ...base, spreadPct: spreadPct(base), deltaMatchScore: deltaScore(base), shortPremiumScore: api.scoreShortPremiumContract?.(base, autoSettings()) || 0 };
+ }
+
+ function decorateChain(payload) {
+ if (!payload?.ok) return null;
+ return { ...payload, rows: (payload.rows || []).map(row => ({ strike: n(row.strike), call: decorate(row.call), put: decorate(row.put) })) };
+ }
+
+ function findAtm(rows = state.chain?.rows, spot = state.chain?.underlyingPrice || state.targetPrice) {
+ return (rows || []).reduce((best, row) => !best || Math.abs(n(row?.strike) - n(spot)) < best.diff ? { row, diff: Math.abs(n(row?.strike) - n(spot)) } : best, null)?.row || null;
+ }
+
+ function nearest(list, predicate, strike) {
+ return (list || []).filter(predicate || (() => true)).sort((a, b) => Math.abs(n(a.strike) - n(strike)) - Math.abs(n(b.strike) - n(strike)))[0] || null;
+ }
+
+ function bySymbol(symbol = '') { return contracts().find(contract => contract.symbol === symbol) || null; }
+ function bySpec(spec = {}, rows = state.chain?.rows) { return nearest(contracts(rows).filter(contract => contract.underlying === spec.underlying && contract.expiryKey === spec.expiryKey && String(contract.optionType || '').toLowerCase() === String(spec.optionType || '').toLowerCase()), () => true, n(spec.strike)); }
+ function legFrom(contract, side) { return contract ? (api.sanitizeOptionLeg?.({ ...contract, side, qty: contract.quantity || contract.qty || 1, quantity: contract.quantity || contract.qty || 1, premium: contract.markPrice, entryPrice: contract.markPrice, entryMode: state.entryMode }) || null) : null; }
+
+ function filteredRows() {
+ const rows = (state.chain?.rows || []).slice();
+ if (!rows.length) return [];
+ const search = String(state.search || '').trim().toUpperCase();
+ let result;
+ if (search) {
+ result = rows.filter(row => `${Math.round(n(row.strike))}`.includes(search) || String(row.call?.symbol || '').toUpperCase().includes(search) || String(row.put?.symbol || '').toUpperCase().includes(search));
+ } else {
+ const atmIndex = Math.max(0, rows.findIndex(row => n(row.strike) === n(state.chain?.atmStrike)));
+ result = rows.slice(Math.max(0, atmIndex - state.strikeWindow), Math.min(rows.length, atmIndex + state.strikeWindow + 1));
+ }
+ const spot = n(state.chain?.underlyingPrice);
+ const qf = state.chainQuickFilters || [];
+ if (qf.includes('itm_only') && spot > 0) result = result.filter(row => n(row.strike) < spot || n(row.strike) > spot);
+ if (qf.includes('high_oi')) {
+ const allOi = result.map(row => n(row.call?.openInterest || row.call?.oiContracts || 0) + n(row.put?.openInterest || row.put?.oiContracts || 0));
+ const sorted = allOi.slice().sort((a, b) => a - b);
+ const median = sorted[Math.floor(sorted.length / 2)] || 0;
+ result = result.filter((_, i) => allOi[i] >= median);
+ }
+ if (qf.includes('tight_spread')) {
+ result = result.filter(row => Math.min(row.call ? spreadPct(row.call) : 999, row.put ? spreadPct(row.put) : 999) < 5);
+ }
+ return result;
+ }
+
+ function buildPreset(presetId = '') {
+ const rows = state.chain?.rows || [];
+ const spot = n(state.chain?.underlyingPrice);
+ if (!rows.length || !(spot > 0)) return [];
+ if (['short_put_spread', 'short_call_spread', 'short_straddle', 'short_strangle', 'iron_condor', 'iron_fly', 'jade_lizard'].includes(presetId)) {
+ return (api.buildStrategyFromChain?.(presetId, { rows, spotPrice: spot }, autoSettings()) || []).map(leg => legFrom(leg, leg.side)).filter(Boolean);
+ }
+ const atm = findAtm(rows, spot);
+ const s = step(rows);
+ const calls = rows.map(row => row.call).filter(Boolean);
+ const puts = rows.map(row => row.put).filter(Boolean);
+ const atmCall = atm?.call || nearest(calls, () => true, spot);
+ const atmPut = atm?.put || nearest(puts, () => true, spot);
+ const higherCall = atmCall ? nearest(calls, item => n(item.strike) > n(atmCall.strike), n(atmCall.strike) + s * 2) : null;
+ const lowerPut = atmPut ? nearest(puts, item => n(item.strike) < n(atmPut.strike), n(atmPut.strike) - s * 2) : null;
+ if (presetId === 'long_call') return [legFrom(atmCall, 'buy')].filter(Boolean);
+ if (presetId === 'long_put') return [legFrom(atmPut, 'buy')].filter(Boolean);
+ if (presetId === 'bull_call_spread') return [legFrom(atmCall, 'buy'), legFrom(higherCall, 'sell')].filter(Boolean);
+ if (presetId === 'bear_put_spread') return [legFrom(atmPut, 'buy'), legFrom(lowerPut, 'sell')].filter(Boolean);
+ return [];
+ }
+
+ function builderStatus(summary) {
+ const settings = autoSettings();
+ const warnings = [];
+ const legs = state.legs || [];
+ if (!legs.length || !summary) return { automationSafe: false, warnings: ['No basket'], riskMode: state.allowUndefinedRisk ? 'Manual undefined risk enabled' : 'Defined risk only' };
+ if (summary.hasUndefinedRisk) warnings.push('Undefined tail');
+ if (Number.isFinite(Number(summary.maxLoss)) && n(summary.maxLoss) > n(settings.maxRiskUSD, 0)) warnings.push('Exceeds risk budget');
+ if (legs.some(leg => n(leg.openInterest || leg.oiContracts) < n(settings.minOIContracts, 250))) warnings.push('Low OI');
+ if (legs.some(leg => spreadPct(leg) > n(settings.maxBidAskSpreadPct, 0.18) * 100)) warnings.push('Wide spread');
+ if (n(summary.totalTheta) <= 0) warnings.push('Theta weak');
+ const preset = presetMeta();
+ const safe = !summary.hasUndefinedRisk && n(summary.totalTheta) > 0 && (!Number.isFinite(Number(summary.maxLoss)) || n(summary.maxLoss) <= n(settings.maxRiskUSD, 0))
+ && legs.every(leg => n(leg.openInterest || leg.oiContracts) >= n(settings.minOIContracts, 250))
+ && legs.every(leg => spreadPct(leg) <= n(settings.maxBidAskSpreadPct, 0.18) * 100)
+ && !!preset?.auto;
+ return { automationSafe: safe, warnings, riskMode: summary.hasUndefinedRisk ? (state.allowUndefinedRisk ? 'Manual undefined risk enabled' : 'Blocked for automation') : 'Defined risk' };
+ }
+
+ function hydrate() {
+ const expiry = expiryMeta();
+ const spot = n(state.chain?.underlyingPrice || state.targetPrice);
+ if (!(spot > 0) || !(state.legs || []).length) { state.analysis = null; state.builderStatus = builderStatus(null); return; }
+ state.targetDays = clamp(state.targetDays, 0, 0, Math.max(0, Math.round(n(expiry?.daysToExpiry || state.targetDays))), 0);
+ if (!(n(state.targetPrice) > 0)) state.targetPrice = spot;
+ const ivScale = Math.max(0.2, 1 + n(state.scenarioIvShiftPct) / 100);
+ const timeFactor = state.scenarioDecayMode === 'fast' ? 1.15 : state.scenarioDecayMode === 'slow' ? 0.85 : 1;
+ const scenarioLegs = state.legs.map(leg => api.sanitizeOptionLeg?.({ ...leg, impliedVolatility: n(leg.impliedVolatility || leg.iv) * ivScale, iv: n(leg.iv || leg.impliedVolatility) * ivScale }) || leg);
+ const context = { underlyingPrice: spot, targetPrice: n(state.targetPrice || spot), daysToExpiry: n(expiry?.daysToExpiry), targetDays: clamp(state.targetDays * timeFactor, state.targetDays, 0, 365, 0), priceRangePct: state.payoffZoom, points: 201, rate: api.DEFAULT_RISK_FREE_RATE || 0.06 };
+ const summary = api.summarizeOptionStrategy?.(scenarioLegs, context) || null;
+ const pnlContext = { ...context, priceRangePct: state.pnlRangePct, points: Math.max(5, Math.round((state.pnlRangePct * 2) / state.pnlStepPct) + 1) };
+ state.analysis = summary ? { summary, pnlTable: api.buildOptionPnlTable?.(scenarioLegs, pnlContext) || [], context } : null;
+ state.builderStatus = builderStatus(summary);
+ }
+
+ function setState(patch = {}, options = {}) {
+ state = normalize({ ...state, ...patch });
+ hydrate();
+ if (options.persist !== false) void localSet({ [KEY]: snapshot() });
+ if (options.render !== false) render();
+ }
+
+ async function loadState() {
+ const stored = await localGet([KEY, 'optionsAutoTradeSettings']);
+ globalThis.__fwdTradeDeskOptionsAutoSettings = stored.optionsAutoTradeSettings || {};
+ state = normalize({ ...state, ...(stored[KEY] || {}), straddleSettings: stored.optionsAutoTradeSettings || {}, initialized: true });
+ }
+
+ function getStraddleScore(contract, spot = 0) {
+ return api.scoreNativeStraddleContract?.(contract, spot, 'neutral', state.straddleSettings || autoSettings()) || 0;
+ }
+
+ function getSelectedStraddleContract(chain = state.straddleChain) {
+ const sc = chain || state.straddleChain;
+ if (!sc?.contracts?.length) return null;
+ const spot = n(sc.underlyingPrice);
+ const scored = sc.contracts.map(contract => ({ ...contract, score: getStraddleScore(contract, spot) }));
+ const best = scored.reduce((current, candidate) => (!current || candidate.score > current.score ? candidate : current), null);
+ const selectedSym = state.straddleSelectedSymbol || (best ? best.symbol : '');
+ return scored.find(contract => contract.symbol === selectedSym) || best || null;
+ }
+
+ function estimateStraddleQty(contract = null) {
+ if (!contract) return 1;
+ const cm = Math.max(0.000001, n(contract.contractMultiplier || 1));
+ const premiumPerContract = Math.max(0, n(contract.markPrice) * cm);
+ const targetUSD = n(state.straddleTargetUSD || 100);
+ return premiumPerContract > 0 ? Math.max(1, Math.ceil(targetUSD / premiumPerContract)) : 1;
+ }
+
+ function getAnalyzerStraddleContext() {
+ const contract = getSelectedStraddleContract();
+ const preview = state.straddlePreview && (!contract || state.straddlePreview.symbol === contract.symbol)
+ ? state.straddlePreview
+ : null;
+ const dashboardEntries = Array.isArray(state.straddleDashboard?.entries) ? state.straddleDashboard.entries : [];
+ const symbol = String(preview?.symbol || contract?.symbol || '').trim();
+ const activeEntry = dashboardEntries.find(entry =>
+ entry?.type === 'native_straddle'
+ && entry?.symbol === symbol
+ && ['active', 'partial_stop'].includes(String(entry?.status || '').toLowerCase())
+ ) || null;
+ if (!contract && !preview && !activeEntry) return null;
+ const spot = Math.max(0, n(state.straddleChain?.underlyingPrice || state.chain?.underlyingPrice || contract?.underlyingPrice || preview?.spotPrice));
+ const strike = Math.max(0, n(preview?.strike || contract?.strike || activeEntry?.strike));
+ const breakEvenLow = Math.max(0, n(preview?.breakEvenLow));
+ const breakEvenHigh = Math.max(0, n(preview?.breakEvenHigh));
+ const expectedMoveWidth = Math.max(0, n(preview?.expectedMoveWidth));
+ const expectedMoveLow = expectedMoveWidth > 0 && spot > 0 ? Math.max(0, spot - (expectedMoveWidth / 2)) : 0;
+ const expectedMoveHigh = expectedMoveWidth > 0 && spot > 0 ? spot + (expectedMoveWidth / 2) : 0;
+ const score = n(preview?.score || contract?.score);
+ const softGate = n(preview?.softGateThreshold || 70);
+ const qty = Math.max(1, Math.round(n(preview?.qty || estimateStraddleQty(contract), 1)));
+ const premiumUSD = n(preview?.premiumUSD);
+ const stopLossUSD = n(preview?.stopLossUSD);
+ const spreadPctVal = n(contract?.spreadPct);
+ const oiVal = n(contract?.oiContracts);
+ const thetaCash = Math.abs(n(contract?.theta)) * Math.max(0.000001, n(contract?.contractMultiplier || 1));
+ const bandWidth = breakEvenHigh > breakEvenLow ? (breakEvenHigh - breakEvenLow) : 0;
+ const bandWidthPct = spot > 0 && bandWidth > 0 ? (bandWidth / spot) * 100 : 0;
+ const tone = preview?.canPlace === false ? 'loss' : (score >= softGate ? 'profit' : 'warn');
+ return {
+ symbol,
+ contract,
+ preview,
+ activeEntry,
+ spot,
+ strike,
+ qty,
+ premiumUSD,
+ stopLossUSD,
+ breakEvenLow,
+ breakEvenHigh,
+ bandWidth,
+ bandWidthPct,
+ expectedMoveWidth,
+ expectedMoveLow,
+ expectedMoveHigh,
+ score,
+ softGate,
+ spreadPct: spreadPctVal,
+ oiContracts: oiVal,
+ volume: n(contract?.volume),
+ thetaPerDay: thetaCash,
+ thetaMarginRatioPct: n(preview?.thetaMarginRatioPct),
+ profileCapUsagePct: n(preview?.profileCapUsagePct),
+ regime: preview?.regime || null,
+ expiryRisk: preview?.expiryRisk || null,
+ contractThesis: Array.isArray(preview?.contractThesis) ? preview.contractThesis : [],
+ blockedReasons: Array.isArray(preview?.blockedReasons) ? preview.blockedReasons : [],
+ sourceLabel: activeEntry ? 'Linked live native straddle' : 'Linked native straddle preview',
+ statusLabel: state.straddlePreviewLoading ? 'Updating' : (activeEntry ? 'Live' : (preview?.canPlace === false ? 'Blocked' : 'Preview')),
+ tone,
+ };
+ }

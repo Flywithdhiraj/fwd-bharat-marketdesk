@@ -1,0 +1,103 @@
+/* Long-session readability pass: trading labels and helper text should not drop below 11px. */
+:where(
+ small,
+ th,
+ .es,
+ .stxt,
+ .slst,
+ .workspace-label,
+ .workspace-copy,
+ .command-eyebrow,
+ .command-panel-title,
+ .command-action small,
+ .command-metric small,
+ .command-snapshot-row span,
+ .command-snapshot-row strong,
+ .card-stat .cl,
+ .card-in-pos,
+ .card-signal-age,
+ .compact-setup,
+ .scanner-compact-table,
+ .scanner-compact-table thead th,
+ .scanner-insight-card.insight-wait-compact .scanner-insight-kicker,
+ .scanner-insight-wait-note,
+ .strategy-lab-segment small,
+ .strategy-lab-metric span,
+ .strategy-lab-table th,
+ .strategy-lab-row td small,
+ .strategy-signal,
+ .strategy-detail-head span,
+ .strategy-detail-grid span,
+ .strategy-detail-label,
+ .strategy-check span,
+ .live-journal-meta,
+ .live-journal-tag,
+ .live-order-audit-best small,
+ .live-order-preview-copy,
+ .live-position-order-shortcuts,
+ .pos-table-row small,
+ .ds-chart-meta-row,
+ .ds-chart-status,
+ .ds-chart-kicker,
+ .ds-chart-control,
+ .od-command-stat small,
+ .od-straddle-table th,
+ .od-score-num,
+ .od-dt-section-title,
+ .od-dt-calc-item span,
+ .app-lock-copy,
+ .app-lock-field span
+) {
+ font-size: 11px !important;
+ line-height: 1.45;
+ letter-spacing: 0;
+}
+
+.command-palette-shortcuts {
+ display: grid;
+ grid-template-columns: repeat(2, minmax(0, 1fr));
+ gap: 8px;
+ margin: 10px 0 12px;
+ padding: 10px;
+ border: 1px solid rgba(126, 145, 182, 0.14);
+ border-radius: 8px;
+ background: rgba(8, 13, 24, 0.72);
+}
+
+.command-shortcut {
+ display: flex;
+ align-items: center;
+ justify-content: space-between;
+ gap: 10px;
+ min-width: 0;
+ color: var(--text-soft);
+ font-size: 11px;
+ line-height: 1.35;
+}
+
+.command-shortcut span {
+ overflow: hidden;
+ text-overflow: ellipsis;
+ white-space: nowrap;
+}
+
+.command-shortcut kbd {
+ flex: 0 0 auto;
+ min-width: 42px;
+ padding: 3px 7px;
+ border: 1px solid rgba(126, 145, 182, 0.25);
+ border-bottom-color: rgba(126, 145, 182, 0.4);
+ border-radius: 6px;
+ background: rgba(255, 255, 255, 0.05);
+ color: var(--text);
+ font-family: var(--font-data);
+ font-size: 11px;
+ font-weight: 800;
+ text-align: center;
+}
+
+@media (max-width: 620px) {
+ .command-palette-shortcuts {
+ grid-template-columns: 1fr;
+ }
+}

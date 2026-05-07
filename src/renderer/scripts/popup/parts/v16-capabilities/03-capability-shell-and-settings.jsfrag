@@ -1,0 +1,1344 @@
+// Capability shell, risk board, account settings and security status
+
+// Capability shell, risk board, account state and trade journal
+function renderV16CredentialModeStatus(profile = null, secret = null) {
+ const noteEl = document.getElementById('accountCredentialModeNote');
+ const keyInput = document.getElementById('accountTradingKey');
+ const secretInput = document.getElementById('accountTradingSecret');
+ if (!noteEl || !keyInput || !secretInput) return;
+
+ const selectedProfile = profile || getV16SelectedAccountProfile();
+ const selectedSecret = secret || getV16Secrets()?.[selectedProfile?.id] || {};
+ const usesNative = v16UsesNativeCredential(selectedProfile);
+ const label = String(selectedSecret?.label || selectedProfile?.credentialLabel || '').trim();
+
+ if (usesNative) {
+ noteEl.textContent = label
+ ? `Stored in encrypted Windows app storage as "${label}". Leave key fields blank to keep it, or enter new values to replace it.`
+ : 'Stored in encrypted Windows app storage. Leave key fields blank to keep it, or enter new values to replace it.';
+ noteEl.className = 'account-inline-note good';
+ keyInput.placeholder = 'Stored in encrypted Windows app storage';
+ secretInput.placeholder = 'Stored in encrypted Windows app storage';
+ return;
+ }
+
+ if (v16NativeCredentialState.available) {
+ noteEl.textContent = 'Encrypted Windows app storage is available. Saving a full key and secret will move them out of session storage.';
+ noteEl.className = 'account-inline-note good';
+ } else {
+ noteEl.textContent = 'Encrypted Windows app storage is not responding yet. Keys saved now stay only in this app session.';
+ noteEl.className = 'account-inline-note warn';
+ }
+ keyInput.placeholder = 'Required for live account data';
+ secretInput.placeholder = 'Required for live account data';
+}
+
+function v16UpsertEditorProfileDraft(metadata, secrets, profile, secret, options = {}) {
+ const nextMetadata = clonePlain(metadata || {});
+ const nextSecrets = clonePlain(secrets || {});
+ const existingProfile = getV16ProfileById(profile.id) || {};
+ const existingSecret = getV16Secrets()?.[profile.id] || {};
+ const previousId = getV16ActiveAccountProfile()?.id || profile.id;
+ nextMetadata.profiles = [profile];
+ nextMetadata.ui = { ...(nextMetadata.ui || {}), selectedProfileId: profile.id };
+ if (previousId !== profile.id && nextSecrets[previousId] && !nextSecrets[profile.id]) {
+ nextSecrets[profile.id] = nextSecrets[previousId];
+ delete nextSecrets[previousId];
+ }
+
+ const hasKeys = !!(String(secret?.tradingKey || '').trim() && String(secret?.tradingSecret || '').trim());
+ const hasAnySecretDraft = !!(String(secret?.tradingKey || '').trim() || String(secret?.tradingSecret || '').trim() || String(secret?.label || '').trim());
+ const keepNativeCredential = !hasKeys && v16UsesNativeCredential(profile);
+
+ if (options.setActive || !nextMetadata.activeProfileId || (hasKeys && profile.capability !== 'Public')) {
+ nextMetadata.activeProfileId = profile.id;
+ }
+ nextMetadata.updatedAt = Date.now();
+
+ if (hasKeys || hasAnySecretDraft) {
+ nextSecrets[profile.id] = secret;
+ } else if (keepNativeCredential) {
+ nextSecrets[profile.id] = {
+ tradingKey: '',
+ tradingSecret: '',
+ label: String(existingSecret?.label || profile?.credentialLabel || existingProfile?.credentialLabel || '').trim(),
+ updatedAt: Date.now(),
+ };
+ } else {
+ delete nextSecrets[profile.id];
+ }
+
+ return { metadata: nextMetadata, secrets: nextSecrets };
+}
+
+function buildV16PriceLookup(scanResults = []) {
+ const lookup = new Map();
+ (Array.isArray(scanResults) ? scanResults : []).forEach(result => {
+ const symbol = typeof sanitizeAnalyticsSymbol === 'function'
+ ? sanitizeAnalyticsSymbol(result?.symbol)
+ : String(result?.symbol || '').toUpperCase().trim();
+ if (!symbol) return;
+ lookup.set(symbol, Number(result?.price || result?.entry || 0));
+ });
+ return lookup;
+}
+
+function buildV16SessionSummary(snapshot = {}) {
+ const profile = getV16ActiveAccountProfile();
+ const scanResults = Array.isArray(snapshot.scanResults) ? snapshot.scanResults : [];
+ const alerts = Array.isArray(snapshot.alerts) ? snapshot.alerts : [];
+ const trades = [];
+ const positions = Array.isArray(snapshot.analyticsPositions) ? snapshot.analyticsPositions : [];
+ const marketIndex = snapshot.marketIndex || null;
+ const prices = buildV16PriceLookup(scanResults);
+
+ let manualPnl = 0;
+ positions.forEach(position => {
+ const symbol = typeof sanitizeAnalyticsSymbol === 'function'
+ ? sanitizeAnalyticsSymbol(position?.symbol)
+ : String(position?.symbol || '').toUpperCase().trim();
+ const lastPrice = Number(prices.get(symbol) || 0);
+ const entry = typeof toPosNum === 'function' ? toPosNum(position?.entry) : Number(position?.entry || 0);
+ const qtyValue = typeof toPosNum === 'function' ? toPosNum(position?.qty) : Number(position?.qty || 0);
+ const tradeValue = typeof toPosNum === 'function' ? toPosNum(position?.tradeValue) : Number(position?.tradeValue || 0);
+ const qty = qtyValue > 0 ? qtyValue : (tradeValue > 0 && entry > 0 ? tradeValue / entry : 0);
+ if (!symbol || !lastPrice || !entry || !qty) return;
+ const direction = String(position?.side || 'long') === 'short' ? -1 : 1;
+ manualPnl += (lastPrice - entry) * qty * direction;
+ });
+
+ const openTrades = trades.filter(trade => String(trade?.status || '').toLowerCase() === 'open');
+ const closedTrades = trades.filter(trade => String(trade?.status || '').toLowerCase() === 'closed');
+ const sessionBaseline = Number(profile.sessionStartBalance || profile.baseBalance || 0);
+ const dailyLossCash = sessionBaseline > 0 ? sessionBaseline * Number(profile.dailyLossLimitPct || 0) / 100 : 0;
+ const sessionPnl = manualPnl;
+ const sessionPct = sessionBaseline > 0 ? (sessionPnl / sessionBaseline) * 100 : 0;
+ const longSignals = scanResults.filter(result => String(result?.direction || '').includes('long')).length;
+ const shortSignals = scanResults.filter(result => String(result?.direction || '').includes('short')).length;
+ const executeCount = alerts.filter(alert => String(alert?.alertTier || '').toLowerCase() === 'execute').length;
+ const breadth = longSignals - shortSignals;
+ const condition = String(marketIndex?.condition || 'neutral').toLowerCase();
+ const directionLabel = condition === 'euphoric' ? 'Euphoric'
+ : condition === 'bull' ? 'Bullish'
+ : condition === 'bear' ? 'Bearish'
+ : condition === 'crash' ? 'Risk-Off'
+ : 'Balanced';
+ const directionTone = condition === 'euphoric' || condition === 'bull' ? 'good'
+ : condition === 'bear' || condition === 'crash' ? 'bad'
+ : 'warn';
+ const regimeMeta = getMarketRegimeMeta(marketIndex?.regime);
+ const thresholds = getRegimeThresholds(marketIndex?.regime, marketIndex?.thresholds || {});
+ const thresholdCopy = `Execute >= ${thresholds.alertScore} | Setup >= ${thresholds.setupScore} | Watch >= ${thresholds.watchScore}`;
+ const regimeCopy = marketIndex?.value != null
+ ? `${directionLabel} direction | ${regimeMeta.label} volatility structure | ${Number(marketIndex.value) >= 0 ? '+' : ''}${Number(marketIndex.value).toFixed(2)}% FWD-10`
+ : `Breadth ${breadth >= 0 ? '+' : ''}${breadth} with ${scanResults.length} live signals`;
+ return {
+ profile,
+ manualPnl,
+ sessionPnl,
+ sessionPct,
+ sessionBaseline,
+ dailyLossCash,
+ openTrades,
+ closedTrades,
+ executeCount,
+ longSignals,
+ shortSignals,
+ breadth,
+ marketIndex,
+ regimeLabel: regimeMeta.label,
+ regimeTone: regimeMeta.tone === 'muted' ? 'warn' : regimeMeta.tone,
+ directionLabel,
+ directionTone,
+ regimeCopy,
+ thresholdCopy,
+ thresholds,
+ lastScan: snapshot.lastScan || '',
+ killSwitchSuggested: dailyLossCash > 0 && sessionPnl <= -dailyLossCash,
+ };
+}
+
+function buildV16CapabilitySwitchHtml(activeCapability) {
+ return ACCOUNT_CAPABILITIES.map(capability => {
+ const meta = getAccountCapabilityMeta(capability);
+ return `<button class="cap-mode-btn ${capability === activeCapability ? 'active' : ''}" data-v16-capability="${meta.label}">
+ <span>${meta.shortLabel}</span>
+ <small>${meta.allowsTrade ? 'Execution shell' : meta.allowsAccountRead ? 'Read only' : 'Research'}</small>
+ </button>`;
+ }).join('');
+}
+
+async function getV16Snapshot(preloaded = null) {
+ if (preloaded) return preloaded;
+ return storeGet(['analyticsPositions', 'scanResults', 'marketIndex', 'alerts', 'lastScan']);
+}
+
+async function renderV16CapabilityShell(preloaded = null) {
+ const shell = document.getElementById('capabilityShell');
+ if (!shell) return;
+ await loadV16AccountState();
+ const snapshot = await getV16Snapshot(preloaded);
+ const summary = buildV16SessionSummary(snapshot);
+ const profile = summary.profile;
+ const capabilityMeta = getAccountCapabilityMeta(profile.capability);
+ const capabilityLabel = v16ReadableCapabilityLabel(capabilityMeta.label);
+ const killSwitch = getV16KillSwitchState();
+ const hasSecret = hasV16SessionSecret(profile.id);
+ const riskTone = summary.sessionPnl >= 0 ? 'good' : (summary.killSwitchSuggested ? 'bad' : 'warn');
+ const capabilityTitle = `${v16ReadableCapabilityLabel(capabilityMeta.shortLabel)} Mode`;
+ const capabilityMetaLine = v16JoinUniqueParts([
+ profile.name,
+ profile.venue,
+ capabilityMeta.description,
+ ], ' | ');
+ shell.innerHTML = `
+ <div class="cap-shell-copy">
+ <div class="cap-shell-kicker">FWD TradeDesk Pro Layer</div>
+ <div class="cap-shell-title">${v16Esc(capabilityTitle)}</div>
+ <div class="cap-shell-meta">${v16Esc(capabilityMetaLine)}</div>
+ </div>
+ <div class="cap-shell-switch">
+ ${buildV16CapabilitySwitchHtml(profile.capability)}
+ </div>
+ <div class="cap-shell-stats">
+ <button class="cap-shell-card" data-v16-open-tab="riskcalc">
+ <span>Session P&amp;L</span>
+ <strong class="${riskTone}">${v16FormatSignedCash(summary.sessionPnl)}</strong>
+ <small>${summary.sessionBaseline > 0 ? `${summary.sessionPct >= 0 ? '+' : ''}${summary.sessionPct.toFixed(2)}% on $${summary.sessionBaseline.toFixed(0)}` : 'No baseline set'}</small>
+ </button>
+ <button class="cap-shell-card" data-v16-open-tab="strategy">
+ <span>Active Guard</span>
+ <strong class="${killSwitch.enabled ? 'bad' : capabilityMeta.tone === 'trade' ? 'good' : 'warn'}">${killSwitch.enabled ? 'Kill Switch' : v16Esc(capabilityLabel)}</strong>
+ <small>${killSwitch.enabled ? v16Esc(killSwitch.reason || 'Execution locked') : hasSecret ? (v16UsesNativeCredential(profile) ? 'Windows credential ready' : 'Session credential ready') : 'Preview mode, no key required'}</small>
+ </button>
+ <button class="cap-shell-kill ${killSwitch.enabled ? 'armed' : ''}" id="btnCapabilityKillSwitch">${killSwitch.enabled ? 'Disarm Kill Switch' : 'Arm Kill Switch'}</button>
+ </div>`;
+
+ shell.querySelectorAll('[data-v16-capability]').forEach(button => {
+ button.addEventListener('click', async () => {
+ await switchV16Capability(button.dataset.v16Capability);
+ });
+ });
+ shell.querySelectorAll('[data-v16-open-tab]').forEach(button => {
+ button.addEventListener('click', () => {
+ if (typeof setActiveWorkspaceTab === 'function') setActiveWorkspaceTab(button.dataset.v16OpenTab);
+ });
+ });
+ shell.querySelector('#btnCapabilityKillSwitch')?.addEventListener('click', async () => {
+ const nextReason = killSwitch.enabled ? '' : (summary.killSwitchSuggested ? 'Daily loss guard triggered' : 'Manually armed from capability shell');
+ await setV16KillSwitch(!killSwitch.enabled, nextReason);
+ });
+}
+
+async function renderV16DecisionEngineShell(preloaded = null) {
+ const shell = document.getElementById('decisionEngineShell');
+ if (!shell) return;
+ await loadV16AccountState();
+ const showShell = typeof isDesktopMode !== 'undefined'
+ ? !!isDesktopMode
+ : new URLSearchParams(location.search).get('desktop') === '1';
+ shell.hidden = !showShell;
+ if (!showShell) {
+ shell.innerHTML = '';
+ return;
+ }
+ const snapshot = await getV16Snapshot(preloaded);
+ const summary = buildV16SessionSummary(snapshot);
+ const profile = summary.profile;
+ const capabilityMeta = getAccountCapabilityMeta(profile.capability);
+ const capabilityLabel = v16ReadableCapabilityLabel(capabilityMeta.label);
+ const killSwitch = getV16KillSwitchState();
+ const hasSecret = hasV16SessionSecret(profile.id);
+ const marketValue = Number(summary.marketIndex?.value || 0);
+ const lastScanText = summary.lastScan || 'Pending';
+ const profileCardTitle = v16JoinUniqueParts([profile.name, profile.desk], ' | ') || profile.name;
+ const profileCardMeta = v16JoinUniqueParts([
+ profile.venue,
+ `risk ${Number(profile.riskPerTradePct || 0).toFixed(2)}%`,
+ ], ' | ');
+ shell.innerHTML = `
+ <div class="decision-head">
+ <div>
+ <div class="decision-kicker">Decision Engine</div>
+ <div class="decision-title">${v16Esc(profile.name)} <span>${v16Esc(v16ReadableCapabilityLabel(capabilityMeta.label))}</span></div>
+ </div>
+ <div class="decision-copy">${v16Esc(summary.regimeCopy)}</div>
+ </div>
+ <div class="decision-grid">
+ <article class="decision-card">
+ <span>Profile</span>
+ <strong>${v16Esc(profileCardTitle)}</strong>
+ <small>${v16Esc(profile.venue)} | risk ${Number(profile.riskPerTradePct || 0).toFixed(2)}%</small>
+ </article>
+ <article class="decision-card">
+ <span>Session P&amp;L</span>
+ <strong class="${summary.sessionPnl >= 0 ? 'good' : 'bad'}">${v16FormatSignedCash(summary.sessionPnl)}</strong>
+ <small>Manual ${v16FormatSignedCash(summary.manualPnl)} | Live history sync active</small>
+ </article>
+ <article class="decision-card">
+ <span>Execution State</span>
+ <strong class="${killSwitch.enabled ? 'bad' : capabilityMeta.tone === 'trade' ? 'good' : 'warn'}">${killSwitch.enabled ? 'Locked' : v16Esc(capabilityLabel)}</strong>
+ <small>${killSwitch.enabled ? v16Esc(killSwitch.reason || 'Kill switch armed') : hasSecret ? (v16UsesNativeCredential(profile) ? 'Windows credential ready' : 'Session credential ready') : 'No trading key required yet'}</small>
+ </article>
+ <article class="decision-card">
+ <span>Live Queue</span>
+ <strong>${summary.executeCount}</strong>
+ <small>${summary.longSignals}/${summary.shortSignals} long-short | live positions route journal and history</small>
+ </article>
+ </div>
+ <div class="regime-bar ${summary.regimeTone}">
+ <div class="regime-block">
+ <span>Regime</span>
+ <strong>${v16Esc(summary.regimeLabel)}</strong>
+ <small>${marketValue >= 0 ? '+' : ''}${marketValue.toFixed(2)}% FWD-10</small>
+ </div>
+ <div class="regime-block">
+ <span>Direction</span>
+ <strong class="${summary.directionTone}">${v16Esc(summary.directionLabel)}</strong>
+ <small>${summary.longSignals} long | ${summary.shortSignals} short | breadth ${summary.breadth >= 0 ? '+' : ''}${summary.breadth}</small>
+ </div>
+ <div class="regime-block">
+ <span>Thresholds</span>
+ <strong>E${summary.thresholds.alertScore} / S${summary.thresholds.setupScore} / W${summary.thresholds.watchScore}</strong>
+ <small>${v16Esc(summary.thresholdCopy)}</small>
+ </div>
+ <div class="regime-block">
+ <span>Freshness</span>
+ <strong>${v16Esc(lastScanText)}</strong>
+ <small>${summary.executeCount} execute alerts ready${killSwitch.enabled ? ' | kill switch armed' : summary.killSwitchSuggested ? ' | loss guard breached' : ''}</small>
+ </div>
+ </div>`;
+}
+
+function renderV16RiskBridgeBanner() {
+ const banner = document.getElementById('riskBridgeBanner');
+ if (!banner) return;
+ if (!v16RiskBridge) {
+ banner.hidden = true;
+ banner.innerHTML = '';
+ return;
+ }
+ const profile = getV16ActiveAccountProfile();
+ const riskSeed = v16ResolveRiskCalculatorSeed();
+ const capabilityMeta = getAccountCapabilityMeta(profile.capability);
+ const killSwitch = getV16KillSwitchState();
+ const suggestedRiskCash = Number(riskSeed.balance || 0) * (Number(profile.riskPerTradePct || 0) / 100);
+ banner.hidden = false;
+ banner.innerHTML = `
+ <div class="risk-bridge-head">
+ <div>
+ <div class="risk-bridge-kicker">Signal to Risk Bridge</div>
+ <div class="risk-bridge-title">${v16Esc(v16RiskBridge.symbol)} | ${v16Esc(v16RiskBridge.side.toUpperCase())}</div>
+ </div>
+ <div class="risk-bridge-actions">
+ <button class="bsm" id="btnRiskBridgeOpenDelta">Open in Delta</button>
+ <button class="bsm" id="btnRiskBridgePreview">Preview Trade</button>
+ <button class="bsm" id="btnRiskBridgeClear">Clear</button>
+ </div>
+ </div>
+ <div class="risk-bridge-grid">
+ <div class="risk-bridge-card"><span>Profile</span><strong>${v16Esc(profile.name)}</strong><small>${v16Esc(v16ReadableCapabilityLabel(capabilityMeta.label))}</small></div>
+ <div class="risk-bridge-card"><span>Entry / Stop</span><strong>$${fmtPrice(v16RiskBridge.entry)}</strong><small>SL $${fmtPrice(v16RiskBridge.stopLoss)}${v16RiskBridge.takeProfit ? ` | TP $${fmtPrice(v16RiskBridge.takeProfit)}` : ''}</small></div>
+ <div class="risk-bridge-card"><span>Suggested Risk</span><strong>${Number(profile.riskPerTradePct || 0).toFixed(2)}%</strong><small>$${v16FmtNumber(suggestedRiskCash, 2)} on ${v16Esc(riskSeed.symbol)} wallet $${v16FmtNumber(riskSeed.balance, 2)}</small></div>
+ <div class="risk-bridge-card"><span>Execution State</span><strong class="${killSwitch.enabled ? 'bad' : capabilityMeta.tone === 'trade' ? 'good' : 'warn'}">${killSwitch.enabled ? 'Locked' : capabilityMeta.label}</strong><small>${killSwitch.enabled ? v16Esc(killSwitch.reason || 'Kill switch armed') : 'Risk plan seeded from signal'}</small></div>
+ </div>`;
+ banner.querySelector('#btnRiskBridgeOpenDelta')?.addEventListener('click', () => {
+ v16OpenDeltaTradeWindow(v16RiskBridge?.symbol);
+ });
+ banner.querySelector('#btnRiskBridgePreview')?.addEventListener('click', () => {
+ const sizedContracts = parseFloat(document.getElementById('rcContracts')?.textContent || '1');
+ const sizedSignal = {
+ symbol: v16RiskBridge.symbol,
+ direction: v16RiskBridge.side,
+ entry: v16RiskBridge.entry,
+ sl: v16RiskBridge.stopLoss,
+ tp1: v16RiskBridge.takeProfit,
+ tp2: v16RiskBridge.takeProfit2 || 0,
+ size: Math.max(1, Math.round(Number.isFinite(sizedContracts) ? sizedContracts : 1)),
+ keyLevels: v16RiskBridge.keyLevels || null,
+ };
+ openV16LiveTradeOrderPreview(sizedSignal);
+ });
+ banner.querySelector('#btnRiskBridgeClear')?.addEventListener('click', () => {
+ v16RiskBridge = null;
+ renderV16RiskBridgeBanner();
+ });
+}
+
+async function renderV16RiskManageBoard() {
+ const wrap = document.getElementById('riskManageBoard');
+ if (!wrap) return;
+ const bundle = await v16EnsureLiveManageHistory();
+ const manageNotesStore = await storeGet(V16_LIVE_JOURNAL_NOTES_KEY);
+ const manageNotesMap = manageNotesStore?.[V16_LIVE_JOURNAL_NOTES_KEY] || {};
+ const model = v16BuildManageAnalyticsModel(bundle, { source: 'live', range: '30d' }, manageNotesMap);
+ const livePositions = Array.isArray(v16LiveAccountView.data?.marginedPositions) ? v16LiveAccountView.data.marginedPositions.length : 0;
+ const killSwitch = getV16KillSwitchState();
+ const riskSeed = v16ResolveRiskCalculatorSeed();
+ wrap.innerHTML = `
+ <div class="risk-manage-grid">
+ <div class="risk-manage-card"><span>Wallet</span><strong>$${v16FmtNumber(riskSeed.balance, 2)}</strong><small>${riskSeed.source === 'wallet' ? `Live ${v16Esc(riskSeed.symbol)} sync${riskSeed.available > 0 ? ` | Avail $${v16FmtNumber(riskSeed.available, 2)}` : ''}` : 'Profile balance fallback'}</small></div>
+ <div class="risk-manage-card"><span>Kill Switch</span><strong class="${killSwitch.enabled ? 'bad' : 'good'}">${killSwitch.enabled ? 'Armed' : 'Ready'}</strong><small>${killSwitch.enabled ? v16Esc(killSwitch.reason || 'Execution locked') : 'Execution allowed by capability state'}</small></div>
+ <div class="risk-manage-card"><span>Live Positions</span><strong>${livePositions}</strong><small>Interactive reductions and closes available in Positions</small></div>
+ <div class="risk-manage-card"><span>30D Review</span><strong class="${model.realized >= 0 ? 'good' : 'bad'}">${v16FmtSigned(model.realized)}</strong><small>${model.closedTrades.length} closed trades | ${model.winRate.toFixed(1)}% win rate</small></div>
+ </div>
+ <div class="risk-manage-section-label">SETUP FAMILY PERFORMANCE (30D)</div>
+ <div class="risk-manage-setup-header"><span>Setup</span><span>Trades</span><span>Win%</span><span>P&amp;L</span><span>Expectancy</span></div>
+ <div class="risk-manage-setup-rows">${
+ model.setupBreakdown.length
+ ? model.setupBreakdown.map(s => `<div class="risk-manage-setup-row">
+ <span class="rsf-name">${v16Esc(s.family)}</span>
+ <span class="rsf-trades">${s.trades}T</span>
+ <span class="rsf-wr" style="color:${s.winRate >= 50 ? '#00e5a0' : '#ff4560'}">${s.winRate}%</span>
+ <span class="rsf-pnl" style="color:${s.pnl >= 0 ? '#00e5a0' : '#ff4560'}">${v16FmtSigned(s.pnl)}</span>
+ <span class="rsf-exp" style="color:${s.expectancy >= 0 ? '#00e5a0' : '#ff4560'}">${s.expectancy >= 0 ? '+' : ''}${s.expectancy}</span>
+ </div>`).join('')
+ : '<div class="account-inline-note">No setup-tagged trades in range. Tag trades in journal to see breakdown.</div>'
+ }</div>
+ <div class="risk-manage-section-label">R-MULTIPLE DISTRIBUTION${model.rDistribution.avgR !== null ? ` &nbsp; | &nbsp; Avg R: <span style="color:${model.rDistribution.avgR >= 1 ? '#00e5a0' : '#ff4560'}">${model.rDistribution.avgR >= 0 ? '+' : ''}${model.rDistribution.avgR}R</span>` : ''}</div>
+ <div class="risk-manage-r-rows">${
+ model.rDistribution.count > 0
+ ? Object.entries(model.rDistribution.buckets).filter(([, v]) => v > 0).map(([label, count]) => {
+ const isWin = label.startsWith('win');
+ const isScratch = label === 'scratch';
+ const pct = +((count / model.rDistribution.count) * 100).toFixed(0);
+ const col = isWin ? '#00e5a0' : isScratch ? '#ffc840' : '#ff4560';
+ return `<div class="risk-manage-r-row">
+ <span class="rr-label" style="color:${col}">${v16Esc(label)}</span>
+ <span class="rr-bar"><span style="width:${pct}%;background:${col}"></span></span>
+ <span class="rr-count">${count}</span>
+ </div>`;
+ }).join('')
+ : '<div class="account-inline-note">No trades with SL price data yet - SL is required for R-multiple tracking.</div>'
+ }</div>`;
+ v16SyncRiskCalculatorDefaults();
+ if (typeof calcRisk === 'function') calcRisk();
+}
+
+async function switchV16Capability(capability) {
+ await loadV16AccountState();
+ const nextCapability = sanitizeAccountCapability(capability);
+ const metadata = clonePlain(getV16Metadata());
+ const secrets = clonePlain(getV16Secrets());
+ const profile = createAccountProfile({
+ ...getV16ActiveAccountProfile(),
+ capability: nextCapability,
+ updatedAt: Date.now(),
+ });
+ metadata.profiles = [profile];
+ metadata.activeProfileId = profile.id;
+ metadata.ui = { ...(metadata.ui || {}), selectedProfileId: profile.id };
+ metadata.updatedAt = Date.now();
+ await persistV16AccountState(metadata, secrets);
+ await renderV16All();
+}
+
+async function setV16KillSwitch(enabled, reason = '') {
+ await loadV16AccountState();
+ const metadata = clonePlain(getV16Metadata());
+ metadata.killSwitch = sanitizeKillSwitchState({
+ enabled: !!enabled,
+ reason: enabled ? sanitizeText(reason || 'Execution locked', 'Execution locked', 140) : '',
+ scope: 'global',
+ triggeredBy: 'v16-ui',
+ updatedAt: Date.now(),
+ });
+ metadata.updatedAt = Date.now();
+ await persistV16AccountState(metadata, getV16Secrets());
+ await renderV16All();
+}
+
+function populateV16ProfileEditor(profile) {
+ if (!profile) return;
+ const secret = getV16Secrets()?.[profile.id] || {};
+ const usesNative = v16UsesNativeCredential(profile);
+ document.getElementById('accountProfileId').value = profile.id;
+ if (document.getElementById('accountUsername')) document.getElementById('accountUsername').value = profile.username || '';
+ document.getElementById('accountProfileName').value = profile.name || '';
+ document.getElementById('accountProfileVenue').value = profile.venue || '';
+ document.getElementById('accountProfileDesk').value = profile.desk || '';
+ document.getElementById('accountProfileCapability').value = profile.capability || 'Public';
+ document.getElementById('accountBaseBalance').value = String(profile.baseBalance || 0);
+ document.getElementById('accountSessionBalance').value = String(profile.sessionStartBalance || 0);
+ document.getElementById('accountRiskPerTrade').value = String(profile.riskPerTradePct || 1);
+ document.getElementById('accountDailyLoss').value = String(profile.dailyLossLimitPct || 3);
+ if (document.getElementById('accountMaxOrderSize')) document.getElementById('accountMaxOrderSize').value = String(profile.maxOrderSizeUSD || 60);
+ if (document.getElementById('accountBlockedSymbols')) document.getElementById('accountBlockedSymbols').value = v16ResolveBlockedSymbols(profile).join(', ');
+ // VAR fields
+ if (document.getElementById('accountVarMaxDD')) document.getElementById('accountVarMaxDD').value = String(profile.varMaxDrawdownPct ?? 40);
+ if (document.getElementById('accountVarCycles')) document.getElementById('accountVarCycles').value = String(profile.varCycleCount ?? 4);
+ if (document.getElementById('accountVarMaxLossTrade')) document.getElementById('accountVarMaxLossTrade').value = String(profile.varMaxLossPerTradeUSD ?? 20);
+ if (document.getElementById('accountVarMaxPerSector')) document.getElementById('accountVarMaxPerSector').value = String(profile.varMaxTradesPerSector ?? 2);
+ if (document.getElementById('accountVarMaxPositions')) document.getElementById('accountVarMaxPositions').value = String(profile.varMaxPositions ?? 10);
+ document.getElementById('accountProfileNotes').value = profile.notes || '';
+ document.getElementById('accountSecretLabel').value = secret.label || profile.credentialLabel || '';
+ document.getElementById('accountTradingKey').value = usesNative ? '' : (secret.tradingKey || '');
+ document.getElementById('accountTradingSecret').value = usesNative ? '' : (secret.tradingSecret || '');
+ document.querySelectorAll('[data-account-capability-choice]').forEach(button => {
+ button.classList.toggle('active', button.dataset.accountCapabilityChoice === profile.capability);
+ });
+ renderV16CredentialModeStatus(profile, secret);
+ renderV16KillSwitchStatus();
+}
+
+function renderV16KillSwitchStatus() {
+ const statusEl = document.getElementById('accountKillSwitchStatus');
+ if (!statusEl) return;
+ const killSwitch = getV16KillSwitchState();
+ statusEl.textContent = killSwitch.enabled
+ ? `Kill switch armed: ${killSwitch.reason || 'Execution locked'}`
+ : 'Kill switch idle. Public, ReadOnly, and TradeEnabled can all continue using research, scanner, and live desk tools.';
+ statusEl.className = `account-inline-note ${killSwitch.enabled ? 'bad' : ''}`;
+ const reasonInput = document.getElementById('accountKillSwitchReason');
+ if (reasonInput && killSwitch.enabled && !reasonInput.value) {
+ reasonInput.value = killSwitch.reason || '';
+ }
+}
+
+function renderV16SettingsConnectionCard(snapshot = null) {
+ const statusEl = document.getElementById('settingsApiCheckStatus');
+ const regionEl = document.getElementById('settingsApiRegion');
+ const tickersEl = document.getElementById('settingsApiTickers');
+ const productsEl = document.getElementById('settingsApiProducts');
+ const candlesEl = document.getElementById('settingsApiCandles');
+ const lastScanEl = document.getElementById('settingsApiLastScan');
+ const signalCountEl = document.getElementById('settingsApiSignalCount');
+ const runButton = document.getElementById('btnRunApiCheck');
+ if (!statusEl || !regionEl || !tickersEl || !productsEl || !candlesEl || !lastScanEl || !signalCountEl) return;
+
+ const scanResults = Array.isArray(snapshot?.scanResults) ? snapshot.scanResults : [];
+ lastScanEl.textContent = snapshot?.lastScan || 'Not run';
+ signalCountEl.textContent = String(scanResults.length);
+
+ if (v16ApiHealthState.status === 'loading') {
+ regionEl.textContent = 'Checking...';
+ tickersEl.textContent = '-';
+ productsEl.textContent = '-';
+ candlesEl.textContent = '-';
+ statusEl.textContent = 'Checking public Delta market data...';
+ statusEl.className = 'account-inline-note warn';
+ if (runButton) runButton.disabled = true;
+ return;
+ }
+
+ if (runButton) runButton.disabled = false;
+
+ if (v16ApiHealthState.status === 'success' && v16ApiHealthState.data) {
+ const data = v16ApiHealthState.data;
+ regionEl.textContent = String(data.region || 'unknown').toUpperCase();
+ tickersEl.textContent = String(Number(data.tickerCount || 0));
+ productsEl.textContent = String(Number(data.productCount || 0));
+ candlesEl.textContent = String(Number(data.btcCandleCount || 0));
+ statusEl.textContent = `Public market data OK via ${v16ShortBaseUrl(data.baseUrl)}. Add live credentials only when you want live positions or live order testing.`;
+ statusEl.className = 'account-inline-note good';
+ return;
+ }
+
+ if (v16ApiHealthState.status === 'error') {
+ regionEl.textContent = 'Failed';
+ tickersEl.textContent = '-';
+ productsEl.textContent = '-';
+ candlesEl.textContent = '-';
+ statusEl.textContent = v16ApiHealthState.error || 'Public market-data check failed.';
+ statusEl.className = 'account-inline-note bad';
+ return;
+ }
+
+ regionEl.textContent = 'Not checked';
+ tickersEl.textContent = '-';
+ productsEl.textContent = '-';
+ candlesEl.textContent = '-';
+ statusEl.textContent = 'Run "Check Market Data" first, then "Run Scan Test" to verify the scanner end to end.';
+ statusEl.className = 'account-inline-note';
+}
+
+function syncV16SettingsPanelState() {
+ activateV16SettingsPanel(document.querySelector('.settings-rail-item.active')?.dataset.settingsTarget || 'profile');
+}
+
+function activateV16SettingsPanel(panel = 'profile') {
+ const target = String(panel || 'profile').trim() || 'profile';
+ const layout = document.querySelector('.account-profiles-layout');
+ const pane = document.getElementById('pane-strategy');
+ if (!layout) return;
+ const editor = document.querySelector('.account-profile-editor');
+ const library = document.querySelector('#pane-strategy .settings-library');
+ if (editor && library && library.parentElement !== editor) {
+ editor.appendChild(library);
+ }
+ layout.classList.add('settings-rail-ready');
+ layout.dataset.activeSettingsPanel = target;
+ delete layout.dataset.settingsPanel;
+ if (pane) {
+ pane.classList.add('settings-rail-ready');
+ pane.dataset.activeSettingsPanel = target;
+ }
+ document.querySelectorAll('[data-settings-target]').forEach(button => {
+ button.classList.toggle('active', button.dataset.settingsTarget === target);
+ });
+ document.querySelectorAll('[data-settings-panel]').forEach(section => {
+ const active = section.dataset.settingsPanel === target;
+ section.classList.toggle('active', active);
+ if (section.tagName === 'DETAILS') section.open = active;
+ });
+ const libraryMeta = {
+ display: ['DISPLAY', 'Display & Currency', 'Report currency and fixed USD to INR display conversion.'],
+ profile: ['LIVE TRADING PROFILE', 'Trading Profile', 'User identity, venue, and execution mode for the active desk.'],
+ 'paper-mode': ['LIVE TRADING PROFILE', 'Paper Trading', 'Forward-test signals in the local shadow ledger while real futures auto-trade remains off.'],
+ security: ['LIVE TRADING PROFILE', 'Login Security', 'Password and Microsoft Authenticator settings for this local Windows app.'],
+ 'api-keys': ['LIVE TRADING PROFILE', 'API Keys & Kill Switch', 'Delta credentials, session secret state, and the global execution lock.'],
+ connection: ['LIVE TRADING PROFILE', 'Connection Check', 'Public market-data readiness checks for scanner and live account setup.'],
+ risk: ['RISK RULES', 'Risk Defaults', 'Base balance, session balance, risk-per-trade, and daily loss assumptions.'],
+ guards: ['RISK RULES', 'Live Guards', 'Hard limits for live order size and blocked symbols.'],
+ var: ['RISK RULES', 'VaR Planning', 'Drawdown cycles, slot capacity, sector limits, and per-trade loss caps.'],
+ 'risk-templates': ['RISK RULES', 'Scanner Risk Templates', 'ATR stop and target R:R defaults used by scanner context.'],
+ api: ['DEVELOPER / DEBUG', 'API Health', 'Runtime quota, cooldown, and candle-cache status.'],
+ recovery: ['DEVELOPER / DEBUG', 'Recovery Center', 'Common blocked states and recovery actions for scanner, account sync, and execution readiness.'],
+ 'scanner-rules': ['SCANNER RULES', 'Scanner & Market Data', 'Signal filters, timeframes, scan limits, market-data mode, and FWD-10 basket settings.'],
+ 'strategy-profiles': ['SCANNER RULES', 'Strategy Profiles', 'Presets that update scanner, paper, chart, and risk-template fields before saving.'],
+ 'futures-auto': ['AUTOMATION', 'Futures Auto-Trade', 'Live futures execution gates, size limits, funding exits, backtest checks, and notifications.'],
+ 'options-auto': ['AUTOMATION', 'Options Auto-Trade', 'Defined-risk options automation rules for the theta desk.'],
+ 'straddle-auto': ['AUTOMATION', 'Short Straddle', 'Short straddle entry, re-entry, expiry, premium, skew, and auto-sizing controls.'],
+ charts: ['SYSTEM', 'Charts & Levels', 'Chart presets, key levels, and risk-template defaults used by scanner context.'],
+ backup: ['SYSTEM', 'Notifications & Backup', 'Alert notifications, backup folder, and local alert archive settings.'],
+ };
+ const meta = libraryMeta[target];
+ if (library) {
+ library.classList.toggle('active', !!meta);
+ const kicker = library.querySelector('.settings-stage-kicker');
+ const title = library.querySelector('.settings-stage-title');
+ const copy = library.querySelector('.settings-stage-copy');
+ if (meta) {
+ if (kicker) kicker.textContent = meta[0];
+ if (title) title.textContent = meta[1];
+ if (copy) copy.textContent = meta[2];
+ }
+ }
+ requestAnimationFrame(() => {
+ const app = document.getElementById('app');
+ const stage = document.querySelector(`#pane-strategy [data-settings-panel="${CSS.escape(target)}"].active`);
+ if (pane) pane.scrollTop = 0;
+ if (app && pane) {
+ app.scrollTo({ top: Math.max(0, pane.offsetTop - 10), behavior: 'smooth' });
+ }
+ stage?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+ });
+ if (target === 'paper-mode') void v16RenderPaperModeSettingsPanel();
+ if (target === 'recovery') void v16RenderSettingsRecoveryCenter();
+}
+
+function v16StatusToneClass(tone = '') {
+ const safeTone = String(tone || '').trim().toLowerCase();
+ return ['good', 'warn', 'bad', 'info'].includes(safeTone) ? safeTone : 'info';
+}
+
+function v16BuildSettingsHealthItemHtml(label = '', value = '', detail = '', tone = 'info') {
+ return `<div class="settings-health-item settings-health-item--${v16Esc(v16StatusToneClass(tone))}"><span>${v16Esc(label)}</span><strong>${v16Esc(value)}</strong>${detail ? `<small>${v16Esc(detail)}</small>` : ''}</div>`;
+}
+
+async function v16RenderPaperModeSettingsPanel() {
+ const grid = document.getElementById('paperModeStatusGrid');
+ const note = document.getElementById('paperModeStatusText');
+ if (!grid && !note) return;
+ const store = await storeGet(['autoTrade', 'autoScan', 'autoScanInterval', 'autoTradeSettings', V16_SHADOW_TRADE_LEDGER_KEY]).catch(() => ({}));
+ const settings = sanitizeAutoTradeSettings(store?.autoTradeSettings || {});
+ const ledger = store?.[V16_SHADOW_TRADE_LEDGER_KEY] || {};
+ const openCount = Array.isArray(ledger.open) ? ledger.open.length : 0;
+ const closedCount = Array.isArray(ledger.closed) ? ledger.closed.length : 0;
+ const updatedAt = Number(ledger.updatedAt || 0);
+ const autoTradeOn = !!store.autoTrade;
+ const autoScanOn = !!store.autoScan;
+ if (grid) {
+ grid.innerHTML = [
+ v16BuildSettingsHealthItemHtml('Paper Tracking', settings.paperTrackingEnabled ? 'On' : 'Off', settings.paperTrackingEnabled ? 'Qualified signals are captured.' : 'Turn on Paper Mode to collect forward-test trades.', settings.paperTrackingEnabled ? 'good' : 'warn'),
+ v16BuildSettingsHealthItemHtml('Live Auto-Trade', autoTradeOn ? 'On' : 'Off', autoTradeOn ? 'Real futures orders may be placed.' : 'No live futures automation from this toggle.', autoTradeOn ? 'bad' : 'good'),
+ v16BuildSettingsHealthItemHtml('Paper Open', String(openCount), 'Shadow ledger open entries.', openCount ? 'info' : 'warn'),
+ v16BuildSettingsHealthItemHtml('Paper Closed', String(closedCount), 'Closed entries drive setup edge analytics.', closedCount ? 'good' : 'warn'),
+ v16BuildSettingsHealthItemHtml('Last Update', updatedAt ? v16FormatTs(updatedAt) : 'Never', updatedAt ? v16FormatDurationShort(Date.now() - updatedAt) + ' ago' : 'No shadow ledger event yet.', updatedAt ? 'good' : 'warn'),
+ v16BuildSettingsHealthItemHtml('Auto Scan', autoScanOn ? 'Running' : 'Stopped', autoScanOn ? `Every ${Number(store.autoScanInterval || 0) || '?'} min` : 'Paper mode needs scan events.', autoScanOn ? 'good' : 'warn'),
+ ].join('');
+ }
+ if (note) {
+ note.textContent = autoTradeOn
+ ? 'Warning: live futures auto-trade is currently on. Enable Paper Mode to turn live automation off and keep shadow tracking on.'
+ : settings.paperTrackingEnabled
+ ? 'Paper mode is ready. Keep Auto Scan running while the app stays open so the shadow ledger can update.'
+ : 'Paper tracking is off. Enable Paper Mode to forward-test without live futures orders.';
+ note.classList.toggle('bad', autoTradeOn);
+ note.classList.toggle('good', !autoTradeOn && settings.paperTrackingEnabled);
+ }
+}
+
+async function v16EnablePaperModeFromSettings() {
+ const button = document.getElementById('btnEnablePaperMode');
+ const note = document.getElementById('paperModeStatusText');
+ if (button) button.disabled = true;
+ try {
+ const store = await storeGet(['autoTradeSettings', 'autoScanInterval']).catch(() => ({}));
+ const nextSettings = sanitizeAutoTradeSettings({
+ ...(store?.autoTradeSettings || {}),
+ paperTrackingEnabled: true,
+ });
+ await storeSet({
+ autoTrade: false,
+ autoScan: true,
+ autoScanInterval: Number(store?.autoScanInterval || 5) || 5,
+ autoTradeSettings: nextSettings,
+ });
+ const paperToggle = document.getElementById('sAutoTradePaperTracking');
+ const liveToggle = document.getElementById('sAutoTradeEnabled');
+ const scanToggle = document.getElementById('sAutoScan');
+ if (paperToggle) paperToggle.checked = true;
+ if (liveToggle) liveToggle.checked = false;
+ if (scanToggle) scanToggle.checked = true;
+ chrome.runtime?.sendMessage?.({ action: 'toggleAutoTrade', enable: false }, () => void chrome.runtime?.lastError);
+ chrome.runtime?.sendMessage?.({ action: 'toggleAutoScan', enable: true, interval: Number(store?.autoScanInterval || 5) || 5 }, () => void chrome.runtime?.lastError);
+ showSystemToast?.('Paper mode enabled', 'Paper tracking on, auto scan on, live futures auto-trade off.', 'success', 3200);
+ if (note) note.textContent = 'Paper mode enabled. Save Strategy if you also changed visible settings.';
+ await v16RenderPaperModeSettingsPanel();
+ } finally {
+ if (button) button.disabled = false;
+ }
+}
+
+async function v16ResetPaperLedgerFromSettings() {
+ const ok = confirm('Reset the local paper/shadow ledger? This clears paper open and closed entries only.');
+ if (!ok) return;
+ await storeSet({ [V16_SHADOW_TRADE_LEDGER_KEY]: { open: [], closed: [], updatedAt: Date.now(), resetAt: Date.now() } });
+ showSystemToast?.('Paper ledger reset', 'Shadow open and closed trades were cleared.', 'success', 2800);
+ await v16RenderPaperModeSettingsPanel();
+}
+
+async function v16RenderSettingsRecoveryCenter() {
+ const grid = document.getElementById('settingsRecoveryGrid');
+ const status = document.getElementById('settingsRecoveryStatus');
+ if (!grid && !status) return;
+ const store = await storeGet([
+ V16_ACCOUNT_METADATA_KEY,
+ V16_ACCOUNT_SECRETS_KEY,
+ 'strategy',
+ 'autoScan',
+ 'lastScan',
+ 'lastScanTs',
+ 'scanStatus',
+ 'autoTrade',
+ 'autoTradeSettings',
+ 'apiCircuitBreaker',
+ V16_SHADOW_TRADE_LEDGER_KEY,
+ ]).catch(() => ({}));
+ const profile = getV16ActiveAccountProfile();
+ const capability = getAccountCapabilityMeta(profile?.capability || 'Public');
+ const secretOk = hasV16SessionSecret(profile?.id || '');
+ const killSwitch = getV16KillSwitchState();
+ const authStatus = globalThis.FWDAppLock?.getStatus?.() || {};
+ const runtimeIssue = v16NormalizeRateLimitMeta(store?.apiCircuitBreaker || v16LiveAccountView.rateLimit || null);
+ const settings = sanitizeAutoTradeSettings(store?.autoTradeSettings || {});
+ const ledger = store?.[V16_SHADOW_TRADE_LEDGER_KEY] || {};
+ const ledgerUpdatedAt = Number(ledger.updatedAt || 0);
+ const lastScanTs = Number(store?.lastScanTs || 0);
+ const rows = [
+ {
+ label: 'Trading Profile',
+ value: capability.label || 'Public',
+ detail: profile?.username || profile?.name || 'Single active user',
+ tone: profile ? (capability.tone || 'info') : 'warn',
+ },
+ {
+ label: 'Credential State',
+ value: secretOk ? 'Session Ready' : 'No Session Secret',
+ detail: secretOk ? 'Private account calls can be tested.' : 'Open API Keys and save/test credentials.',
+ tone: secretOk ? 'good' : 'warn',
+ },
+ {
+ label: 'Kill Switch',
+ value: killSwitch.enabled ? 'Armed' : 'Clear',
+ detail: killSwitch.reason || (killSwitch.enabled ? 'Execution locked.' : 'Execution guard is not blocking.'),
+ tone: killSwitch.enabled ? 'bad' : 'good',
+ },
+ {
+ label: 'Runtime Cooldown',
+ value: runtimeIssue ? 'Cooling Down' : 'Normal',
+ detail: runtimeIssue ? `Retry in ${v16FormatDurationShort(runtimeIssue.waitMs)}` : 'No active API cooldown recorded.',
+ tone: runtimeIssue ? 'warn' : 'good',
+ },
+ {
+ label: 'Last Scan',
+ value: lastScanTs ? v16FormatDurationShort(Date.now() - lastScanTs) + ' ago' : 'Never',
+ detail: String(store?.lastScan || store?.scanStatus || 'No completed scan timestamp.'),
+ tone: lastScanTs ? 'good' : 'warn',
+ },
+ {
+ label: 'Paper Ledger',
+ value: settings.paperTrackingEnabled ? 'Tracking On' : 'Tracking Off',
+ detail: `${Number(ledger.open?.length || 0)} open | ${Number(ledger.closed?.length || 0)} closed${ledgerUpdatedAt ? ` | ${v16FormatDurationShort(Date.now() - ledgerUpdatedAt)} ago` : ''}`,
+ tone: settings.paperTrackingEnabled ? 'good' : 'warn',
+ },
+ {
+ label: 'Login Security',
+ value: authStatus.totpEnabled ? 'Authenticator On' : 'Password Only',
+ detail: authStatus.locked ? 'App lock is active.' : 'Local app access state.',
+ tone: authStatus.totpEnabled ? 'good' : 'info',
+ },
+ ];
+ if (grid) {
+ grid.innerHTML = rows.map(row => `
+ <div class="settings-recovery-item settings-recovery-item--${v16Esc(v16StatusToneClass(row.tone))}">
+ <strong>${v16Esc(row.label)}: ${v16Esc(row.value)}</strong>
+ <span>${v16Esc(row.detail)}</span>
+ </div>`).join('');
+ }
+ if (status) {
+ const blockers = rows.filter(row => ['warn', 'bad'].includes(v16StatusToneClass(row.tone))).length;
+ status.textContent = blockers ? `${blockers} item${blockers === 1 ? '' : 's'} need attention before fully live operation.` : 'No major recovery issue detected.';
+ status.classList.toggle('good', blockers === 0);
+ status.classList.toggle('bad', blockers > 2);
+ }
+}
+
+function readV16ProfileEditor() {
+ const profileId = sanitizeAccountId(document.getElementById('accountProfileId')?.value || '');
+ const capability = sanitizeAccountCapability(document.getElementById('accountProfileCapability')?.value || 'Public');
+ const existing = getV16ProfileById(profileId) || {};
+ return {
+ profile: createAccountProfile({
+ ...existing,
+ id: profileId,
+ username: document.getElementById('accountUsername')?.value || '',
+ name: document.getElementById('accountProfileName')?.value || '',
+ venue: document.getElementById('accountProfileVenue')?.value || '',
+ desk: document.getElementById('accountProfileDesk')?.value || '',
+ capability,
+ baseBalance: document.getElementById('accountBaseBalance')?.value || existing.baseBalance,
+ sessionStartBalance: document.getElementById('accountSessionBalance')?.value || existing.sessionStartBalance,
+ riskPerTradePct: document.getElementById('accountRiskPerTrade')?.value || existing.riskPerTradePct,
+ dailyLossLimitPct: document.getElementById('accountDailyLoss')?.value || existing.dailyLossLimitPct,
+ maxOrderSizeUSD: Number(document.getElementById('accountMaxOrderSize')?.value || existing.maxOrderSizeUSD || 60),
+ blockedSymbols: sanitizeBlockedSymbolList(document.getElementById('accountBlockedSymbols')?.value || existing.blockedSymbols || []),
+ // VAR fields
+ varMaxDrawdownPct: Number(document.getElementById('accountVarMaxDD')?.value ?? existing.varMaxDrawdownPct ?? 40),
+ varCycleCount: Number(document.getElementById('accountVarCycles')?.value ?? existing.varCycleCount ?? 4),
+ varMaxLossPerTradeUSD: Number(document.getElementById('accountVarMaxLossTrade')?.value ?? existing.varMaxLossPerTradeUSD ?? 20),
+ varMaxTradesPerSector: Number(document.getElementById('accountVarMaxPerSector')?.value ?? existing.varMaxTradesPerSector ?? 2),
+ varMaxPositions: Number(document.getElementById('accountVarMaxPositions')?.value ?? existing.varMaxPositions ?? 10),
+ notes: document.getElementById('accountProfileNotes')?.value || '',
+ createdAt: existing.createdAt || Date.now(),
+ updatedAt: Date.now(),
+ }),
+ secret: {
+ tradingKey: sanitizeText(document.getElementById('accountTradingKey')?.value || '', '', 120),
+ tradingSecret: sanitizeText(document.getElementById('accountTradingSecret')?.value || '', '', 180),
+ label: sanitizeText(document.getElementById('accountSecretLabel')?.value || '', '', 48),
+ updatedAt: Date.now(),
+ },
+ };
+}
+
+async function saveV16ProfileFromEditor(setActive = false) {
+ await loadV16AccountState();
+ const { profile, secret } = readV16ProfileEditor();
+ const draft = v16UpsertEditorProfileDraft(getV16Metadata(), getV16Secrets(), profile, secret, { setActive });
+ await persistV16AccountState(draft.metadata, draft.secrets);
+ await v16RefreshNativeCredentialState(true);
+ const statusEl = document.getElementById('accountProfileSaveOK');
+ if (statusEl) {
+ const savedProfile = getV16ProfileById(profile.id) || profile;
+ const wasActivated = draft.metadata.activeProfileId === profile.id;
+ statusEl.textContent = `${wasActivated ? 'Profile saved and set active.' : 'Profile saved.'}${v16UsesNativeCredential(savedProfile) ? ' Stored in encrypted Windows app storage.' : ''}`;
+ setTimeout(() => {
+ if (statusEl.textContent.startsWith('Profile saved')) statusEl.textContent = '';
+ }, 2500);
+ }
+ syncV16SettingsPanelState();
+ populateV16ProfileEditor(getV16ProfileById(profile.id) || profile);
+ await renderV16All();
+}
+
+async function toggleV16KillSwitchFromEditor() {
+ const killSwitch = getV16KillSwitchState();
+ const reason = document.getElementById('accountKillSwitchReason')?.value || '';
+ await setV16KillSwitch(!killSwitch.enabled, reason || 'Manually armed from profile editor');
+ renderV16KillSwitchStatus();
+}
+
+async function runV16ApiHealthCheck() {
+ v16ApiHealthState = { status: 'loading', data: null, error: '' };
+ renderV16SettingsConnectionCard(await getV16Snapshot());
+ const response = await v16RuntimeSend('v16:checkMarketData');
+ if (response?.ok) {
+ v16ApiHealthState = { status: 'success', data: response, error: '' };
+ } else {
+ v16ApiHealthState = {
+ status: 'error',
+ data: null,
+ error: response?.error || 'Public market-data check failed.',
+ };
+ }
+ renderV16SettingsConnectionCard(await getV16Snapshot());
+}
+
+function v16NormalizeFill(fill = {}) {
+ const product = fill?.product || fill?.contract || {};
+ const metaData = fill?.meta_data || fill?.metaData || {};
+ const size = Math.abs(v16NumericField(fill, ['size', 'filled_size', 'fill_size', 'filled_qty', 'qty', 'quantity', 'executed_size', 'base_asset_quantity', 's']))
+ || Math.abs(v16NumericField(metaData, ['size', 'filled_size', 'filled_qty', 'qty', 'quantity']));
+ const price = v16NumericField(fill, ['price', 'fill_price', 'average_fill_price', 'avg_price', 'executed_price', 'execution_price', 'p', 'limit_price'])
+ || v16NumericField(metaData, ['price', 'fill_price', 'average_fill_price', 'avg_price', 'execution_price', 'limit_price']);
+ const side = String(v16TextField(fill, ['side', 'S'], 'buy')).toLowerCase() === 'sell' ? 'sell' : 'buy';
+ const productId = v16TextField(fill, ['product_id'], v16TextField(product, ['id', 'product_id'], ''));
+ return {
+ id: v16TextField(fill, ['id', 'fill_id', 'order_id', 'f', 'o'], `fill_${Date.now()}`),
+ orderId: v16TextField(fill, ['order_id', 'id', 'o'], ''),
+ clientOrderId: v16TextField(fill, ['client_order_id'], v16TextField(metaData, ['client_order_id'], '')),
+ symbol: v16NormalizeSymbol(v16TextField(fill, ['product_symbol', 'productSymbol', 'symbol', 'sy', 'contract_symbol'], v16TextField(product, ['symbol', 'product_symbol', 'code'], v16TextField(metaData, ['symbol', 'product_symbol'], productId ? `PRODUCT-${productId}` : '')))),
+ side,
+ size,
+ price,
+ commission: v16NumericField(fill, ['commission', 'paid_commission', 'commission_paid', 'fee', 'fees', 'trading_fee']) || v16NumericField(metaData, ['commission', 'fee', 'fees']),
+ createdAt: v16ToEpochMs(v16TextField(fill, ['created_at', 'updated_at', 'timestamp', 'createdAt', 't', 'time']) || fill?.created_at || fill?.updated_at || fill?.time || metaData?.created_at || metaData?.updated_at || metaData?.timestamp || 0),
+ raw: fill,
+ };
+}
+
+function v16NormalizePosition(position = {}, priceLookup = new Map()) {
+ const productId = v16TextField(position, ['product_id', 'id'], '');
+ const symbol = v16NormalizeSymbol(v16TextField(position, ['product_symbol', 'symbol'], productId ? `PRODUCT-${productId}` : ''));
+ const sizeValue = v16NumericField(position, ['size', 'net_size', 'balance']);
+ const size = Math.abs(sizeValue);
+ const side = sizeValue < 0 ? 'short' : 'long';
+ const entry = v16NumericField(position, ['entry_price', 'avg_entry_price', 'average_entry_price']);
+ const markPrice = v16NumericField(position, ['mark_price', 'current_price', 'spot_price', 'close']) || Number(priceLookup.get(symbol) || 0);
+ const unrealized = v16NumericField(position, ['unrealized_pnl', 'unrealised_pnl', 'open_pnl', 'pnl']);
+ const realized = v16NumericField(position, ['realized_pnl', 'realised_pnl', 'closed_pnl']);
+ const liquidation = v16NumericField(position, ['liquidation_price']);
+ const margin = v16NumericField(position, ['margin', 'position_margin', 'margin_used']);
+ const createdAt = v16ToEpochMs(v16TextField(position, ['created_at', 'createdAt', 'timestamp']) || position?.created_at || position?.createdAt || position?.timestamp || 0);
+ const updatedAt = v16ToEpochMs(v16TextField(position, ['updated_at', 'updatedAt', 'timestamp']) || position?.updated_at || position?.updatedAt || position?.timestamp || 0);
+ const computedUnrealized = (!unrealized && markPrice > 0 && entry > 0 && size > 0)
+ ? (side === 'short' ? (entry - markPrice) * size : (markPrice - entry) * size)
+ : unrealized;
+ return {
+ id: v16TextField(position, ['id', 'product_id'], symbol),
+ symbol,
+ side,
+ size,
+ entry,
+ markPrice,
+ unrealized: computedUnrealized,
+ realized,
+ liquidation,
+ margin,
+ createdAt,
+ updatedAt,
+ raw: position,
+ };
+}
+
+function v16NormalizeFundingIntervalSeconds(value, fallback = 28800) {
+ const n = Number(value || 0);
+ if (!Number.isFinite(n) || n <= 0) return fallback;
+ return Math.round(n);
+}
+
+function v16FundingEventsPerDay(intervalSeconds = 28800) {
+ const interval = v16NormalizeFundingIntervalSeconds(intervalSeconds);
+ return 86400 / interval;
+}
+
+function v16FundingIntervalHours(intervalSeconds = 28800) {
+ return v16NormalizeFundingIntervalSeconds(intervalSeconds) / 3600;
+}
+
+function v16PositionFundingHorizonLabel(horizon = '24h') {
+ return String(horizon || '24h') === '365d' ? '365d' : '24h';
+}
+
+function v16ResolveFundingHorizonEstimate(fundingEstimate = {}, horizon = '24h') {
+ const perSettlement = Number(fundingEstimate?.estimatedFunding || 0);
+ const eventsPerDay = Number(fundingEstimate?.eventsPerDay || v16FundingEventsPerDay(fundingEstimate?.intervalSeconds || 28800));
+ if (!perSettlement || !Number.isFinite(eventsPerDay) || eventsPerDay <= 0) return 0;
+ return v16PositionFundingHorizonLabel(horizon) === '365d'
+ ? +(perSettlement * eventsPerDay * 365).toFixed(4)
+ : +(perSettlement * eventsPerDay).toFixed(4);
+}
+
+function v16FormatFundingRateLabel(fundingEstimate = {}, horizon = '24h') {
+ const rate = Number(fundingEstimate?.fundingRate || 0);
+ const intervalHours = v16FundingIntervalHours(fundingEstimate?.intervalSeconds || 28800);
+ const eventsPerDay = v16FundingEventsPerDay(fundingEstimate?.intervalSeconds || 28800);
+ const signedRate = `${rate >= 0 ? '+' : ''}${v16FmtNumber(rate, 4)}%`;
+ if (v16PositionFundingHorizonLabel(horizon) === '365d') {
+ return `${signedRate} / ${v16FmtNumber(intervalHours, intervalHours % 1 ? 1 : 0)}h -> ${v16FmtNumber(eventsPerDay * 365, 0)}x/365d`;
+ }
+ return `${signedRate} / ${v16FmtNumber(intervalHours, intervalHours % 1 ? 1 : 0)}h -> ${v16FmtNumber(eventsPerDay, eventsPerDay % 1 ? 1 : 0)}x/24h`;
+}
+
+function v16BuildPositionFundingLookup(scanResults = [], fundingHeatmap = []) {
+ const lookup = new Map();
+ const add = (symbol = '', fundingRate = 0, nextFundingAt = 0, fundingIntervalSeconds = 28800) => {
+ const normalized = v16NormalizeSymbol(symbol);
+ if (!normalized) return;
+ const item = {
+ fundingRate: Number(fundingRate || 0),
+ nextFundingAt: Number(nextFundingAt || 0),
+ intervalSeconds: v16NormalizeFundingIntervalSeconds(fundingIntervalSeconds),
+ };
+ lookup.set(normalized, item);
+ const base = normalized.replace(/(USD|USDT)$/, '');
+ if (!base) return;
+ if (!lookup.has(base)) lookup.set(base, item);
+ if (!lookup.has(`${base}USD`)) lookup.set(`${base}USD`, item);
+ if (!lookup.has(`${base}USDT`)) lookup.set(`${base}USDT`, item);
+ };
+ (Array.isArray(scanResults) ? scanResults : []).forEach(item => add(item?.symbol, item?.fundingRate, item?.nextFundingAt, item?.fundingIntervalSeconds));
+ (Array.isArray(fundingHeatmap) ? fundingHeatmap : []).forEach(item => add(item?.symbol, item?.fundingRate, item?.nextFundingAt, item?.fundingIntervalSeconds));
+ return lookup;
+}
+
+function v16ResolvePositionNotional(position = {}) {
+ const displayUnit = String(position.displayUnit || 'contracts').trim().toLowerCase();
+ const quantity = displayUnit === 'contracts'
+ ? Math.abs(Number(position.size || 0))
+ : Math.abs(Number(position.displaySize || 0));
+ const referencePrice = Math.abs(Number(position.markPrice || position.entry || 0));
+ if (!quantity || !referencePrice) return 0;
+ return +(quantity * referencePrice).toFixed(4);
+}
+
+function v16ResolvePositionFundingEstimate(position = {}, fundingLookup = new Map()) {
+ const normalized = v16NormalizeSymbol(position.symbol || '');
+ const base = normalized.replace(/(USD|USDT)$/, '');
+ const fundingInfo = fundingLookup.get(normalized)
+ || fundingLookup.get(base)
+ || fundingLookup.get(`${base}USD`)
+ || fundingLookup.get(`${base}USDT`)
+ || { fundingRate: 0, nextFundingAt: 0 };
+ const fundingRate = Number(fundingInfo.fundingRate || 0);
+ const nextFundingAt = Number(fundingInfo.nextFundingAt || 0);
+ const intervalSeconds = v16NormalizeFundingIntervalSeconds(fundingInfo.intervalSeconds || 28800);
+ const notional = v16ResolvePositionNotional(position);
+ const estimatedFunding = notional > 0 && fundingRate
+ ? +(notional * (fundingRate / 100) * (position.side === 'short' ? 1 : -1)).toFixed(4)
+ : 0;
+ return {
+ fundingRate,
+ nextFundingAt,
+ intervalSeconds,
+ intervalHours: v16FundingIntervalHours(intervalSeconds),
+ eventsPerDay: v16FundingEventsPerDay(intervalSeconds),
+ estimated24h: v16ResolveFundingHorizonEstimate({ estimatedFunding, intervalSeconds }, '24h'),
+ estimated365d: v16ResolveFundingHorizonEstimate({ estimatedFunding, intervalSeconds }, '365d'),
+ estimatedFunding,
+ };
+}
+
+function v16GetStoredStrategySnapshot() {
+ return v16SanitizeRiskTemplates(v16LiveAccountView?.strategy?.riskTemplates || {});
+}
+
+function v16GetActiveRiskTemplate(symbol = '') {
+ return v16ResolveRiskTemplateForSymbol(String(symbol || '').trim().toUpperCase(), v16GetStoredStrategySnapshot());
+}
+
+function v16TradeDisplayPnl(trade = {}) {
+ const value = Number(
+ trade?.netClosedPnl
+ ?? trade?.deltaClosedPnl
+ ?? trade?.pnl
+ ?? 0
+ );
+ return Number.isFinite(value) ? value : 0;
+}
+
+function v16NormalizeWalletBalance(balance = {}) {
+ return {
+ symbol: v16TextField(balance, ['asset_symbol', 'symbol', 'asset_id'], 'USD'),
+ balance: v16NumericField(balance, ['balance', 'wallet_balance', 'equity']),
+ available: v16NumericField(balance, ['available_balance', 'available_margin', 'free_balance', 'balance']),
+ reserved: v16NumericField(balance, ['reserved_balance', 'locked_balance']),
+ raw: balance,
+ };
+}
+
+function v16ResolveRiskCalculatorSeed() {
+ const profile = getV16ActiveAccountProfile();
+ const balances = Array.isArray(v16LiveAccountView.data?.walletBalances)
+ ? v16LiveAccountView.data.walletBalances.map(v16NormalizeWalletBalance)
+ : [];
+ const primaryWallet = balances.find(item => ['USD', 'USDT', 'INR'].includes(String(item.symbol || '').toUpperCase()))
+ || balances[0]
+ || null;
+ const liveBalance = Number(primaryWallet?.balance || 0);
+ const liveAvailable = Number(primaryWallet?.available || 0);
+ const profileBalance = Number(profile.sessionStartBalance || profile.baseBalance || 0);
+ return {
+ symbol: String(primaryWallet?.symbol || 'USD').toUpperCase(),
+ balance: liveBalance > 0 ? liveBalance : profileBalance,
+ available: liveAvailable,
+ source: liveBalance > 0 ? 'wallet' : 'profile',
+ riskPct: Number(profile.riskPerTradePct || 1),
+ };
+}
+
+function v16SyncRiskCalculatorDefaults({ forceBalance = false, forceRisk = false } = {}) {
+ const balanceInput = document.getElementById('rcBalance');
+ const riskInput = document.getElementById('rcRisk');
+ const metaEl = document.getElementById('rcBalanceMeta');
+ const seed = v16ResolveRiskCalculatorSeed();
+ if (balanceInput && seed.balance > 0) {
+ const shouldWriteBalance = forceBalance
+ || !Number(balanceInput.value || 0)
+ || balanceInput.dataset.syncMode !== 'manual';
+ if (shouldWriteBalance) {
+ balanceInput.value = String(+seed.balance.toFixed(2));
+ balanceInput.dataset.syncMode = 'auto';
+ }
+ }
+ if (riskInput && seed.riskPct > 0) {
+ const shouldWriteRisk = forceRisk
+ || !Number(riskInput.value || 0)
+ || riskInput.dataset.syncMode !== 'manual';
+ if (shouldWriteRisk) {
+ riskInput.value = String(seed.riskPct);
+ riskInput.dataset.syncMode = 'auto';
+ }
+ }
+ if (metaEl) {
+ metaEl.textContent = seed.source === 'wallet'
+ ? `Live ${seed.symbol} ${v16FmtNumber(seed.balance, 2)}${seed.available > 0 ? ` | Avail ${v16FmtNumber(seed.available, 2)}` : ''}`
+ : `Profile ${v16FmtNumber(seed.balance, 2)}`;
+ }
+}
+
+function v16NormalizeWalletTransaction(item = {}) {
+ const metaData = item?.meta_data || item?.metaData || {};
+ const transactionType = String(v16TextField(item, ['transaction_type', 'type', 'event_type', 'kind'], v16TextField(metaData, ['transaction_type', 'type', 'event_type', 'kind'], ''))).toLowerCase();
+ const amount = v16NumericField(item, ['amount', 'cashflow', 'cash_flow', 'realized_pnl', 'realised_pnl', 'pnl', 'balance_change'])
+ || v16NumericField(metaData, ['amount', 'cashflow', 'cash_flow', 'realized_pnl', 'realised_pnl', 'pnl', 'balance_change']);
+ const commission = v16NumericField(item, ['commission', 'fee', 'fees', 'trading_fee'])
+ || v16NumericField(metaData, ['commission', 'fee', 'fees', 'trading_fee']);
+ return {
+ id: v16TextField(item, ['id', 'transaction_id', 'tx_id'], `wallet_tx_${Date.now()}`),
+ transactionType,
+ amount: Number(amount || 0),
+ commission: Number(commission || 0),
+ asset: v16TextField(item, ['asset_symbol', 'asset', 'symbol', 'currency'], v16TextField(metaData, ['asset_symbol', 'asset', 'symbol', 'currency'], 'USD')),
+ createdAt: v16ToEpochMs(v16TextField(item, ['created_at', 'updated_at', 'timestamp', 'createdAt', 'time']) || item?.created_at || item?.updated_at || item?.time || metaData?.created_at || metaData?.updated_at || metaData?.timestamp || 0),
+ raw: item,
+ };
+}
+
+function v16WalletTransactionRole(tx = {}) {
+ const type = String(tx.transactionType || '').toLowerCase();
+ if (type.includes('liquidation') && (type.includes('fee') || type.includes('charge') || type.includes('commission'))) return 'liquidation_fee';
+ if (type.includes('deposit')) return 'deposit';
+ if (type.includes('withdraw')) return 'withdrawal';
+ if (type.includes('commission_rebate') || type.includes('rebate')) return 'rebate';
+ if (type.includes('commission') || type.includes('fee')) return 'fee';
+ if (type.includes('funding')) return 'funding';
+ if (type.includes('cashflow') || type.includes('realized') || type.includes('realised') || type.includes('settlement') || type.includes('fill_appropriation')) return 'realized';
+ return '';
+}
+
+function v16NormalizeOrderHistoryItem(order = {}) {
+ const product = order?.product || order?.contract || {};
+ const metaData = order?.meta_data || order?.metaData || {};
+ const productId = v16TextField(order, ['product_id', 'id'], v16TextField(product, ['id', 'product_id'], ''));
+ const normalizedProductType = String(
+ v16TextField(order, ['product_type', 'productType'], v16TextField(product, ['product_type', 'productType'], v16TextField(metaData, ['product_type', 'productType'], '')))
+ ).toLowerCase();
+ const statusText = v16TextField(order, ['status', 'state', 'order_state'], v16TextField(metaData, ['status', 'state', 'order_state'], ''));
+ const explanationText = v16TextField(order, ['explanation', 'reason', 'close_reason'], v16TextField(metaData, ['explanation', 'reason', 'close_reason'], ''));
+ const stopOrderType = v16TextField(order, ['stop_order_type', 'stopOrderType'], v16TextField(metaData, ['stop_order_type', 'stopOrderType'], ''));
+ const orderType = v16TextField(order, ['order_type', 'type'], v16TextField(metaData, ['order_type', 'type'], ''));
+ const limitPrice = v16NumericField(order, ['limit_price', 'average_fill_price', 'avg_price', 'price', 'execution_price'])
+ || v16NumericField(metaData, ['limit_price', 'avg_price', 'price', 'execution_price']);
+ const stopPrice = v16NumericField(order, ['stop_price', 'trigger_price'])
+ || v16NumericField(metaData, ['stop_price', 'trigger_price']);
+ const size = Math.abs(v16NumericField(order, ['size', 'filled_size', 'filled_qty', 'qty', 'quantity', 'base_asset_quantity']) || v16NumericField(metaData, ['size', 'filled_qty', 'qty', 'quantity']));
+ const remainingSize = Math.abs(v16NumericField(order, ['unfilled_size', 'remaining_size', 'unfilled_qty']) || v16NumericField(metaData, ['unfilled_size', 'remaining_size', 'unfilled_qty']) || size);
+ const reduceOnly = !!(order?.reduce_only ?? metaData?.reduce_only ?? false);
+ const postOnly = !!(order?.post_only ?? metaData?.post_only ?? false);
+ const reasonText = v16TextField(order, ['reason', 'close_reason'], v16TextField(metaData, ['reason', 'close_reason'], ''));
+ const roleText = `${stopOrderType} ${reasonText} ${explanationText}`.toLowerCase();
+ const symbol = v16NormalizeSymbol(v16TextField(order, ['product_symbol', 'productSymbol', 'symbol', 'contract_symbol'], v16TextField(product, ['symbol', 'product_symbol', 'code'], v16TextField(metaData, ['symbol', 'product_symbol'], productId ? `PRODUCT-${productId}` : ''))));
+ const inferredProductType = (
+ normalizedProductType.includes('option')
+ || /-\d{1,2}[A-Z]{3}\d{2,4}-/i.test(symbol)
+ || /(?:-C|-P)$/i.test(symbol)
+ )
+ ? 'options'
+ : 'futures';
+ let role = 'entry';
+ if (roleText.includes('loss')) role = 'stop_loss';
+ else if (roleText.includes('profit') || roleText.includes('target')) role = 'take_profit';
+ else if (reduceOnly) role = stopPrice > 0 ? 'stop_loss' : 'exit';
+ else if (stopPrice > 0) role = 'unknown';
+ const protections = resolveBracketProtectionLevels({
+ ...metaData,
+ ...order,
+ role,
+ stopPrice,
+ limitPrice,
+ price: v16NumericField(order, ['average_fill_price', 'avg_price', 'limit_price', 'price', 'stop_price', 'trigger_price', 'execution_price'])
+ || v16NumericField(metaData, ['average_fill_price', 'avg_price', 'limit_price', 'price', 'trigger_price', 'execution_price']),
+ });
+ const createdAt = v16ToEpochMs(
+ v16TextField(order, ['created_at', 'timestamp', 'createdAt', 't', 'time'])
+ || order?.created_at
+ || order?.time
+ || metaData?.created_at
+ || metaData?.timestamp
+ || 0
+ );
+ const updatedAt = v16ToEpochMs(
+ v16TextField(order, ['updated_at', 'closed_at', 'filled_at', 'executed_at', 'updatedAt'])
+ || order?.updated_at
+ || order?.closed_at
+ || order?.filled_at
+ || order?.executed_at
+ || metaData?.updated_at
+ || metaData?.closed_at
+ || metaData?.filled_at
+ || metaData?.executed_at
+ || createdAt
+ || 0
+ );
+ return {
+ id: v16TextField(order, ['id', 'order_id', 'client_order_id'], `order_${Date.now()}`),
+ orderId: v16TextField(order, ['order_id', 'id'], ''),
+ clientOrderId: v16TextField(order, ['client_order_id'], ''),
+ productId: Number(productId || 0),
+ symbol,
+ productType: inferredProductType,
+ side: String(v16TextField(order, ['side'], 'buy')).toLowerCase() === 'sell' ? 'sell' : 'buy',
+ size,
+ remainingSize,
+ partiallyFilled: size > 0 && remainingSize > 0 && remainingSize < size,
+ price: v16NumericField(order, ['average_fill_price', 'avg_price', 'limit_price', 'price', 'stop_price', 'trigger_price', 'execution_price'])
+ || v16NumericField(metaData, ['average_fill_price', 'avg_price', 'limit_price', 'price', 'trigger_price', 'execution_price']),
+ state: statusText || 'closed',
+ orderType,
+ stopOrderType,
+ limitPrice,
+ stopPrice,
+ bracketStopLossPrice: Number(protections.stopLoss || 0),
+ bracketTakeProfitPrice: Number(protections.takeProfit || 0),
+ bracketStopLossLimitPrice: Number(protections.stopLimitPrice || 0),
+ bracketTakeProfitLimitPrice: Number(protections.takeProfitLimitPrice || 0),
+ postOnly,
+ reduceOnly,
+ reason: reasonText,
+ role,
+ commission: v16NumericField(order, ['commission', 'paid_commission', 'commission_paid', 'fee', 'fees', 'trading_fee']) || v16NumericField(metaData, ['commission', 'fee', 'fees']),
+ realizedPnl: v16NumericField(order, ['realized_pnl', 'realised_pnl', 'realizedPnl', 'realisedPnl', 'pnl'])
+ || v16NumericField(metaData, ['realized_pnl', 'realised_pnl', 'realizedPnl', 'realisedPnl', 'pnl']),
+ cashflow: v16NumericField(order, ['cashflow', 'cash_flow']) || v16NumericField(metaData, ['cashflow', 'cash_flow']),
+ explanation: explanationText,
+ createdAt,
+ updatedAt,
+ raw: order,
+ };
+}
+
+function v16ResolveOrderRealizedPnl(order = {}) {
+ const realized = Number(order?.realizedPnl || 0);
+ if (Number.isFinite(realized) && Math.abs(realized) > 0) return realized;
+ if (String(order?.productType || '').toLowerCase() === 'options') return 0;
+ const cashflow = Number(order?.cashflow || 0);
+ if (Number.isFinite(cashflow) && Math.abs(cashflow) > 0) return cashflow;
+ return 0;
+}
+
+function v16IsClosedRealizedOrder(order = {}) {
+ const effectiveRealized = v16ResolveOrderRealizedPnl(order);
+ const text = `${order.explanation || ''} ${order.reason || ''} ${order.state || ''} ${order.role || ''}`.toLowerCase();
+ const state = String(order.state || '').toLowerCase();
+ const role = String(order.role || '').toLowerCase();
+ const isFilled = ['closed', 'filled', 'fully_filled'].includes(state);
+ if (String(order?.productType || '').toLowerCase() === 'options') {
+ const explicitOptionClose = (
+ text.includes('position_closed')
+ || text.includes('position closed')
+ || text.includes('expire')
+ || text.includes('assign')
+ || text.includes('exercise')
+ || text.includes('settlement')
+ );
+ if (explicitOptionClose) return true;
+ if (order.reduceOnly && isFilled) return true;
+ if (role === 'exit' && isFilled) return true;
+ return false;
+ }
+ if (Math.abs(effectiveRealized) > 0) return true;
+ if (text.includes('position_closed') || text.includes('position closed')) return true;
+ if (role === 'exit' && isFilled) return true;
+ return false;
+}
+
+function v16ResolveJournalCloseReason(trade = {}, matchedEntry = {}, orderHistory = []) {
+ const explicitReason = String(trade?.closeReason || matchedEntry?.closeReason || '').trim().toLowerCase();
+ if (explicitReason.includes('breakeven')) return 'breakeven stop';
+ if (explicitReason.includes('capitulation')) return 'time capitulation';
+ if (explicitReason.includes('funding')) return 'funding exit';
+ if (explicitReason.includes('flip')) return 'signal flip exit';
+ if (explicitReason.includes('manual')) return 'manual close';
+ if (explicitReason.includes('zombie')) return 'expired pending order';
+ const closeOrderIds = new Set(
+ [
+ ...(Array.isArray(trade?.matchedCloseOrderIds) ? trade.matchedCloseOrderIds : []),
+ trade?.closeOrderId,
+ trade?.closeFillId,
+ ]
+ .map(value => String(value || '').trim())
+ .filter(Boolean)
+ );
+ const matchedCloseOrder = closeOrderIds.size
+ ? (Array.isArray(orderHistory) ? orderHistory : []).find(order => {
+ const ids = [order?.orderId, order?.id, order?.clientOrderId]
+ .map(value => String(value || '').trim())
+ .filter(Boolean);
+ return ids.some(id => closeOrderIds.has(id));
+ })
+ : null;
+ if (matchedCloseOrder) {
+ const role = String(matchedCloseOrder.role || '').toLowerCase();
+ if (role === 'stop_loss') return 'stop hit';
+ if (role === 'take_profit') return 'target hit';
+ const detail = `${matchedCloseOrder.explanation || ''} ${matchedCloseOrder.reason || ''} ${matchedCloseOrder.state || ''}`.toLowerCase();
+ if (detail.includes('loss') || detail.includes('stop')) return 'stop hit';
+ if (detail.includes('profit') || detail.includes('target')) return 'target hit';
+ if (v16IsClosedRealizedOrder(matchedCloseOrder)) return 'Closed on exchange';
+ }
+ if (explicitReason.includes('take_profit') || explicitReason.includes('target')) return 'target hit';
+ if (explicitReason.includes('stop_loss') || explicitReason.includes('stop')) return 'stop hit';
+ const fallback = String(matchedEntry?.closeReason || trade?.closeReason || matchedEntry?.status || trade?.status || '').trim().toLowerCase();
+ if (['live', 'placed', 'pending', 'armed', 'open', 'active'].includes(fallback)) return 'Closed on exchange';
+ if (fallback === 'closed') return 'Closed on exchange';
+ if (fallback === 'cancelled') return 'cancelled';
+ return fallback.replace(/_/g, ' ') || 'Closed on exchange';
+}
+
+function v16BuildTradeOrderMatchKeys(trade = {}) {
+ const keys = new Set();
+ [
+ trade.closeFillId,
+ trade.closeOrderId,
+ trade.closeClientOrderId,
+ ].forEach(value => {
+ const token = String(value || '').trim();
+ if (token) keys.add(token);
+ });
+ (Array.isArray(trade.fills) ? trade.fills : []).forEach(fill => {
+ [
+ fill?.id,
+ fill?.orderId,
+ fill?.clientOrderId,
+ fill?.raw?.order_id,
+ fill?.raw?.id,
+ fill?.raw?.client_order_id,
+ ].forEach(value => {
+ const token = String(value || '').trim();
+ if (token) keys.add(token);
+ });
+ });
+ return keys;

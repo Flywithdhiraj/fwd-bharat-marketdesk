@@ -1,0 +1,1064 @@
+// State updates, signal selection, candle cleanup and order context
+ async function updateKeyLevelSettings(surface = SURFACE_PREVIEW, patch = {}) {
+ const data = await localGet(['strategy']);
+ const currentStrategy = data?.strategy || {};
+ const currentSettings = sanitizeKeyLevelSettings(currentStrategy.keyLevelSettings || {});
+ const nextPatch = typeof patch === 'function' ? (patch(currentSettings) || {}) : (patch || {});
+ const nextSettings = sanitizeKeyLevelSettings({
+ ...currentSettings,
+ ...nextPatch,
+ });
+ await localSet({
+ strategy: {
+ ...currentStrategy,
+ keyLevelSettings: nextSettings,
+ },
+ });
+ await setChartState({ refreshNonce: Date.now() });
+ await queueSurfaceRender(surface, true);
+ return nextSettings;
+ }
+
+ async function getChartState() {
+ const data = await localGet([DS_V17_CHART_STATE_KEY, 'strategy']);
+ return sanitizeDetachedChartState(data?.[DS_V17_CHART_STATE_KEY] || {}, data?.strategy?.chartDefaults || {});
+ }
+
+ async function setChartState(patch = {}, options = {}) {
+ const strategy = await getStrategy();
+ const current = options.replace
+ ? buildDefaultState(strategy.chartDefaults || {})
+ : (options.current || await getChartState());
+ const nextPatch = typeof patch === 'function' ? (patch(current) || {}) : (patch || {});
+ const next = sanitizeDetachedChartState({
+ ...current,
+ ...nextPatch,
+ }, strategy.chartDefaults || {});
+ await localSet({ [DS_V17_CHART_STATE_KEY]: next });
+ return next;
+ }
+
+ async function updateChartState(surface = SURFACE_PREVIEW, patch = {}, options = {}) {
+ const current = await getChartState();
+ const next = await setChartState(patch, {
+ ...options,
+ current,
+ });
+ await queueSurfaceRender(surface, !!options.forceRender);
+ return next;
+ }
+
+ function getSurfaceRef(surface = SURFACE_PREVIEW) {
+ if (surface === SURFACE_DETACHED) return detachedSurface;
+ if (surface === SURFACE_TAB) return tabSurface;
+ if (surface === SURFACE_REVIEW) return reviewSurface;
+ return previewSurface;
+ }
+
+ function scoreSignalForChart(signal = {}) {
+ const action = String(signal.shortlistAction || signal.decision?.action || '').toUpperCase();
+ const actionBoost = action.includes('TRADE') ? 30 : action.includes('CLOSE') ? 16 : action.includes('WATCH') ? 8 : 0;
+ const mtfBoost = signal.mtfConfirmed ? 10 : 0;
+ return Number(signal.tradeQuality?.score || 0) * 1.4
+ + Number(signal.score || 0)
+ + actionBoost
+ + mtfBoost
+ + Number(signal.rsComposite || 0);
+ }
+
+ function pickBestChartSignal(scanResults = [], shortlist = []) {
+ const source = Array.isArray(shortlist) && shortlist.length ? shortlist : scanResults;
+ return (Array.isArray(source) ? source : [])
+ .filter(signal => String(signal?.symbol || '').trim())
+ .slice()
+ .sort((a, b) => scoreSignalForChart(b) - scoreSignalForChart(a))[0] || null;
+ }
+
+ function signalTimeframe(signal = {}, fallback = '5m') {
+ const lowerLabel = String(signal?.lower?.label || '').trim().toLowerCase();
+ return normalizeTimeframe(lowerLabel || signal?.timeframe || fallback || '5m');
+ }
+
+ async function setChartSymbolFromSignal(signal = {}, options = {}) {
+ const symbol = String(signal?.symbol || options.symbol || '').trim().toUpperCase();
+ if (!symbol) return null;
+ const current = await getChartState();
+ const timeframe = normalizeTimeframe(options.timeframe || signalTimeframe(signal, current.timeframe || '15m'));
+ const hasOption = key => Object.prototype.hasOwnProperty.call(options, key);
+ const providedDraft = normalizeChartTradingDraft(options.chartTradingDraft || signal.chartTradingDraft);
+ const stageMetrics = signal?.raw?.stageMetrics && typeof signal.raw.stageMetrics === 'object' ? signal.raw.stageMetrics : null;
+ const stageContextLines = stageMetrics
+ ? [
+ { key: 'stage_ma30', role: 'entry', tone: 'entry', label: '30W MA', price: stageMetrics.ma30, source: 'stage' },
+ { key: 'stage_range_high', role: 'target', tone: 'target', label: 'Range High', price: stageMetrics.rangeHigh, source: 'stage' },
+ { key: 'stage_range_low', role: 'stop', tone: 'stop', label: 'Range Low', price: stageMetrics.rangeLow, source: 'stage' },
+ { key: 'stage_action', role: signal.stage === 'STAGE_III' || signal.stage === 'STAGE_IV' ? 'stop' : 'entry', tone: signal.stage === 'STAGE_III' || signal.stage === 'STAGE_IV' ? 'stop' : 'entry', label: signal.actionLabel || 'Stage Action', price: signal.entry || signal.triggerPrice || signal.exitPrice || signal.protectLevel, source: 'stage' },
+ ]
+ : [];
+ const signalLines = [
+ { role: 'entry', label: 'Entry', price: signal.entry || signal.price },
+ { role: 'stop', label: 'SL', price: signal.sl || signal.stop || signal.stopLoss || signal.protectLevel || signal.exitPrice },
+ { role: 'target', label: 'TP1', price: signal.tp1 || signal.target || signal.takeProfit || signal.targets?.target2R },
+ { role: 'target', label: 'TP2', price: signal.tp2 || signal.targets?.target3R },
+ { role: 'target', label: 'TP3', price: signal.tp3 },
+ ];
+ const orderContext = stageContextLines.length || signalLines.some(line => Number(line.price || 0) > 0)
+ ? normalizeOrderContext({
+ source: stageContextLines.length ? 'stage' : 'signal',
+ label: stageContextLines.length
+ ? `${signal.stageLabel || 'Stage'} | ${signal.actionLabel || 'Review'}`
+ : (signal.setupFamilyLabel || signal.shortlistAction || 'Signal'),
+ symbol,
+ lines: stageContextLines.length ? stageContextLines : signalLines,
+ })
+ : current.orderContext;
+ return setChartState({
+ symbol,
+ timeframe,
+ visibleCandleCount: hasOption('visibleCandleCount') ? Math.max(24, Math.min(MAX_RENDER_CANDLES, Number(options.visibleCandleCount || 0) || defaultVisibleCount(timeframe))) : (current.visibleCandleCount || defaultVisibleCount(timeframe)),
+ preset: normalizePreset(options.preset || current.preset || 'key'),
+ showOrders: hasOption('showOrders') ? !!options.showOrders : !!current.showOrders,
+ showVwap: hasOption('showVwap') ? !!options.showVwap : !!current.showVwap,
+ indicators: sanitizeIndicatorState({
+ ...(current.indicators || {}),
+ ...(hasOption('showVwap') ? { vwap: !!options.showVwap } : {}),
+ }),
+ orderContext,
+ replaySeed: null,
+ replayMode: null,
+ chartTradingDraft: providedDraft || null,
+ chartTradingMode: providedDraft ? 'adjust' : 'select',
+ chartViewMode: options.chartViewMode || current.chartViewMode || 'tab',
+ uiMode: 'default',
+ rightPanelOpen: hasOption('rightPanelOpen') ? options.rightPanelOpen !== false : current.rightPanelOpen !== false,
+ intelligenceOverlays: hasOption('intelligenceOverlays') ? options.intelligenceOverlays !== false : current.intelligenceOverlays !== false,
+ deskLayoutMode: options.deskLayoutMode || current.deskLayoutMode || 'single',
+ primaryTimeframe: options.primaryTimeframe || current.primaryTimeframe || timeframe,
+ executionTimeframe: timeframe,
+ syncCharts: true,
+ contextTab: current.contextTab || 'watchlist',
+ watchlistTab: current.watchlistTab || '1',
+ overlayDensity: options.overlayDensity || current.overlayDensity || 'minimal',
+ panelWidths: current.panelWidths || { ...DEFAULT_PANEL_WIDTHS },
+ collapsedPanels: current.collapsedPanels || {},
+ maximizedPanel: null,
+ refreshNonce: Date.now(),
+ });
+ }
+
+ function buildChartReviewTabId(symbol = '', signal = {}) {
+ const parts = [
+ symbol,
+ signal.strategyId,
+ signal.bucket,
+ signal.stage,
+ signal.event,
+ signal.reason,
+ signal.setupFamilyLabel,
+ signal.shortlistAction,
+ ].map(value => String(value || '').trim()).filter(Boolean);
+ return sanitizeReviewTabId(`review-${parts.join('-') || symbol}`);
+ }
+
+ function buildChartReviewTab(signal = {}, options = {}) {
+ const symbol = String(signal?.symbol || options.symbol || '').trim().toUpperCase();
+ if (!symbol) return null;
+ const setup = String(
+ signal.setupFamilyLabel ||
+ signal.reason ||
+ signal.event ||
+ signal.stageLabel ||
+ signal.actionLabel ||
+ signal.shortlistAction ||
+ ''
+ ).trim();
+ return normalizeChartReviewTab({
+ id: options.tabId || buildChartReviewTabId(symbol, signal),
+ symbol,
+ label: symbol,
+ subtitle: setup,
+ strategyId: signal.strategyId || options.strategyId || '',
+ returnTab: options.returnTab || signal.chartReturnTab || '',
+ returnSymbol: options.returnSymbol || signal.chartReturnSymbol || symbol,
+ chartTradingDraft: options.chartTradingDraft || signal.chartTradingDraft || null,
+ signal: {
+ ...cloneChartReviewSignal(signal),
+ chartReturnTab: options.returnTab || signal.chartReturnTab || '',
+ chartReturnSymbol: options.returnSymbol || signal.chartReturnSymbol || symbol,
+ chartTradingDraft: options.chartTradingDraft || signal.chartTradingDraft || null,
+ },
+ openedAt: Date.now(),
+ });
+ }
+
+ async function openChartReviewTab(signal = {}, options = {}) {
+ const tab = buildChartReviewTab(signal, options);
+ if (!tab) return null;
+ const current = await getChartState();
+ const nextTabs = [tab];
+ await setChartState({
+ chartReviewTabs: nextTabs,
+ activeChartReviewTabId: tab.id,
+ chartReviewOverlayOpen: options.overlay === true,
+ });
+ await setChartSymbolFromSignal({
+ ...tab.signal,
+ symbol: tab.symbol,
+ chartTradingDraft: tab.chartTradingDraft || tab.signal?.chartTradingDraft || null,
+ }, {
+ ...options,
+ chartViewMode: options.overlay === true ? SURFACE_REVIEW : (options.chartViewMode || SURFACE_TAB),
+ });
+ const latest = await getChartState();
+ const next = await setChartState({
+ chartReviewTabs: nextTabs,
+ activeChartReviewTabId: tab.id,
+ chartReviewOverlayOpen: options.overlay === true,
+ }, { current: latest });
+ if (options.overlay === true) {
+ await mountChartReviewOverlay({ forceRefresh: true });
+ }
+ return next;
+ }
+
+ function returnToChartReviewSource(tab = {}) {
+ const returnTab = String(tab.returnTab || tab.signal?.chartReturnTab || '').trim().toLowerCase();
+ const symbol = String(tab.returnSymbol || tab.signal?.chartReturnSymbol || tab.symbol || '').trim().toUpperCase();
+ if (returnTab !== 'strategy') return;
+ if (typeof setActiveWorkspaceTab === 'function') {
+ setActiveWorkspaceTab('strategy', true, true);
+ } else {
+ document.querySelector('[data-tab="strategy"]')?.click();
+ }
+ window.setTimeout(() => {
+ globalThis.focusStrategyLabSymbol?.(symbol, { scroll: true });
+ }, 120);
+ }
+
+ async function activateChartReviewTab(tabId = '') {
+ const safeId = sanitizeReviewTabId(tabId);
+ const current = await getChartState();
+ const tabs = sanitizeChartReviewTabs(current.chartReviewTabs || []);
+ const tab = tabs.find(item => item.id === safeId);
+ if (!tab) return current;
+ await setChartSymbolFromSignal({
+ ...tab.signal,
+ symbol: tab.symbol,
+ chartTradingDraft: tab.chartTradingDraft || tab.signal?.chartTradingDraft || null,
+ }, {
+ chartViewMode: 'tab',
+ preset: current.preset || 'clean',
+ timeframe: current.timeframe || '15m',
+ chartTradingDraft: tab.chartTradingDraft || null,
+ showOrders: current.showOrders,
+ showVwap: current.showVwap,
+ rightPanelOpen: current.rightPanelOpen,
+ intelligenceOverlays: current.intelligenceOverlays,
+ deskLayoutMode: current.deskLayoutMode || 'single',
+ overlayDensity: current.overlayDensity || 'minimal',
+ primaryTimeframe: current.primaryTimeframe || current.timeframe || '15m',
+ });
+ const latest = await getChartState();
+ return setChartState({
+ chartReviewTabs: tabs,
+ activeChartReviewTabId: tab.id,
+ }, { current: latest });
+ }
+
+ async function closeChartReviewTab(tabId = '') {
+ const safeId = sanitizeReviewTabId(tabId);
+ const current = await getChartState();
+ const tabs = sanitizeChartReviewTabs(current.chartReviewTabs || []);
+ const closingIndex = tabs.findIndex(item => item.id === safeId);
+ if (closingIndex < 0) return current;
+ const closingTab = tabs[closingIndex];
+ const nextTabs = tabs.filter(item => item.id !== safeId);
+ const closingActive = String(current.activeChartReviewTabId || '') === safeId;
+ if (!closingActive) {
+ return setChartState({ chartReviewTabs: nextTabs });
+ }
+ const nextActive = nextTabs[Math.max(0, Math.min(closingIndex, nextTabs.length - 1))] || null;
+ if (!nextActive) {
+ const next = await setChartState({
+ chartReviewTabs: [],
+ activeChartReviewTabId: '',
+ chartReviewOverlayOpen: false,
+ chartTradingDraft: null,
+ chartTradingMode: 'select',
+ });
+ if (current.chartReviewOverlayOpen) {
+ unmountChartReviewOverlay();
+ } else {
+ returnToChartReviewSource(closingTab);
+ }
+ return next;
+ }
+ await setChartState({
+ chartReviewTabs: nextTabs,
+ activeChartReviewTabId: nextActive.id,
+ });
+ return activateChartReviewTab(nextActive.id);
+ }
+
+ async function autoSelectBestSignalForChart(force = false) {
+ const current = await getChartState();
+ if (!force && current.symbol) return current;
+ const data = await localGet(['scanResults', 'decisionShortlist']);
+ const best = pickBestChartSignal(data.scanResults || [], data.decisionShortlist || []);
+ if (!best) return current;
+ return setChartSymbolFromSignal(best, {
+ preset: 'key',
+ timeframe: '15m',
+ primaryTimeframe: '15m',
+ chartViewMode: 'tab',
+ showOrders: false,
+ showVwap: false,
+ rightPanelOpen: false,
+ intelligenceOverlays: false,
+ deskLayoutMode: 'single',
+ overlayDensity: 'minimal',
+ });
+ }
+
+ function getPresetMeta(preset = 'clean') {
+ return PRESET_META[normalizePreset(preset)] || PRESET_META.clean;
+ }
+
+ function formatPrice(value = 0) {
+ const numeric = Number(value || 0);
+ if (!Number.isFinite(numeric) || numeric <= 0) return '-';
+ if (Math.abs(numeric) >= 1000) return numeric.toFixed(2).replace(/\.00$/, '');
+ if (Math.abs(numeric) >= 1) return numeric.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+ return numeric.toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
+ }
+
+ function formatChartDate(value = 0) {
+ const ts = normalizeTsMs(value);
+ if (!(ts > 0)) return '-';
+ return new Date(ts).toISOString().slice(0, 10);
+ }
+
+ function formatStrength(zone = {}, displayStrengthAs = 'count') {
+ if (displayStrengthAs === 'percent') return `${Number(zone.strengthPct || 0).toFixed(0)}%`;
+ return `${Math.max(0, Math.round(Number(zone.touches || 0)))}x`;
+ }
+
+ function resolutionCoverageRequirement(state = {}) {
+ const timeframe = normalizeTimeframe(state.timeframe);
+ const baseVisible = state.replaySeed?.baselineVisibleCount || defaultVisibleCount(timeframe);
+ const visible = Math.max(baseVisible, Math.round(Number(state.visibleCandleCount || baseVisible) || baseVisible));
+ const paddedCount = Math.min(MAX_RENDER_CANDLES, Math.max(80, visible + (FETCH_BUFFER_COUNTS[timeframe] || 80)));
+ if (!state.replaySeed) {
+ return {
+ count: MAX_RENDER_CANDLES,
+ startMs: 0,
+ endMs: 0,
+ };
+ }
+ const markers = (state.replaySeed.markers || []).map(marker => normalizeReplayMarker(marker)).filter(Boolean);
+ const markerTimes = markers.map(marker => marker.ts).filter(Boolean);
+ if (state.replaySeed.entryTs) markerTimes.push(state.replaySeed.entryTs);
+ if (state.replaySeed.exitTs) markerTimes.push(state.replaySeed.exitTs);
+ if (!markerTimes.length) {
+ return {
+ count: paddedCount,
+ startMs: 0,
+ endMs: 0,
+ };
+ }
+ const minMarker = Math.min(...markerTimes);
+ const maxMarker = Math.max(...markerTimes);
+ const stepMs = resolutionStepMs(timeframe);
+ const before = Math.max(state.replaySeed.beforeCount || 60, Math.ceil(visible * 0.35));
+ const after = Math.max(state.replaySeed.afterCount || 60, Math.ceil(visible * 0.35));
+ return {
+ count: paddedCount,
+ startMs: minMarker - (before * stepMs),
+ endMs: maxMarker + (after * stepMs),
+ };
+ }
+
+ async function readChartCache() {
+ const data = await localGet([DS_V17_CHART_CACHE_KEY]);
+ return data?.[DS_V17_CHART_CACHE_KEY] || {};
+ }
+
+ async function writeChartCacheEntry(cacheKey, payload = {}) {
+ const cache = await readChartCache();
+ const nextCache = { ...(cache || {}) };
+ nextCache[cacheKey] = payload;
+ Object.keys(nextCache).forEach(key => {
+ const entry = nextCache[key];
+ const timeframe = normalizeTimeframe(key.split(':')[1] || '5m');
+ const ttl = (TTL_MS[timeframe] || 60000) * 4;
+ if ((Date.now() - Number(entry?.fetchedAt || 0)) > ttl) delete nextCache[key];
+ });
+ await localSet({ [DS_V17_CHART_CACHE_KEY]: nextCache });
+ }
+
+ function cacheEntryFresh(entry = null, timeframe = '5m') {
+ if (!entry || typeof entry !== 'object') return false;
+ return (Date.now() - Number(entry.fetchedAt || 0)) < ((TTL_MS[normalizeTimeframe(timeframe)] || 60000) * 4);
+ }
+
+ function cacheEntryCovers(entry = null, requirement = {}) {
+ if (!entry || typeof entry !== 'object') return false;
+ if (Number(entry.candleCount || 0) < Number(requirement.count || 0)) return false;
+ const startMs = Number(requirement.startMs || 0);
+ const endMs = Number(requirement.endMs || 0);
+ if (!startMs || !endMs) return true;
+ const oldest = normalizeTsMs(entry.oldestTime || 0);
+ const newest = normalizeTsMs(entry.newestTime || 0);
+ return oldest > 0 && newest > 0 && oldest <= startMs && newest >= endMs;
+ }
+
+ function normalizeCandle(candle = {}) {
+ return {
+ time: normalizeTsMs(candle.time || candle.t),
+ open: Number(candle.open || 0),
+ high: Number(candle.high || 0),
+ low: Number(candle.low || 0),
+ close: Number(candle.close || 0),
+ volume: Number(candle.volume || 0),
+ };
+ }
+
+ function normalizeSeries(values = []) {
+ return Array.isArray(values)
+ ? values.map(value => {
+ const numeric = Number(value);
+ return Number.isFinite(numeric) ? numeric : null;
+ })
+ : [];
+ }
+
+ function normalizeKeyZone(zone = {}, fallbackKind = 'support', tfLabel = '') {
+ const price = Number(zone.price || zone.center || 0);
+ const zoneLow = Number(zone.zoneLow || zone.low || price || 0);
+ const zoneHigh = Number(zone.zoneHigh || zone.high || price || 0);
+ if (!(price > 0) || !(zoneLow > 0) || !(zoneHigh > 0)) return null;
+ return {
+ price,
+ zoneLow: Math.min(zoneLow, zoneHigh),
+ zoneHigh: Math.max(zoneLow, zoneHigh),
+ touches: Number(zone.touches || zone.count || 0),
+ strengthPct: Number(zone.strengthPct || zone.percentStrength || zone.strength || 0),
+ tf: String(zone.tf || tfLabel || '').trim() || tfLabel,
+ kind: String(zone.kind || fallbackKind || '').trim().toLowerCase() === 'resistance' ? 'resistance' : 'support',
+ sourcePivots: Array.isArray(zone.sourcePivots || zone.pivots)
+ ? (zone.sourcePivots || zone.pivots).map(pivot => ({
+ price: Number(pivot.price || 0),
+ ts: normalizeTsMs(pivot.ts || pivot.time || 0),
+ })).filter(pivot => pivot.price > 0 && pivot.ts > 0)
+ : [],
+ };
+ }
+
+ function normalizeKeyLevels(keyLevels = null) {
+ if (!keyLevels || typeof keyLevels !== 'object') return null;
+ const byTimeframe = {};
+ Object.entries(keyLevels.byTimeframe || {}).forEach(([tfLabel, tfValue]) => {
+ byTimeframe[tfLabel] = {
+ resistance: Array.isArray(tfValue?.resistance) ? tfValue.resistance.map(zone => normalizeKeyZone(zone, 'resistance', tfLabel)).filter(Boolean) : [],
+ support: Array.isArray(tfValue?.support) ? tfValue.support.map(zone => normalizeKeyZone(zone, 'support', tfLabel)).filter(Boolean) : [],
+ };
+ });
+ return {
+ ...keyLevels,
+ byTimeframe,
+ config: {
+ ...sanitizeKeyLevelSettings(keyLevels?.config || keyLevels?.settings || {}),
+ },
+ };
+ }
+
+ function finiteChartNumber(value, fallback = 0) {
+ const numeric = Number(value);
+ return Number.isFinite(numeric) ? numeric : fallback;
+ }
+
+ function buildFwdIndexSyntheticCandles(history = [], marketIndex = null) {
+ const seen = new Set();
+ const rows = (Array.isArray(history) ? history : [])
+ .map(item => ({
+ ts: finiteChartNumber(item?.ts, 0),
+ composite: finiteChartNumber(item?.composite, 0),
+ value: finiteChartNumber(item?.value, 0),
+ volume: finiteChartNumber(item?.totalVolumeUSD, 0),
+ }))
+ .filter(item => item.ts > 0 && item.composite > 0)
+ .sort((a, b) => a.ts - b.ts)
+ .filter(item => {
+ const key = Math.floor(item.ts / 1000);
+ if (seen.has(key)) return false;
+ seen.add(key);
+ return true;
+ });
+ if (marketIndex?.ts && marketIndex?.composite) {
+ const last = rows[rows.length - 1] || null;
+ if (!last || Math.abs(finiteChartNumber(last.ts, 0) - finiteChartNumber(marketIndex.ts, 0)) > 1000) {
+ rows.push({
+ ts: finiteChartNumber(marketIndex.ts, Date.now()),
+ composite: finiteChartNumber(marketIndex.composite, 0),
+ value: finiteChartNumber(marketIndex.value, 0),
+ volume: finiteChartNumber(marketIndex.totalVolumeUSD, 0),
+ });
+ }
+ }
+ return rows.slice(-FWD_INDEX_CHART_HISTORY_LIMIT).map((point, index, source) => {
+ const previousClose = finiteChartNumber(source[index - 1]?.composite, point.composite);
+ const close = point.composite;
+ const open = previousClose > 0 ? previousClose : close;
+ const moveAbs = Math.abs(close - open);
+ const wick = Math.max(1, moveAbs * 0.18);
+ return normalizeCandle({
+ time: point.ts,
+ open,
+ high: Math.max(open, close) + wick,
+ low: Math.max(1, Math.min(open, close) - wick),
+ close,
+ volume: Math.max(1, point.volume / 1000000),
+ });
+ }).filter(candle => candle.time > 0 && candle.close > 0);
+ }
+
+ async function loadFwdIndexChartDataset(state = {}, strategy = {}) {
+ const data = await localGet(['marketIndex', 'marketIndexHistory']);
+ const candles = buildFwdIndexSyntheticCandles(data.marketIndexHistory || [], data.marketIndex || null);
+ if (!candles.length) {
+ return {
+ ok: false,
+ symbol: FWD_INDEX_SYMBOL,
+ timeframe: normalizeTimeframe(state.timeframe || '5m'),
+ candles: [],
+ studies: {},
+ keyLevels: null,
+ fetchedAt: 0,
+ syntheticIndex: true,
+ error: 'Run Scan Now first. FWD-10 chart uses stored market-index history from scans.',
+ };
+ }
+ return {
+ ok: true,
+ symbol: FWD_INDEX_SYMBOL,
+ timeframe: normalizeTimeframe(state.timeframe || '5m'),
+ candles,
+ studies: {},
+ keyLevels: null,
+ fetchedAt: Date.now(),
+ syntheticIndex: true,
+ marketIndex: data.marketIndex || null,
+ };
+ }
+
+ async function loadChartDataset(state = {}, strategy = {}, options = {}) {
+ const symbol = String(state.symbol || '').trim().toUpperCase();
+ const timeframe = normalizeTimeframe(state.timeframe || '5m');
+ if (!symbol) {
+ return {
+ ok: false,
+ error: 'Choose a symbol to load the chart.',
+ candles: [],
+ studies: {},
+ keyLevels: null,
+ fetchedAt: 0,
+ };
+ }
+ if (isFwdIndexSymbol(symbol)) {
+ return loadFwdIndexChartDataset({ ...state, symbol: FWD_INDEX_SYMBOL, timeframe }, strategy);
+ }
+ const requirement = resolutionCoverageRequirement(state);
+ const cacheKey = `${symbol}:${timeframe}`;
+ const cacheEnabled = sanitizeChartCacheEnabled(strategy.chartCacheEnabled);
+ const cache = cacheEnabled ? await readChartCache() : {};
+ const cachedEntry = cache?.[cacheKey];
+ if (!options.force && cacheEnabled && cacheEntryFresh(cachedEntry, timeframe) && cacheEntryCovers(cachedEntry, requirement)) {
+ return {
+ ok: true,
+ symbol,
+ timeframe,
+ candles: Array.isArray(cachedEntry.candles) ? cachedEntry.candles.map(normalizeCandle).filter(candle => candle.time > 0) : [],
+ studies: {
+ ema9: normalizeSeries(cachedEntry?.studies?.ema9 || []),
+ ema30: normalizeSeries(cachedEntry?.studies?.ema30 || []),
+ ema100: normalizeSeries(cachedEntry?.studies?.ema100 || []),
+ vwap: normalizeSeries(cachedEntry?.studies?.vwap || []),
+ },
+ keyLevels: normalizeKeyLevels(cachedEntry.keyLevels || null),
+ fetchedAt: Number(cachedEntry.fetchedAt || 0),
+ };
+ }
+ const response = await runtimeSend('v16:getPublicCandles', {
+ symbol,
+ resolution: timeframe,
+ limit: requirement.count,
+ keyLevelSettings: sanitizeKeyLevelSettings(strategy.keyLevelSettings || {}),
+ startTime: requirement.startMs || undefined,
+ endTime: requirement.endMs || undefined,
+ });
+ if (!response?.ok) {
+ if (cachedEntry && Array.isArray(cachedEntry.candles) && cachedEntry.candles.length) {
+ return {
+ ok: true,
+ symbol,
+ timeframe,
+ candles: cachedEntry.candles.map(normalizeCandle).filter(candle => candle.time > 0),
+ studies: {
+ ema9: normalizeSeries(cachedEntry?.studies?.ema9 || []),
+ ema30: normalizeSeries(cachedEntry?.studies?.ema30 || []),
+ ema100: normalizeSeries(cachedEntry?.studies?.ema100 || []),
+ vwap: normalizeSeries(cachedEntry?.studies?.vwap || []),
+ },
+ keyLevels: normalizeKeyLevels(cachedEntry.keyLevels || null),
+ fetchedAt: Number(cachedEntry.fetchedAt || 0),
+ error: response?.error || 'Failed to refresh the chart.',
+ stale: true,
+ };
+ }
+ return {
+ ok: false,
+ error: response?.error || 'Failed to load public candles.',
+ candles: [],
+ studies: {},
+ keyLevels: null,
+ fetchedAt: 0,
+ };
+ }
+ const candles = (Array.isArray(response.candles) ? response.candles : [])
+ .map(normalizeCandle)
+ .filter(candle => candle.time > 0)
+ .sort((a, b) => a.time - b.time);
+ const studies = {
+ ema9: normalizeSeries(response?.studies?.ema9 || []),
+ ema30: normalizeSeries(response?.studies?.ema30 || []),
+ ema100: normalizeSeries(response?.studies?.ema100 || []),
+ vwap: normalizeSeries(response?.studies?.vwap || []),
+ };
+ const keyLevels = normalizeKeyLevels(response?.keyLevels || null);
+ const payload = {
+ candles,
+ studies,
+ keyLevels,
+ fetchedAt: Date.now(),
+ candleCount: candles.length,
+ oldestTime: candles[0]?.time || 0,
+ newestTime: candles[candles.length - 1]?.time || 0,
+ };
+ if (cacheEnabled && candles.length) {
+ await writeChartCacheEntry(cacheKey, payload);
+ }
+ return {
+ ok: true,
+ symbol,
+ timeframe,
+ candles,
+ studies,
+ keyLevels,
+ fetchedAt: payload.fetchedAt,
+ };
+ }
+
+ function findNearestCandleIndex(candles = [], ts = 0) {
+ const target = normalizeTsMs(ts);
+ if (!target || !Array.isArray(candles) || !candles.length) return -1;
+ let bestIndex = -1;
+ let bestGap = Number.POSITIVE_INFINITY;
+ candles.forEach((candle, index) => {
+ const gap = Math.abs(Number(candle.time || 0) - target);
+ if (gap < bestGap) {
+ bestGap = gap;
+ bestIndex = index;
+ }
+ });
+ return bestIndex;
+ }
+
+ function getVisibleWindow(candles = [], state = {}) {
+ const total = Array.isArray(candles) ? candles.length : 0;
+ if (!total) return { startIndex: 0, endIndex: -1, visibleCandles: [], baselineCount: 0 };
+ const replayMode = normalizeReplayMode(state.replayMode);
+ const baseVisibleCount = Math.max(24, Math.min(total, Math.round(Number(state.visibleCandleCount || defaultVisibleCount(state.timeframe)) || defaultVisibleCount(state.timeframe))));
+ if (!state.replaySeed) {
+ if (replayMode?.active) {
+ const defaultCursor = Math.max(0, total - Math.max(12, Math.round(baseVisibleCount * 0.75)));
+ const cursorIndex = Math.max(0, Math.min(total - 1, Number.isFinite(Number(replayMode.cursorIndex)) ? Math.round(Number(replayMode.cursorIndex)) : defaultCursor));
+ const startIndex = Math.max(0, cursorIndex - baseVisibleCount + 1);
+ return {
+ startIndex,
+ endIndex: cursorIndex,
+ visibleCandles: candles.slice(startIndex, cursorIndex + 1),
+ baselineCount: defaultVisibleCount(state.timeframe),
+ replayCursorIndex: cursorIndex,
+ };
+ }
+ const visibleCount = baseVisibleCount;
+ return {
+ startIndex: Math.max(0, total - visibleCount),
+ endIndex: total - 1,
+ visibleCandles: candles.slice(-visibleCount),
+ baselineCount: defaultVisibleCount(state.timeframe),
+ };
+ }
+ const replaySeed = state.replaySeed;
+ const beforeCount = Math.max(10, Number(replaySeed.beforeCount || 60));
+ const afterCount = Math.max(10, Number(replaySeed.afterCount || 60));
+ const anchorTimes = [];
+ if (replaySeed.entryTs) anchorTimes.push(replaySeed.entryTs);
+ if (replaySeed.exitTs) anchorTimes.push(replaySeed.exitTs);
+ (Array.isArray(replaySeed.markers) ? replaySeed.markers : []).forEach(marker => {
+ const ts = normalizeTsMs(marker.ts);
+ if (ts) anchorTimes.push(ts);
+ });
+ const anchorIndexes = anchorTimes.map(ts => findNearestCandleIndex(candles, ts)).filter(index => index >= 0);
+ const minAnchorIndex = anchorIndexes.length ? Math.min(...anchorIndexes) : Math.max(0, total - defaultVisibleCount(state.timeframe));
+ const maxAnchorIndex = anchorIndexes.length ? Math.max(...anchorIndexes) : total - 1;
+ const baselineStart = Math.max(0, minAnchorIndex - beforeCount);
+ const baselineEnd = Math.min(total - 1, maxAnchorIndex + afterCount);
+ const baselineCount = Math.max(24, baselineEnd - baselineStart + 1);
+ const visibleCount = Math.max(baselineCount, Math.min(total, Math.round(Number(state.visibleCandleCount || baselineCount) || baselineCount)));
+ if (replayMode?.active) {
+ const entryIndex = replaySeed.entryTs ? findNearestCandleIndex(candles, replaySeed.entryTs) : minAnchorIndex;
+ const defaultCursor = Math.max(0, entryIndex >= 0 ? entryIndex : baselineStart);
+ const cursorFromMode = Number(replayMode.cursorIndex);
+ const cursorIndex = Math.max(0, Math.min(total - 1, Number.isFinite(cursorFromMode) ? Math.round(cursorFromMode) : defaultCursor + Number(replaySeed.cursorOffset || 0)));
+ const startIndex = Math.max(0, cursorIndex - visibleCount + 1);
+ return {
+ startIndex,
+ endIndex: cursorIndex,
+ visibleCandles: candles.slice(startIndex, cursorIndex + 1),
+ baselineCount,
+ replayCursorIndex: cursorIndex,
+ };
+ }
+ const maxStart = Math.max(0, total - visibleCount);
+ const startIndex = Math.max(0, Math.min(maxStart, baselineStart + Number(replaySeed.cursorOffset || 0)));
+ const endIndex = Math.min(total - 1, startIndex + visibleCount - 1);
+ return {
+ startIndex,
+ endIndex,
+ visibleCandles: candles.slice(startIndex, endIndex + 1),
+ baselineCount,
+ };
+ }
+
+ function medianNumber(values = []) {
+ const sorted = values.filter(value => Number.isFinite(value) && value > 0).sort((a, b) => a - b);
+ if (!sorted.length) return 0;
+ const middle = Math.floor(sorted.length / 2);
+ return sorted.length % 2 ? sorted[middle] : ((sorted[middle - 1] + sorted[middle]) / 2);
+ }
+
+ function getEventCandleTimes(candles = [], state = {}) {
+ if (state.hideEventCandles !== true || !Array.isArray(candles) || candles.length < 12) return new Set();
+ const recent = candles.slice(-Math.min(candles.length, 900));
+ const ranges = recent.map(candle => Math.abs(Number(candle.high || 0) - Number(candle.low || 0)));
+ const medianRange = medianNumber(ranges);
+ if (!(medianRange > 0)) return new Set();
+ const eventTimes = new Set();
+ candles.forEach((candle, index) => {
+ const high = Number(candle.high || 0);
+ const low = Number(candle.low || 0);
+ const open = Number(candle.open || 0);
+ const close = Number(candle.close || 0);
+ const time = Number(candle.time || 0);
+ if (!(time > 0) || !(high > 0) || !(low > 0) || high < low) return;
+ const range = high - low;
+ const body = Math.max(Math.abs(close - open), medianRange * 0.35);
+ const upperWick = Math.max(0, high - Math.max(open, close));
+ const lowerWick = Math.max(0, Math.min(open, close) - low);
+ const prev = candles[index - 1] || {};
+ const next = candles[index + 1] || {};
+ const nearbyClose = medianNumber([prev.close, close, next.close].map(Number));
+ const farFromNearby = nearbyClose > 0 && (Math.abs(high - nearbyClose) / nearbyClose > 0.045 || Math.abs(low - nearbyClose) / nearbyClose > 0.045);
+ const rangeOutlier = range > Math.max(medianRange * 8, nearbyClose > 0 ? nearbyClose * 0.035 : 0);
+ const wickOutlier = Math.max(upperWick, lowerWick) > Math.max(body * 5, medianRange * 6);
+ if (rangeOutlier && (wickOutlier || farFromNearby)) eventTimes.add(time);
+ });
+ return eventTimes;
+ }
+
+ function compareRankedKeyZones(a = {}, b = {}, referencePrice = 0) {
+ const touchDiff = Number(b.touches || 0) - Number(a.touches || 0);
+ if (touchDiff) return touchDiff;
+ const strengthDiff = Number(b.strengthPct || 0) - Number(a.strengthPct || 0);
+ if (strengthDiff) return strengthDiff;
+ const timeframePriority = (zone) => (String(zone.tf || '').trim().toUpperCase() === '1D' ? 2 : 1);
+ const timeframeDiff = timeframePriority(b) - timeframePriority(a);
+ if (timeframeDiff) return timeframeDiff;
+ if (referencePrice > 0) {
+ const distanceDiff = Math.abs(Number(a.price || 0) - referencePrice) - Math.abs(Number(b.price || 0) - referencePrice);
+ if (distanceDiff) return distanceDiff;
+ }
+ const widthDiff = Math.abs(Number(a.zoneHigh || 0) - Number(a.zoneLow || 0)) - Math.abs(Number(b.zoneHigh || 0) - Number(b.zoneLow || 0));
+ if (widthDiff) return widthDiff;
+ return Math.abs(Number(a.price || 0)) - Math.abs(Number(b.price || 0));
+ }
+
+ function keyZoneTimeframePriority(zone = {}) {
+ const tf = String(zone.tf || '').trim().toUpperCase();
+ if (tf === '1D') return 1.25;
+ if (tf === 'COMBINED') return 1.18;
+ return 1;
+ }
+
+ function keyZoneMergeTolerance(zone = {}, referencePrice = 0, settings = {}) {
+ const price = Number(zone.price || referencePrice || 0);
+ const width = Math.abs(Number(zone.zoneHigh || price) - Number(zone.zoneLow || price));
+ const tf = String(zone.tf || '').trim().toUpperCase();
+ const chartTf = normalizeTimeframe(settings.chartTimeframe || '');
+ const dailyContext = tf === '1D' || chartTf === '1d' || chartTf === '1h' || chartTf === '4h';
+ const pct = dailyContext ? 0.0035 : 0.0022;
+ return Math.max(width * 1.4, price > 0 ? price * pct : 0);
+ }
+
+ function mergeNearbyKeyZones(zones = [], referencePrice = 0, settings = {}) {
+ const sorted = (Array.isArray(zones) ? zones : [])
+ .filter(zone => Number(zone.price || 0) > 0)
+ .sort((a, b) => Number(a.price || 0) - Number(b.price || 0));
+ const clusters = [];
+ sorted.forEach(zone => {
+ const price = Number(zone.price || 0);
+ const match = clusters.find(cluster => {
+ const tolerance = Math.max(keyZoneMergeTolerance(cluster, referencePrice, settings), keyZoneMergeTolerance(zone, referencePrice, settings));
+ return Math.abs(price - Number(cluster.price || 0)) <= tolerance;
+ });
+ if (!match) {
+ clusters.push({
+ ...zone,
+ sourcePivots: Array.isArray(zone.sourcePivots) ? zone.sourcePivots.slice() : [],
+ });
+ return;
+ }
+ const oldWeight = Math.max(1, Number(match.touches || 1));
+ const newWeight = Math.max(1, Number(zone.touches || 1));
+ const totalWeight = oldWeight + newWeight;
+ match.price = ((Number(match.price || 0) * oldWeight) + (price * newWeight)) / totalWeight;
+ match.zoneLow = Math.min(Number(match.zoneLow || match.price), Number(zone.zoneLow || price));
+ match.zoneHigh = Math.max(Number(match.zoneHigh || match.price), Number(zone.zoneHigh || price));
+ match.touches = Math.max(Number(match.touches || 0), 0) + Math.max(Number(zone.touches || 0), 0);
+ match.strengthPct = Math.max(Number(match.strengthPct || 0), Number(zone.strengthPct || 0));
+ match.sourcePivots = [
+ ...(Array.isArray(match.sourcePivots) ? match.sourcePivots : []),
+ ...(Array.isArray(zone.sourcePivots) ? zone.sourcePivots : []),
+ ].slice(-24);
+ });
+ return clusters;
+ }
+
+ function scoreKeyZone(zone = {}, referencePrice = 0, kind = '') {
+ const price = Number(zone.price || 0);
+ const touches = Math.max(0, Number(zone.touches || 0));
+ const strength = Math.max(0, Number(zone.strengthPct || 0));
+ const distancePct = referencePrice > 0 && price > 0 ? Math.abs(price - referencePrice) / referencePrice : 1;
+ const proximityScore = Math.max(0, 32 - (distancePct * 900));
+ const directionalBonus = referencePrice > 0
+ ? ((kind === 'resistance' && price >= referencePrice) || (kind === 'support' && price <= referencePrice) ? 18 : -18)
+ : 0;
+ const width = Math.abs(Number(zone.zoneHigh || price) - Number(zone.zoneLow || price));
+ const widthPenalty = referencePrice > 0 ? Math.min(10, (width / referencePrice) * 1800) : 0;
+ const latestPivotTs = Math.max(...(Array.isArray(zone.sourcePivots) ? zone.sourcePivots : []).map(pivot => Number(pivot.ts || 0)).filter(Boolean), 0);
+ const ageDays = latestPivotTs > 0 ? Math.max(0, (Date.now() - latestPivotTs) / 86400000) : 365;
+ const recencyScore = Math.max(0, 22 - ageDays * 1.6);
+ const mtfBonus = String(zone.tf || '').trim().toUpperCase() === 'COMBINED' ? 12 : 0;
+ return (touches * 10) + (strength * 0.75) + proximityScore + directionalBonus + (keyZoneTimeframePriority(zone) * 8) + recencyScore + mtfBonus - widthPenalty;
+ }
+
+ function keyLevelDistancePct(zone = {}, referencePrice = 0) {
+ const price = Number(zone.price || 0);
+ return referencePrice > 0 && price > 0 ? Math.abs(price - referencePrice) / referencePrice : 1;
+ }
+
+ function keyLevelState(zone = {}, candles = [], referencePrice = 0) {
+ const recent = (Array.isArray(candles) ? candles : []).slice(-8);
+ const last = recent[recent.length - 1] || {};
+ const prev = recent[recent.length - 2] || {};
+ const price = Number(zone.price || 0);
+ const low = Number(zone.zoneLow || price || 0);
+ const high = Number(zone.zoneHigh || price || 0);
+ const close = Number(last.close || referencePrice || 0);
+ const prevClose = Number(prev.close || 0);
+ const lastLow = Number(last.low || close || 0);
+ const lastHigh = Number(last.high || close || 0);
+ const inside = close >= low && close <= high;
+ const touched = lastLow <= high && lastHigh >= low;
+ const fromAbove = prevClose > high;
+ const fromBelow = prevClose < low;
+ if (inside || touched) return { state: 'near', label: 'Near level', tone: 'watch' };
+ if (zone.kind === 'resistance') {
+ if (prevClose <= high && close > high) return { state: 'broken_above', label: 'Broken above', tone: 'good' };
+ if (fromAbove && lastLow <= high && close > high) return { state: 'retest', label: 'Retest above', tone: 'good' };
+ if (fromBelow && lastHigh >= low && close < low) return { state: 'rejecting_resistance', label: 'Rejecting resistance', tone: 'danger' };
+ return close > high ? { state: 'above_resistance', label: 'Above resistance', tone: 'neutral' } : { state: 'below_resistance', label: 'Below resistance', tone: 'watch' };
+ }
+ if (prevClose >= low && close < low) return { state: 'broken_below', label: 'Broken below', tone: 'danger' };
+ if (fromBelow && lastHigh >= low && close < low) return { state: 'retest', label: 'Retest below', tone: 'danger' };
+ if (fromAbove && lastLow <= high && close > high) return { state: 'holding_support', label: 'Holding support', tone: 'good' };
+ return close < low ? { state: 'below_support', label: 'Below support', tone: 'danger' } : { state: 'above_support', label: 'Above support', tone: 'watch' };
+ }
+
+ function buildKeyLevelReactionData(zone = {}, candles = [], referencePrice = 0) {
+ const price = Number(zone.price || 0);
+ const low = Number(zone.zoneLow || price || 0);
+ const high = Number(zone.zoneHigh || price || 0);
+ const source = Array.isArray(candles) ? candles : [];
+ const markers = [];
+ let respected = 0;
+ let broken = 0;
+ for (let index = 1; index < source.length; index++) {
+ const candle = source[index];
+ const prev = source[index - 1] || {};
+ const close = Number(candle.close || 0);
+ const open = Number(candle.open || 0);
+ const candleLow = Number(candle.low || close || 0);
+ const candleHigh = Number(candle.high || close || 0);
+ const prevClose = Number(prev.close || 0);
+ const touched = candleLow <= high && candleHigh >= low;
+ if (!touched) continue;
+ let type = 'touch';
+ if (zone.kind === 'support' && close > high && candleLow <= high) {
+ type = 'bounce';
+ respected += 1;
+ } else if (zone.kind === 'resistance' && close < low && candleHigh >= low) {
+ type = 'rejection';
+ respected += 1;
+ } else if (prevClose <= high && close > high) {
+ type = 'breakout';
+ broken += 1;
+ } else if (prevClose >= low && close < low) {
+ type = 'breakdown';
+ broken += 1;
+ }
+ markers.push({
+ type,
+ time: Number(candle.time || 0),
+ price: type === 'breakout' || type === 'breakdown' ? close : price,
+ });
+ }
+ const total = respected + broken;
+ const quality = total > 0 ? Math.round((respected / total) * 100) : Math.min(100, Math.round(Number(zone.touches || 0) * 12));
+ const latestTouchTime = markers.length ? Number(markers[markers.length - 1].time || 0) : Math.max(...(Array.isArray(zone.sourcePivots) ? zone.sourcePivots : []).map(pivot => Number(pivot.ts || 0)).filter(Boolean), 0);
+ const distancePct = keyLevelDistancePct(zone, referencePrice);
+ return {
+ reactionQuality: quality,
+ latestTouchTime,
+ distancePct,
+ isFar: distancePct > 0.05,
+ reactionMarkers: markers.slice(-8),
+ };
+ }
+
+ function rankSahiKeyZones(zones = [], settings = {}, referencePrice = 0, chartTimeframe = '5m') {
+ const limit = Math.max(1, Math.min(8, Math.floor(settings.numberOfLevels || 4)));
+ const byKind = ['resistance', 'support'].flatMap(kind => {
+ return mergeNearbyKeyZones(
+ (Array.isArray(zones) ? zones : []).filter(zone => zone.kind === kind),
+ referencePrice,
+ { ...settings, chartTimeframe }
+ )
+ .map(zone => ({
+ ...zone,
+ smartScore: scoreKeyZone(zone, referencePrice, kind),
+ }));
+ });
+ const strong = byKind.filter(zone => Number(zone.touches || 0) >= 2 || Number(zone.strengthPct || 0) >= 12);
+ const ranked = (strong.length ? strong : byKind)
+ .sort((a, b) => {
+ const scoreDiff = Number(b.smartScore || 0) - Number(a.smartScore || 0);
+ if (scoreDiff) return scoreDiff;
+ const touchDiff = Number(b.touches || 0) - Number(a.touches || 0);
+ if (touchDiff) return touchDiff;
+ if (referencePrice > 0) {
+ const distanceDiff = Math.abs(Number(a.price || 0) - referencePrice) - Math.abs(Number(b.price || 0) - referencePrice);
+ if (distanceDiff) return distanceDiff;
+ }
+ return Number(b.price || 0) - Number(a.price || 0);
+ });
+ const selected = [];
+ const addUnique = (zone = null) => {
+ if (!zone || selected.length >= limit) return;
+ const key = `${zone.kind}:${Math.round(Number(zone.price || 0) * 1000000)}`;
+ if (selected.some(item => `${item.kind}:${Math.round(Number(item.price || 0) * 1000000)}` === key)) return;
+ selected.push(zone);
+ };
+ if (limit >= 2) {
+ addUnique(ranked.find(zone => zone.kind === 'resistance'));
+ addUnique(ranked.find(zone => zone.kind === 'support'));
+ }
+ ranked.forEach(addUnique);
+ const visible = selected.slice(0, limit).sort((a, b) => Number(b.price || 0) - Number(a.price || 0));
+ const resistance = visible.filter(zone => zone.kind === 'resistance').sort((a, b) => Number(b.price || 0) - Number(a.price || 0));
+ const support = visible.filter(zone => zone.kind === 'support').sort((a, b) => Number(b.price || 0) - Number(a.price || 0));
+ const toneByKey = new Map();
+ resistance.forEach((zone, index) => {
+ toneByKey.set(zone, index === 0 ? 'resistance-major' : 'resistance-minor');
+ });
+ support.forEach((zone, index) => {
+ toneByKey.set(zone, index === 0 ? 'support-near' : 'support-deep');
+ });
+ return visible.map(zone => ({
+ ...zone,
+ colorRole: toneByKey.get(zone) || (zone.kind === 'resistance' ? 'resistance-minor' : 'support-near'),
+ }));
+ }
+
+ function chooseSmartKeyZones(zones = [], settings = {}, referencePrice = 0, kind = 'support') {
+ const density = normalizeOverlayDensity(settings.overlayDensity || '');
+ const chartTf = normalizeTimeframe(settings.chartTimeframe || '');
+ const dailyContext = chartTf === '1d' || chartTf === '1h' || chartTf === '4h';
+ const rawLimit = Math.max(1, Math.min(8, Math.floor(settings.numberOfLevels || 4)));
+ const limit = dailyContext && density === 'minimal' ? Math.min(rawLimit, 2) : rawLimit;
+ const merged = mergeNearbyKeyZones(zones, referencePrice, settings)
+ .map(zone => ({ ...zone, smartScore: scoreKeyZone(zone, referencePrice, kind) }))
+ .sort((a, b) => Number(b.smartScore || 0) - Number(a.smartScore || 0));
+ const strong = merged.filter(zone => Number(zone.touches || 0) >= 2 || Number(zone.strengthPct || 0) >= 12);
+ const source = strong.length ? strong : merged;
+ return source
+ .slice(0, limit)
+ .sort((a, b) => kind === 'resistance' ? Number(a.price || 0) - Number(b.price || 0) : Number(b.price || 0) - Number(a.price || 0));
+ }
+
+ function mapChartTfToKeyLevelTf(chartTimeframe = '5m') {
+ const tf = normalizeTimeframe(chartTimeframe);
+ if (tf === '1d') return '1D';
+ if (['4h', '1h'].includes(tf)) return '1D';
+ return '15m';
+ }
+
+ function collectVisibleKeyZones(keyLevels = null, settings = {}, referencePrice = 0, chartTimeframe = '5m') {
+ if (!keyLevels?.byTimeframe) return [];
+ const primaryTf = mapChartTfToKeyLevelTf(chartTimeframe);
+ const primaryBucket = keyLevels.byTimeframe?.[primaryTf];
+ const zones = [];
+ if (primaryBucket) {
+ ['resistance', 'support'].forEach(kind => {
+ (Array.isArray(primaryBucket[kind]) ? primaryBucket[kind] : []).forEach(zone => {
+ const normalized = normalizeKeyZone(zone, kind, primaryTf);
+ if (!normalized) return;
+ zones.push({
+ ...normalized,
+ tf: primaryTf,
+ displayStrengthAs: settings.displayStrengthAs,
+ showPivotCircles: settings.showPivotCircles,
+ showLevelGlow: settings.showLevelGlow,
+ thickness: settings.thickness,
+ });
+ });
+ });
+ }
+ ['resistance', 'support'].forEach(kind => {
+ (Array.isArray(keyLevels[kind]) ? keyLevels[kind] : []).forEach(zone => {
+ const normalized = normalizeKeyZone(zone, kind, 'combined');
+ if (!normalized) return;
+ zones.push({
+ ...normalized,
+ tf: 'combined',
+ displayStrengthAs: settings.displayStrengthAs,
+ showPivotCircles: settings.showPivotCircles,
+ showLevelGlow: settings.showLevelGlow,
+ thickness: settings.thickness,
+ });
+ });
+ });
+ const smartSettings = { ...settings, chartTimeframe };
+ return rankSahiKeyZones(zones, smartSettings, referencePrice, chartTimeframe);
+ }

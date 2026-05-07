@@ -1,0 +1,901 @@
+// Order preview chart, protection orders and private account refresh
+ }
+ return 'USD Notional';
+}
+
+function v16IsLiveOrderPreviewChartEnabled() {
+ const checkbox = document.getElementById('sLiveOrderPreviewChart');
+ return checkbox ? checkbox.checked !== false : true;
+}
+
+function v16SyncLiveOrderDeltaButton(symbol = '') {
+ const button = document.getElementById('liveOrderOpenDelta');
+ if (!button) return;
+ const resolvedSymbol = String(symbol || '').trim().toUpperCase();
+ button.hidden = !resolvedSymbol;
+ button.dataset.liveOrderSymbol = resolvedSymbol;
+ // Build and set the trade URL so the click handler can open it
+ const tradeUrl = typeof buildDeltaTradeUrl === 'function'
+ ? buildDeltaTradeUrl(resolvedSymbol)
+ : (resolvedSymbol ? `https://www.delta.exchange/app/futures/trade/${encodeURIComponent(resolvedSymbol)}` : '');
+ button.dataset.tradeUrl = tradeUrl;
+}
+
+function v16RenderTradeOrderPreviewCard(preview = {}) {
+ const computedContracts = Math.max(1, Math.round(Number(preview.size || 0)));
+ return `
+ <div class="live-order-preview-metrics">
+ <div><span>Computed Contracts</span><strong>${v16FmtNumber(computedContracts, 0)}</strong></div>
+ <div><span>Mode</span><strong>${preview.orderType === 'limit_order' ? 'Limit' : 'Market'}</strong></div>
+ <div><span>Side</span><strong>${String(preview.side || '').toUpperCase()}</strong></div>
+ <div><span>Entered Size</span><strong>${v16Esc(v16LiveOrderModeLabel(v16LiveAccountView.orderSignalMeta?.sizeMode || 'usd', v16LiveAccountView.orderSignalMeta?.definition || null))}</strong></div>
+ <div><span>Mark</span><strong>${Number(preview.markPrice || 0) > 0 ? `$${v16FmtPrice(preview.markPrice)}` : '-'}</strong></div>
+ <div><span>Notional</span><strong>${Number(preview.estimatedNotional || 0) > 0 ? `$${v16FmtNumber(preview.estimatedNotional, 2)}` : '-'}</strong></div>
+ <div><span>Risk / Reward</span><strong>${Number(preview.riskRewardRatio || 0) > 0 ? `1:${v16FmtNumber(preview.riskRewardRatio, 2)}` : '-'}</strong></div>
+ </div>
+ <div class="account-inline-note ${Number(preview.estimatedRisk || 0) > 0 ? 'warn' : 'good'}">
+ ${v16Esc([
+ Number(preview.limitPrice || 0) > 0 ? `Limit $${v16FmtPrice(preview.limitPrice)}` : 'Market execution',
+ Number(preview.stopLoss || 0) > 0 ? `SL $${v16FmtPrice(preview.stopLoss)}` : 'No SL',
+ Number(preview.takeProfit || 0) > 0 ? `TP $${v16FmtPrice(preview.takeProfit)}` : 'No TP',
+ ].filter(Boolean).join(' | '))}
+ </div>`;
+}
+
+function v16RenderProtectionOrderPreviewCard(preview = {}) {
+ return `
+ <div class="live-order-preview-metrics">
+ <div><span>Kind</span><strong>${preview.kind === 'target' ? 'Target' : 'Stop'}</strong></div>
+ <div><span>Side</span><strong>${String(preview.side || '').toUpperCase()}</strong></div>
+ <div><span>Size</span><strong>${v16FmtNumber(Number(preview.size || 0), 0)}</strong></div>
+ <div><span>Trigger</span><strong>${Number(preview.triggerPrice || 0) > 0 ? `$${v16FmtPrice(preview.triggerPrice)}` : '-'}</strong></div>
+ <div><span>Mark</span><strong>${Number(preview.markPrice || 0) > 0 ? `$${v16FmtPrice(preview.markPrice)}` : '-'}</strong></div>
+ <div><span>Projected P&amp;L</span><strong class="${Number(preview.projectedPnl || 0) >= 0 ? 'good' : 'bad'}">${v16FmtSigned(Number(preview.projectedPnl || 0))}</strong></div>
+ </div>
+ <div class="account-inline-note ${preview.kind === 'target' ? 'good' : 'warn'}">
+ ${v16Esc(preview.kind === 'target' ? 'Reduce-only take-profit order ready for Delta.' : 'Reduce-only stop order ready for Delta.')}
+ </div>`;
+}
+
+function v16PositionOrderModeLabel(preview = {}) {
+ const mode = String(preview.entryMode || '').trim().toLowerCase();
+ if (preview.postOnly || mode === 'maker_only' || mode === 'maker') return 'Maker Only';
+ if (preview.orderType === 'limit_order' || mode === 'limit') return 'Limit';
+ return 'Market';
+}
+
+function v16RenderPositionActionPreviewCard(payload = {}, preview = {}) {
+ const action = String(payload.action || 'close').toLowerCase();
+ const size = Number(preview.size || payload.orderSize || 0);
+ const modeLabel = v16PositionOrderModeLabel(preview);
+ return `
+ <div class="live-order-preview-metrics">
+ <div><span>Action</span><strong>${v16Esc(v16PositionActionLabel(action))}</strong></div>
+ <div><span>Exit Side</span><strong>${String(preview.side || '').toUpperCase()}</strong></div>
+ <div><span>Reduce Size</span><strong>${v16FmtNumber(size, 0)}</strong></div>
+ <div><span>Mode</span><strong>${v16Esc(modeLabel)}</strong></div>
+ <div><span>Exit Limit</span><strong>${Number(preview.limitPrice || 0) > 0 ? `$${v16FmtPrice(preview.limitPrice)}` : '-'}</strong></div>
+ <div><span>Mark</span><strong>${Number(preview.markPrice || 0) > 0 ? `$${v16FmtPrice(preview.markPrice)}` : '-'}</strong></div>
+ <div><span>Reduce Only</span><strong>${preview.reduceOnly ? 'Yes' : 'No'}</strong></div>
+ </div>
+ <div class="account-inline-note warn">${v16Esc(action === 'close' ? 'This sends a reduce-only close order and then attempts linked-order cleanup.' : 'This sends a reduce-only partial close order.')}</div>`;
+}
+
+function v16ReadPositionActionDraftFromForm() {
+ const existing = v16LiveAccountView.positionAction || {};
+ const orderType = String(document.getElementById('livePositionActionOrderType')?.value || existing.orderType || 'market_order').trim().toLowerCase() === 'limit_order'
+ ? 'limit_order'
+ : 'market_order';
+ const entryModeRaw = String(document.getElementById('livePositionActionEntryMode')?.value || existing.entryMode || (orderType === 'limit_order' ? 'limit' : 'market')).trim().toLowerCase();
+ const entryMode = orderType === 'limit_order'
+ ? (entryModeRaw === 'maker_only' || entryModeRaw === 'maker' ? 'maker_only' : 'limit')
+ : 'market';
+ const limitPrice = Math.max(0, Number(document.getElementById('livePositionActionLimitPrice')?.value || existing.limitPrice || existing.markPrice || 0));
+ return {
+ ...existing,
+ orderType,
+ entryMode,
+ postOnly: orderType === 'limit_order' && entryMode === 'maker_only',
+ limitPrice: orderType === 'limit_order' ? limitPrice : 0,
+ };
+}
+
+function v16ReadLiveOrderDraftFromForm() {
+ const existing = v16LiveAccountView.orderSignal || {};
+ const sizeMode = v16NormalizeLiveOrderSizeMode(document.getElementById('liveOrderQtyMode')?.value || v16LiveAccountView.orderSignalMeta?.sizeMode || 'usd');
+ const enteredSize = Math.max(0, Number(document.getElementById('liveOrderSize')?.value || existing.size || 0));
+ const symbol = String(document.getElementById('liveOrderSymbol')?.value || existing.symbol || '').trim().toUpperCase();
+ const sideChoice = String(document.getElementById('liveOrderSide')?.value || existing.side || 'long').trim().toLowerCase();
+ const orderType = String(document.getElementById('liveOrderType')?.value || existing.orderType || 'market_order').trim().toLowerCase() === 'limit_order'
+ ? 'limit_order'
+ : 'market_order';
+ const entryMode = String(document.getElementById('liveOrderEntryMode')?.value || existing.entryMode || (orderType === 'limit_order' ? 'limit' : 'market')).trim().toLowerCase();
+ const entry = Math.max(0, Number(document.getElementById('liveOrderEntryPrice')?.value || existing.entry || existing.price || 0));
+ const limitPrice = Math.max(0, Number(document.getElementById('liveOrderLimitPrice')?.value || existing.limitPrice || 0));
+ const stopLoss = Math.max(0, Number(document.getElementById('liveOrderStopLoss')?.value || existing.stopLoss || existing.sl || 0));
+ const takeProfit = Math.max(0, Number(document.getElementById('liveOrderTakeProfit')?.value || existing.takeProfit || existing.tp1 || existing.tp || 0));
+ const takeProfit2 = Math.max(0, Number(document.getElementById('liveOrderTakeProfit2')?.value || existing.takeProfit2 || existing.tp2 || 0));
+ const sizingPrice = v16ResolveLiveOrderSizingPrice({
+ orderType,
+ entry,
+ price: entry,
+ limitPrice: orderType === 'limit_order' ? Math.max(limitPrice, entry) : 0,
+ });
+ const size = v16ComputeLiveOrderContractsFromInput(enteredSize, sizeMode, {
+ definition: v16LiveAccountView.orderSignalMeta?.definition || null,
+ price: sizingPrice,
+ });
+ return {
+ symbol,
+ side: sideChoice === 'short' || sideChoice === 'sell' ? 'short' : 'long',
+ size,
+ sizeMode,
+ sizeInput: enteredSize,
+ entry,
+ price: entry,
+ orderType,
+ entryMode,
+ limitPrice: orderType === 'limit_order' ? Math.max(limitPrice, entry) : 0,
+ stopLoss,
+ takeProfit,
+ takeProfit2,
+ reduceOnly: false,
+ manualOverride: true,
+ baseUrl: existing.baseUrl || v16LiveAccountView.data?.baseUrl || '',
+ };
+}
+
+function v16SyncLiveOrderQtyInputLabel() {
+ const labelEl = document.getElementById('liveOrderSizeLabel');
+ if (!labelEl) return;
+ labelEl.textContent = v16LiveOrderModeLabel(v16LiveAccountView.orderSignalMeta?.sizeMode || 'usd', v16LiveAccountView.orderSignalMeta?.definition || null);
+}
+
+async function v16MountLiveOrderPreviewChart(options = {}) {
+ const root = document.getElementById('liveOrderChartPreview');
+ if (!root) return;
+ await globalThis.ensureChartWorkspaceLoaded?.();
+ if (!globalThis.FWDTradeDeskChartWorkspace?.mountPreviewChart) return;
+ await globalThis.FWDTradeDeskChartWorkspace.mountPreviewChart({
+ root,
+ symbol: String(options.symbol || '').trim().toUpperCase(),
+ getDisplaySymbol: () => String(options.symbol || '').trim().toUpperCase(),
+ getOrderContext: () => globalThis.FWDTradeDeskChartWorkspace.buildOrderContextFromDraft(
+ v16ReadLiveOrderDraftFromForm(),
+ v16LiveAccountView.preview || null
+ ),
+ forceRefresh: !!options.forceRefresh,
+ });
+}
+
+async function v16RefreshLiveOrderPreviewChart(force = false) {
+ await globalThis.ensureChartWorkspaceLoaded?.();
+ if (globalThis.FWDTradeDeskChartWorkspace?.requestPreviewRender) {
+ await globalThis.FWDTradeDeskChartWorkspace.requestPreviewRender(!!force);
+ }
+}
+
+function v16ReadOpenOrderEditDraftFromForm() {
+ const order = v16LiveAccountView.activeOpenOrder || {};
+ return {
+ profileId: getV16ActiveAccountProfile().id,
+ orderId: String(order.orderId || order.id || '').trim(),
+ clientOrderId: String(order.clientOrderId || '').trim(),
+ productId: Number(order.productId || 0),
+ symbol: String(order.symbol || '').trim().toUpperCase(),
+ size: Math.max(1, Math.round(Number(document.getElementById('liveOrderEditSize')?.value || order.remainingSize || order.size || 1))),
+ limitPrice: Math.max(0, Number(document.getElementById('liveOrderEditLimitPrice')?.value || order.limitPrice || 0)),
+ stopPrice: Math.max(0, Number(document.getElementById('liveOrderEditStopPrice')?.value || order.stopPrice || 0)),
+ postOnly: String(document.getElementById('liveOrderEditPostOnly')?.value || order.postOnly) === 'true',
+ reduceOnly: String(document.getElementById('liveOrderEditReduceOnly')?.value || order.reduceOnly) === 'true',
+ baseUrl: v16LiveAccountView.data?.baseUrl || '',
+ };
+}
+
+async function v16RefreshLiveTradeOrderPreview() {
+ const previewCard = document.getElementById('liveOrderPreviewCard');
+ const submitBtn = document.getElementById('liveOrderSubmit');
+ if (!previewCard || !submitBtn) return null;
+ const symbol = String(document.getElementById('liveOrderSymbol')?.value || v16LiveAccountView.orderSignal?.symbol || '').trim().toUpperCase();
+ const definition = await v16EnsureLiveOrderProductDefinition(symbol);
+ const sizeMode = v16NormalizeLiveOrderSizeMode(document.getElementById('liveOrderQtyMode')?.value || v16LiveAccountView.orderSignalMeta?.sizeMode || 'usd');
+ v16LiveAccountView.orderSignalMeta = {
+ ...(v16LiveAccountView.orderSignalMeta || {}),
+ symbol,
+ definition,
+ sizeMode,
+ markPrice: Number(v16LiveAccountView.preview?.markPrice || v16LiveAccountView.orderSignalMeta?.markPrice || 0),
+ };
+ v16SyncLiveOrderQtyInputLabel();
+ const draft = v16ReadLiveOrderDraftFromForm();
+ if (!draft.symbol) {
+ previewCard.innerHTML = '<div class="account-inline-note bad">Symbol is required.</div>';
+ submitBtn.disabled = true;
+ return null;
+ }
+ const protections = resolveBracketProtectionLevels(draft);
+ const protectionWarning = !draft.reduceOnly && !protections.hasFullProtection
+ ? 'Manual override: stop loss and take profit are not complete. The entry order can still be sent.'
+ : '';
+ previewCard.innerHTML = '<div class="account-inline-note">Preparing live order preview...</div>';
+ const response = await v16RuntimeSend('v16:getTradeOrderPreview', {
+ profileId: getV16ActiveAccountProfile().id,
+ ...draft,
+ });
+ if (!response?.ok) {
+ previewCard.innerHTML = `<div class="account-inline-note bad">${v16Esc(response?.error || 'Failed to prepare order preview.')}</div>`;
+ submitBtn.disabled = true;
+ v16LiveAccountView.preview = null;
+ return null;
+ }
+ v16LiveAccountView.preview = response.preview || null;
+ v16LiveAccountView.orderSignalMeta = {
+ ...(v16LiveAccountView.orderSignalMeta || {}),
+ symbol: draft.symbol,
+ definition,
+ sizeMode,
+ markPrice: Number(response.preview?.markPrice || 0),
+ computedContracts: Math.max(1, Math.round(Number(response.preview?.size || draft.size || 1))),
+ };
+ const blockReason = v16ResolveTradeEntryBlockReason({
+ symbol: draft.symbol,
+ preview: response.preview || null,
+ draft,
+ });
+ const settings = sanitizeAutoTradeSettings((await storeGet('autoTradeSettings'))?.autoTradeSettings || {});
+ const riskQuality = resolveRiskQualityGate({
+ ...(v16LiveAccountView.orderSignal || {}),
+ symbol: draft.symbol,
+ direction: draft.side,
+ entry: draft.entry || draft.limitPrice || response.preview?.limitPrice,
+ price: response.preview?.markPrice || draft.entry,
+ sl: draft.stopLoss,
+ tp1: draft.takeProfit,
+ }, settings);
+ const riskBlock = settings.riskQualityRequired && !riskQuality.passed
+ ? `Risk quality blocked: ${(riskQuality.reasons || []).join(', ') || 'quality gate failed'}`
+ : '';
+ const riskNoteLabel = riskBlock ? riskBlock.replace(/^Risk quality blocked:/, 'Manual override warning:') : `${riskQuality.label}: ${(riskQuality.reasons || []).slice(0, 3).join(' | ') || `RR ${riskQuality.rr}`}`;
+ const riskNote = `<div class="account-inline-note ${riskQuality.passed ? 'good' : 'warn'}">${v16Esc(riskNoteLabel)}</div>`;
+ previewCard.innerHTML = `${v16RenderTradeOrderPreviewCard(response.preview || {})}${protectionWarning ? `<div class="account-inline-note warn">${v16Esc(protectionWarning)}</div>` : ''}${riskNote}${blockReason ? `<div class="account-inline-note bad">${v16Esc(blockReason)}</div>` : ''}`;
+ submitBtn.disabled = !!blockReason || !v16CapabilityAllowsTrade();
+ await v16RefreshLiveOrderPreviewChart(true);
+ return response;
+}
+
+async function openV16ProtectionOrderPreview(position = null, kind = 'stop', seedOverrides = {}) {
+ const overlay = document.getElementById('liveOrderOverlay');
+ const body = document.getElementById('liveOrderBody');
+ const submitBtn = document.getElementById('liveOrderSubmit');
+ if (!overlay || !body || !submitBtn || !position) return;
+ const seed = {
+ ...v16BuildProtectionOrderSeed(position, kind),
+ ...(seedOverrides && typeof seedOverrides === 'object' ? seedOverrides : {}),
+ };
+ v16LiveAccountView.orderSignal = null;
+ v16LiveAccountView.activeOpenOrder = null;
+ v16LiveAccountView.positionAction = null;
+ v16LiveAccountView.protectionOrder = seed;
+ v16LiveAccountView.preview = null;
+ const titleEl = document.getElementById('liveOrderTitle');
+ if (titleEl) titleEl.textContent = kind === 'target' ? 'Add Target Order' : 'Add Stop Order';
+ body.innerHTML = `
+ <div class="live-order-preview-grid">
+ <label class="account-field"><span>Symbol</span><input class="si" value="${v16Esc(seed.symbol)}" readonly></label>
+ <label class="account-field"><span>Position Side</span><input class="si" value="${v16Esc(String(seed.positionSide || 'long').toUpperCase())}" readonly></label>
+ <label class="account-field"><span>Entry</span><input class="si" value="${seed.entryPrice > 0 ? `$${v16FmtPrice(seed.entryPrice)}` : '-'}" readonly></label>
+ <label class="account-field"><span>Mark</span><input class="si" value="${seed.markPrice > 0 ? `$${v16FmtPrice(seed.markPrice)}` : '-'}" readonly></label>
+ <label class="account-field"><span>Reduce Size</span><input class="si" type="number" id="liveProtectionSize" min="1" step="1" value="${Math.max(1, Math.round(seed.size || 1))}"></label>
+ <label class="account-field"><span>${kind === 'target' ? 'Target Trigger' : 'Stop Trigger'}</span><input class="si" type="number" id="liveProtectionTriggerPrice" min="0" step="any" value="${Number(seed.triggerPrice || 0) > 0 ? v16Esc(String(seed.triggerPrice)) : ''}"></label>
+ </div>
+ <div class="live-order-preview-copy">${v16Esc(kind === 'target' ? 'Create a reduce-only take-profit order for the uncovered portion of this position.' : 'Create a reduce-only stop order for the uncovered portion of this position.')}</div>
+ <div class="live-order-preview-card" id="liveOrderPreviewCard">Preparing protection order preview...</div>`;
+ overlay.style.display = 'flex';
+ v16SyncLiveOrderDeltaButton(seed.symbol);
+ submitBtn.textContent = kind === 'target' ? 'Place Target Order' : 'Place Stop Order';
+ submitBtn.disabled = true;
+ const refreshPreview = async () => {
+ const draft = v16ReadProtectionOrderDraftFromForm();
+ const previewCard = document.getElementById('liveOrderPreviewCard');
+ if (!previewCard || !submitBtn) return;
+ if (!(Number(draft.triggerPrice || 0) > 0)) {
+ previewCard.innerHTML = `<div class="account-inline-note bad">${v16Esc(kind === 'target' ? 'Target trigger price is required.' : 'Stop trigger price is required.')}</div>`;
+ submitBtn.disabled = true;
+ return;
+ }
+ const response = await v16RuntimeSend('v16:getProtectionOrderPreview', {
+ profileId: getV16ActiveAccountProfile().id,
+ ...draft,
+ });
+ if (!response?.ok) {
+ previewCard.innerHTML = `<div class="account-inline-note bad">${v16Esc(response?.error || 'Failed to prepare protection order preview.')}</div>`;
+ submitBtn.disabled = true;
+ v16LiveAccountView.preview = null;
+ return;
+ }
+ v16LiveAccountView.preview = response.preview || null;
+ previewCard.innerHTML = v16RenderProtectionOrderPreviewCard(response.preview || {});
+ submitBtn.disabled = !v16CapabilityAllowsTrade();
+ };
+ ['liveProtectionSize', 'liveProtectionTriggerPrice'].forEach(id => {
+ document.getElementById(id)?.addEventListener('input', refreshPreview);
+ });
+ await refreshPreview();
+}
+
+async function openV16PositionActionPreview(position = null, action = 'close') {
+ const overlay = document.getElementById('liveOrderOverlay');
+ const body = document.getElementById('liveOrderBody');
+ const submitBtn = document.getElementById('liveOrderSubmit');
+ if (!overlay || !body || !submitBtn || !position) return;
+ const linkedOrders = position.linkedOrders || v16BuildLinkedOrderModel(position, Array.isArray(v16LiveAccountView.data?.openOrders) ? v16LiveAccountView.data.openOrders : []);
+ const markPrice = Number(position.markPrice || position.mark || position.entry || 0);
+ const payload = {
+ symbol: position.symbol,
+ positionSide: position.side,
+ positionSize: Math.max(1, Math.round(Number(position.size || 1))),
+ requestedAction: action,
+ orderType: 'market_order',
+ entryMode: 'market',
+ limitPrice: 0,
+ markPrice,
+ postOnly: false,
+ linkedOrderIds: (linkedOrders.dsManaged || []).map(order => String(order.orderId || order.id || '').trim()).filter(Boolean),
+ linkedClientOrderIds: (linkedOrders.dsManaged || []).map(order => String(order.clientOrderId || '').trim()).filter(Boolean),
+ baseUrl: v16LiveAccountView.data?.baseUrl || '',
+ };
+ v16LiveAccountView.orderSignal = null;
+ v16LiveAccountView.activeOpenOrder = null;
+ v16LiveAccountView.protectionOrder = null;
+ v16LiveAccountView.positionAction = payload;
+ v16LiveAccountView.preview = null;
+ const titleEl = document.getElementById('liveOrderTitle');
+ if (titleEl) titleEl.textContent = v16PositionActionLabel(action);
+ body.innerHTML = `
+ <div class="live-order-preview-grid">
+ <label class="account-field"><span>Symbol</span><input class="si" value="${v16Esc(position.symbol)}" readonly></label>
+ <label class="account-field"><span>Position</span><input class="si" value="${v16Esc(String(position.side || 'long').toUpperCase())}" readonly></label>
+ <label class="account-field"><span>Position Size</span><input class="si" value="${v16FmtNumber(Number(position.size || 0), 0)}" readonly></label>
+ <label class="account-field"><span>Entry</span><input class="si" value="${Number(position.entry || 0) > 0 ? `$${v16FmtPrice(position.entry)}` : '-'}" readonly></label>
+ <label class="account-field"><span>Mark</span><input class="si" value="${Number(position.markPrice || 0) > 0 ? `$${v16FmtPrice(position.markPrice)}` : '-'}" readonly></label>
+ <label class="account-field"><span>Action</span><input class="si" value="${v16Esc(v16PositionActionLabel(action))}" readonly></label>
+ <label class="account-field"><span>Order Type</span><select class="si" id="livePositionActionOrderType"><option value="market_order" selected>Market</option><option value="limit_order">Limit</option></select></label>
+ <label class="account-field"><span>Exit Mode</span><select class="si" id="livePositionActionEntryMode"><option value="market" selected>Market</option><option value="limit">Limit</option><option value="maker_only">Maker Only</option></select></label>
+ <label class="account-field"><span>Exit Limit Price</span><input class="si" type="number" id="livePositionActionLimitPrice" min="0" step="any" value="${markPrice > 0 ? v16Esc(String(markPrice)) : ''}" disabled></label>
+ </div>
+ <div class="live-order-preview-copy">${v16Esc(action === 'close' ? 'This will send a reduce-only close order for the full position. Choose Market, Limit, or Maker Only before submitting. Linked FWD-managed orders will be cleaned up after the close request when possible.' : 'This will send a reduce-only partial close order using the selected exit mode.')}</div>
+ <div class="live-order-preview-card" id="liveOrderPreviewCard">Preparing position action preview...</div>`;
+ overlay.style.display = 'flex';
+ v16SyncLiveOrderDeltaButton(position.symbol);
+ submitBtn.textContent = action === 'close' ? 'Close Position' : v16PositionActionLabel(action);
+ submitBtn.disabled = true;
+ const syncPositionActionModeControls = () => {
+ const typeEl = document.getElementById('livePositionActionOrderType');
+ const modeEl = document.getElementById('livePositionActionEntryMode');
+ const limitEl = document.getElementById('livePositionActionLimitPrice');
+ const isLimit = String(typeEl?.value || 'market_order') === 'limit_order';
+ if (modeEl) modeEl.value = isLimit ? (modeEl.value === 'maker_only' ? 'maker_only' : 'limit') : 'market';
+ if (limitEl) limitEl.disabled = !isLimit;
+ };
+ const refreshPositionActionPreview = async () => {
+ const previewCard = document.getElementById('liveOrderPreviewCard');
+ if (!previewCard || !submitBtn) return;
+ syncPositionActionModeControls();
+ const draft = v16ReadPositionActionDraftFromForm();
+ v16LiveAccountView.positionAction = draft;
+ if (draft.orderType === 'limit_order' && !(Number(draft.limitPrice || 0) > 0)) {
+ previewCard.innerHTML = '<div class="account-inline-note bad">Exit limit price is required for limit or maker-only close.</div>';
+ submitBtn.disabled = true;
+ return;
+ }
+ previewCard.innerHTML = '<div class="account-inline-note">Preparing position action preview...</div>';
+ const response = await v16RuntimeSend('v16:getPositionActionPreview', {
+ profileId: getV16ActiveAccountProfile().id,
+ ...draft,
+ });
+ if (!response?.ok) {
+ previewCard.innerHTML = `<div class="account-inline-note bad">${v16Esc(response?.error || 'Failed to prepare position action preview.')}</div>`;
+ submitBtn.disabled = true;
+ return;
+ }
+ v16LiveAccountView.preview = response.preview || null;
+ previewCard.innerHTML = v16RenderPositionActionPreviewCard(response, response.preview || {});
+ submitBtn.disabled = !v16CapabilityAllowsTrade();
+ };
+ ['livePositionActionOrderType', 'livePositionActionEntryMode'].forEach(id => {
+ document.getElementById(id)?.addEventListener('change', refreshPositionActionPreview);
+ });
+ document.getElementById('livePositionActionLimitPrice')?.addEventListener('input', refreshPositionActionPreview);
+ await refreshPositionActionPreview();
+}
+
+async function duplicateV16OpenOrder(order = null) {
+ if (!order) return;
+ await openV16LiveTradeOrderPreview({
+ symbol: String(order.symbol || '').trim().toUpperCase(),
+ direction: String(order.side || '').toLowerCase() === 'sell' ? 'short' : 'long',
+ entry: Number(order.limitPrice || order.price || 0),
+ price: Number(order.limitPrice || order.price || 0),
+ size: Math.max(1, Math.round(Number(order.remainingSize || order.size || 1))),
+ orderType: String(order.orderType || '').toLowerCase() === 'limit_order' ? 'limit_order' : 'market_order',
+ entryMode: order.postOnly ? 'maker_only' : (String(order.orderType || '').toLowerCase() === 'limit_order' ? 'limit' : 'market'),
+ note: 'Copied from an existing open order. Review carefully before placing.',
+ });
+}
+
+async function cancelV16OpenOrder(order = null) {
+ if (!order) return;
+ const confirmed = confirmDestructiveAction(`Cancel the open order for ${order.symbol || 'this symbol'}?`, {
+ title: 'Cancel open order?',
+ });
+ if (!confirmed) return;
+ const response = await v16RuntimeSend('v16:cancelOrder', {
+ profileId: getV16ActiveAccountProfile().id,
+ orderId: String(order.orderId || order.id || '').trim(),
+ clientOrderId: String(order.clientOrderId || '').trim(),
+ symbol: String(order.symbol || '').trim().toUpperCase(),
+ productId: Number(order.productId || 0),
+ baseUrl: v16LiveAccountView.data?.baseUrl || '',
+ });
+ if (!response?.ok) {
+ const meta = document.getElementById('liveOpenOrdersMeta');
+ if (meta) meta.textContent = `Cancel failed: ${response?.error || 'request failed'}`;
+ return;
+ }
+ v16LiveAccountView.lastOrderAction = { type: 'cancelled', symbol: String(order.symbol || '').trim().toUpperCase(), at: Date.now() };
+ await renderV16PositionsPane(null, true);
+}
+
+async function cancelV16OrdersForSelectedSymbol() {
+ const selectEl = document.getElementById('liveOpenOrdersSymbolSelect');
+ const symbol = String(selectEl?.value || '').trim().toUpperCase();
+ if (!symbol) return;
+ const confirmed = confirmDestructiveAction(`Cancel all open orders for ${symbol}?`, {
+ title: 'Cancel all open orders?',
+ });
+ if (!confirmed) return;
+ const response = await v16RuntimeSend('v16:cancelAllOrdersForSymbol', {
+ profileId: getV16ActiveAccountProfile().id,
+ symbol,
+ baseUrl: v16LiveAccountView.data?.baseUrl || '',
+ });
+ const meta = document.getElementById('liveOpenOrdersMeta');
+ if (!response?.ok) {
+ if (meta) meta.textContent = `Cancel failed: ${response?.error || 'request failed'}`;
+ return;
+ }
+ v16LiveAccountView.lastOrderAction = { type: 'bulk-cancel', symbol, at: Date.now() };
+ if (meta) meta.textContent = `Cancelled ${Number(response.canceledCount || 0)} order${Number(response.canceledCount || 0) === 1 ? '' : 's'} for ${symbol}.`;
+ await renderV16PositionsPane(null, true);
+}
+
+async function cancelV16LinkedOrders(position = null) {
+ if (!position) return;
+ const linkedOrders = position.linkedOrders || {};
+ const linkedOrderIds = (linkedOrders.dsManaged || []).map(order => String(order.orderId || order.id || '').trim()).filter(Boolean);
+ const linkedClientOrderIds = (linkedOrders.dsManaged || []).map(order => String(order.clientOrderId || '').trim()).filter(Boolean);
+ if (!linkedOrderIds.length && !linkedClientOrderIds.length) return;
+ const response = await v16RuntimeSend('v16:cancelLinkedOrders', {
+ profileId: getV16ActiveAccountProfile().id,
+ linkedOrderIds,
+ linkedClientOrderIds,
+ baseUrl: v16LiveAccountView.data?.baseUrl || '',
+ });
+ if (response?.ok) {
+ v16LiveAccountView.lastOrderAction = { type: 'linked-cancel', symbol: String(position.symbol || '').trim().toUpperCase(), at: Date.now() };
+ await renderV16PositionsPane(null, true);
+ }
+}
+
+async function openV16OpenOrderEditor(order = null, draftOverrides = {}) {
+ const overlay = document.getElementById('liveOrderOverlay');
+ const body = document.getElementById('liveOrderBody');
+ const submitBtn = document.getElementById('liveOrderSubmit');
+ if (!overlay || !body || !order) return;
+ const editMeta = v16BuildOpenOrderEditMeta(order);
+ v16LiveAccountView.orderSignal = null;
+ v16LiveAccountView.protectionOrder = null;
+ v16LiveAccountView.positionAction = null;
+ v16LiveAccountView.activeOpenOrder = order;
+ v16LiveAccountView.preview = null;
+ const titleEl = document.getElementById('liveOrderTitle');
+ if (titleEl) titleEl.textContent = editMeta.title;
+ body.innerHTML = `
+ <div class="live-order-preview-grid">
+ <label class="account-field"><span>Symbol</span><input class="si" value="${v16Esc(order.symbol)}" readonly></label>
+ <label class="account-field"><span>Role</span><input class="si" value="${v16Esc(v16OrderRoleLabel(order.role))}" readonly></label>
+ <label class="account-field"><span>Mode</span><input class="si" value="${v16Esc(v16OpenOrderModeCopy(order))}" readonly></label>
+ <label class="account-field"><span>State</span><input class="si" value="${v16Esc(String(order.state || '').toUpperCase())}" readonly></label>
+ <label class="account-field"><span>Remaining Size</span><input class="si" type="number" id="liveOrderEditSize" min="1" step="1" value="${Math.max(1, Math.round(Number(draftOverrides.size || order.remainingSize || order.size || 1)))}"></label>
+ <label class="account-field"><span>${v16Esc(editMeta.limitLabel)}</span><input class="si" type="number" id="liveOrderEditLimitPrice" min="0" step="any" value="${Number((draftOverrides.limitPrice ?? order.limitPrice) || 0) > 0 ? v16Esc(String(Number((draftOverrides.limitPrice ?? order.limitPrice) || 0))) : ''}" ${String(order.orderType || '') === 'limit_order' || Number(order.limitPrice || 0) > 0 ? '' : 'disabled'}></label>
+ <label class="account-field"><span>${v16Esc(editMeta.stopLabel)}</span><input class="si" type="number" id="liveOrderEditStopPrice" min="0" step="any" value="${Number((draftOverrides.stopPrice ?? order.stopPrice) || 0) > 0 ? v16Esc(String(Number((draftOverrides.stopPrice ?? order.stopPrice) || 0))) : ''}" ${v16OrderSupportsStopPrice(order) ? '' : 'disabled'}></label>
+ <label class="account-field"><span>Post Only</span><select class="si" id="liveOrderEditPostOnly" ${String(order.orderType || '') === 'limit_order' ? '' : 'disabled'}><option value="true" ${order.postOnly ? 'selected' : ''}>Yes</option><option value="false" ${order.postOnly ? '' : 'selected'}>No</option></select></label>
+ <label class="account-field"><span>Reduce Only</span><select class="si" id="liveOrderEditReduceOnly"><option value="true" ${order.reduceOnly ? 'selected' : ''}>Yes</option><option value="false" ${order.reduceOnly ? '' : 'selected'}>No</option></select></label>
+ <label class="account-field"><span>Order Id</span><input class="si" value="${v16Esc(order.orderId || order.id || '')}" readonly></label>
+ </div>
+ <div class="live-order-preview-copy">${v16Esc(editMeta.helper)}</div>
+ <div class="live-order-preview-card" id="liveOrderPreviewCard">Preparing order edit preview...</div>`;
+ overlay.style.display = 'flex';
+ v16SyncLiveOrderDeltaButton(order.symbol);
+ if (submitBtn) {
+ submitBtn.textContent = 'Update Order';
+ submitBtn.disabled = true;
+ }
+ const refreshPreview = async () => {
+ if (typeof v16ReadOpenOrderEditDraftFromForm !== 'function') return;
+ const draft = v16ReadOpenOrderEditDraftFromForm();
+ const previewResponse = await v16RuntimeSend('v16:getOrderEditPreview', draft);
+ const previewCard = document.getElementById('liveOrderPreviewCard');
+ if (!previewCard || !submitBtn) return;
+ if (!previewResponse?.ok) {
+ previewCard.innerHTML = `<div class="account-inline-note bad">${v16Esc(previewResponse?.error || 'Failed to prepare order edit preview.')}</div>`;
+ submitBtn.disabled = true;
+ return;
+ }
+ v16LiveAccountView.preview = previewResponse;
+ submitBtn.disabled = !v16CapabilityAllowsTrade();
+ submitBtn.textContent = previewResponse.mode === 'cancel_replace' ? 'Cancel & Replace Order' : 'Update Order';
+ previewCard.innerHTML = `
+ <div class="live-order-preview-metrics">
+ <div><span>Order Mode</span><strong>${previewResponse.mode === 'cancel_replace' ? 'Cancel & Replace' : 'Update In Place'}</strong></div>
+ <div><span>Changed Fields</span><strong>${previewResponse.changes?.length ? v16Esc(previewResponse.changes.map(v16OrderEditChangeLabel).join(', ')) : 'No changes'}</strong></div>
+ <div><span>Remaining Size</span><strong>${v16FmtNumber(Number(previewResponse.draft?.size || 0), 0)}</strong></div>
+ <div><span>${v16Esc(editMeta.previewLimitLabel)}</span><strong>${Number(previewResponse.draft?.limitPrice || 0) > 0 ? `$${v16FmtPrice(previewResponse.draft.limitPrice)}` : '-'}</strong></div>
+ <div><span>${v16Esc(editMeta.previewStopLabel)}</span><strong>${Number(previewResponse.draft?.stopPrice || 0) > 0 ? `$${v16FmtPrice(previewResponse.draft.stopPrice)}` : '-'}</strong></div>
+ <div><span>Post Only</span><strong>${previewResponse.draft?.postOnly ? 'Yes' : 'No'}</strong></div>
+ </div>
+ <div class="account-inline-note ${previewResponse.mode === 'cancel_replace' ? 'warn' : 'good'}">${v16Esc(previewResponse.warning || (previewResponse.mode === 'cancel_replace' ? 'Delta will cancel the existing order and place a replacement.' : 'Delta will apply the edit to the existing order.'))}</div>`;
+ };
+ ['liveOrderEditSize', 'liveOrderEditLimitPrice', 'liveOrderEditStopPrice'].forEach(id => {
+ document.getElementById(id)?.addEventListener('input', refreshPreview);
+ });
+ ['liveOrderEditPostOnly', 'liveOrderEditReduceOnly'].forEach(id => {
+ document.getElementById(id)?.addEventListener('change', refreshPreview);
+ });
+ await refreshPreview();
+}
+
+async function refreshV16PrivateAccountData(force = false) {
+ globalThis.FWDAppLock?.touchActivity?.();
+ const profile = getV16ActiveAccountProfile();
+ const statusEl = document.getElementById('liveAccountStatus');
+ const secret = getV16Secrets()?.[profile.id] || {};
+ if (!v16CapabilityAllowsAccountRead()) {
+ v16LiveAccountView = {
+ ...v16LiveAccountView,
+ status: 'idle',
+ data: null,
+ error: 'Switch to ReadOnly or TradeEnabled to load private account data.',
+ rateLimit: null,
+ };
+ v16UpdateRateLimitBanner(null);
+ if (statusEl) statusEl.textContent = v16LiveAccountView.error;
+ return null;
+ }
+ if (!hasV16SessionSecret(profile.id)) {
+ v16LiveAccountView = {
+ ...v16LiveAccountView,
+ status: 'idle',
+ data: null,
+ error: 'Add Trading Key and Trading Secret in Settings -> User Profile -> Advanced.',
+ rateLimit: null,
+ };
+ v16UpdateRateLimitBanner(null);
+ if (statusEl) statusEl.textContent = v16LiveAccountView.error;
+ return null;
+ }
+ const activeRateLimit = v16NormalizeRateLimitMeta(v16LiveAccountView.rateLimit || v16LiveAccountView.data?.rateLimit);
+ if (activeRateLimit && v16LiveAccountView.data) {
+ v16LiveAccountView = { ...v16LiveAccountView, status: 'success', error: '', rateLimit: activeRateLimit };
+ v16UpdateRateLimitBanner(activeRateLimit, 'Private account');
+ if (statusEl) statusEl.textContent = `Private Delta API cooling down for ${v16FormatDurationShort(activeRateLimit.waitMs)} | using cached snapshot.`;
+ return {
+ ...v16LiveAccountView.data,
+ rateLimit: activeRateLimit,
+ };
+ }
+ if (!force && v16LiveAccountView.status === 'success' && (Date.now() - Number(v16LiveAccountView.fetchedAt || 0)) < V16_PRIVATE_VIEW_CACHE_TTL_MS) {
+ return v16LiveAccountView.data;
+ }
+ if (v16PrivateAccountRefreshPromise) return v16PrivateAccountRefreshPromise;
+
+ const currentBaseUrl = v16LiveAccountView.data?.baseUrl || '';
+ v16LiveAccountView = { ...v16LiveAccountView, status: 'loading', error: '' };
+ if (statusEl) statusEl.textContent = 'Loading private Delta account data...';
+
+ v16PrivateAccountRefreshPromise = (async () => {
+ const marketDataMode = await v16GetMarketDataMode();
+ const socketPreferred = marketDataMode !== 'polling';
+ let socketSnapshot = null;
+ let socketError = '';
+ const [socketResult, response] = await Promise.all([
+ socketPreferred
+ ? runV16PrivateSocketSnapshot(profile, secret, currentBaseUrl)
+ .then(snap => ({ ok: true, snap }))
+ .catch(error => ({ ok: false, error: error?.message || 'Private socket unavailable' }))
+ : Promise.resolve({ ok: false, error: 'Private socket disabled by settings' }),
+ v16RuntimeSend('v16:getPrivateAccountSnapshot', { profileId: profile.id, force: !!force }),
+ ]);
+ if (socketResult.ok) socketSnapshot = socketResult.snap;
+ else socketError = socketResult.error;
+
+ if (!response?.ok && !socketSnapshot) {
+ v16LiveAccountView = {
+ ...v16LiveAccountView,
+ status: 'error',
+ data: null,
+ error: response?.error || socketError || 'Failed to load private Delta data.',
+ fetchedAt: Date.now(),
+ rateLimit: null,
+ };
+ v16UpdateRateLimitBanner(null);
+ if (statusEl) statusEl.textContent = v16LiveAccountView.error;
+ return null;
+ }
+
+ const restRateLimit = v16NormalizeRateLimitMeta(response?.rateLimit || null);
+ const restSnapshot = response?.ok ? {
+ walletBalances: Array.isArray(response.walletBalances) ? response.walletBalances : [],
+ positions: Array.isArray(response.positions) ? response.positions : [],
+ marginedPositions: Array.isArray(response.marginedPositions) ? response.marginedPositions : [],
+ fills: Array.isArray(response.fills) ? response.fills : [],
+ orderHistory: Array.isArray(response.orderHistory) ? response.orderHistory : [],
+ openOrders: Array.isArray(response.openOrders) ? response.openOrders : [],
+ walletTransactions: Array.isArray(response.walletTransactions) ? response.walletTransactions : [],
+ fillsToday: Array.isArray(response.fillsToday) ? response.fillsToday : [],
+ orderHistoryToday: Array.isArray(response.orderHistoryToday) ? response.orderHistoryToday : [],
+ walletTransactionsToday: Array.isArray(response.walletTransactionsToday) ? response.walletTransactionsToday : [],
+ historyWindowStart: Number(response.historyWindowStart || 0),
+ historyWindowDays: Number(response.historyWindowDays || 0),
+ candidateSnapshots: Array.isArray(response.candidateSnapshots) ? response.candidateSnapshots : [],
+ historyDiagnostics: response?.historyDiagnostics && typeof response.historyDiagnostics === 'object' ? response.historyDiagnostics : {},
+ fetchedAt: Number(response.fetchedAt || Date.now()),
+ region: response.region || '',
+ baseUrl: response.baseUrl || '',
+ cached: !!response.cached,
+ cacheAgeMs: Number(response.cacheAgeMs || 0),
+ rateLimit: restRateLimit,
+ } : null;
+
+ const snapshot = {
+ walletBalances: Array.isArray(socketSnapshot?.walletBalances) && socketSnapshot.walletBalances.length ? socketSnapshot.walletBalances : (restSnapshot?.walletBalances || []),
+ positions: Array.isArray(socketSnapshot?.positions) && socketSnapshot.positions.length ? socketSnapshot.positions : (restSnapshot?.positions || []),
+ marginedPositions: Array.isArray(socketSnapshot?.marginedPositions) && socketSnapshot.marginedPositions.length ? socketSnapshot.marginedPositions : (restSnapshot?.marginedPositions || []),
+ fills: v16MergeUniqueRecords(socketSnapshot?.fills || [], restSnapshot?.fills || [], ['fill_id', 'f', 'id', 'order_id', 'o']),
+ orderHistory: v16MergeUniqueRecords(socketSnapshot?.orderHistory || [], restSnapshot?.orderHistory || [], ['order_id', 'id', 'client_order_id']),
+ openOrders: v16MergeUniqueRecords(socketSnapshot?.openOrders || [], restSnapshot?.openOrders || [], ['order_id', 'id', 'client_order_id']),
+ walletTransactions: restSnapshot?.walletTransactions || [],
+ fillsToday: restSnapshot?.fillsToday || [],
+ orderHistoryToday: restSnapshot?.orderHistoryToday || [],
+ walletTransactionsToday: restSnapshot?.walletTransactionsToday || [],
+ historyWindowStart: Number(restSnapshot?.historyWindowStart || 0),
+ historyWindowDays: Number(restSnapshot?.historyWindowDays || 0),
+ candidateSnapshots: Array.isArray(restSnapshot?.candidateSnapshots) ? restSnapshot.candidateSnapshots : [],
+ historyDiagnostics: restSnapshot?.historyDiagnostics || {},
+ fetchedAt: Number(socketSnapshot?.fetchedAt || restSnapshot?.fetchedAt || Date.now()),
+ region: socketSnapshot?.region || restSnapshot?.region || '',
+ baseUrl: socketSnapshot?.baseUrl || restSnapshot?.baseUrl || '',
+ cached: !!restSnapshot?.cached,
+ cacheAgeMs: Number(restSnapshot?.cacheAgeMs || 0),
+ rateLimit: restRateLimit,
+ socketError,
+ marketDataMode,
+ feedSource: socketSnapshot && restSnapshot ? 'socket+rest' : (socketSnapshot ? 'socket' : 'rest'),
+ };
+
+ v16LiveAccountView = {
+ ...v16LiveAccountView,
+ status: 'success',
+ data: snapshot,
+ fetchedAt: Date.now(),
+ error: '',
+ rateLimit: restRateLimit,
+ };
+ v16UpdateRateLimitBanner(restRateLimit, 'Private account');
+ await storeSet({ [V16_LIVE_SNAPSHOT_KEY]: snapshot });
+
+ if (statusEl) {
+ const transportCopy = socketSnapshot
+ ? ' | Private socket live'
+ : socketError
+ ? ' | REST mode (socket unavailable)'
+ : '';
+ const cooldownCopy = restRateLimit ? ` | API cooldown ${v16FormatDurationShort(restRateLimit.waitMs)} (cached)` : '';
+ statusEl.textContent = `Live Delta data loaded from ${String(snapshot.region || '').toUpperCase()} | ${v16ShortBaseUrl(snapshot.baseUrl)}${transportCopy}${cooldownCopy}`;
+ }
+ return snapshot;
+ })().finally(() => {
+ v16PrivateAccountRefreshPromise = null;
+ });
+
+ return v16PrivateAccountRefreshPromise;
+}
+
+async function v16LoadLiveAccountPaneContext(preloaded = null, forceRefresh = false) {
+ const syncEnabled = v16IsLiveAccountSyncEnabled();
+ let snapshot = forceRefresh
+ ? await refreshV16PrivateAccountData(true)
+ : (!syncEnabled
+ ? (await storeGet(V16_LIVE_SNAPSHOT_KEY))?.[V16_LIVE_SNAPSHOT_KEY] || null
+ : (await refreshV16PrivateAccountData(false)) || (await storeGet(V16_LIVE_SNAPSHOT_KEY))?.[V16_LIVE_SNAPSHOT_KEY] || null);
+ if (
+ snapshot
+ && !forceRefresh
+ && syncEnabled
+ && !(Array.isArray(snapshot?.fills) && snapshot.fills.length)
+ && !(Array.isArray(snapshot?.orderHistory) && snapshot.orderHistory.length)
+ && !v16NormalizeRateLimitMeta(snapshot?.rateLimit)
+ && v16CapabilityAllowsAccountRead()
+ ) {
+ snapshot = (await refreshV16PrivateAccountData(true).catch(() => snapshot)) || snapshot;
+ }
+ if (!snapshot) {
+ return {
+ syncEnabled,
+ snapshot: null,
+ metrics: null,
+ history: [],
+ activeRateLimit: null,
+ statusText: syncEnabled
+ ? 'Load a Trade Enabled or Read Only profile with session secrets to fetch private Delta account data.'
+ : 'Live account sync is paused in Settings. Enable it or click Refresh for an on-demand snapshot.',
+ statusClass: 'live-account-status',
+ };
+ }
+ const scanResults = Array.isArray(preloaded?.scanResults) ? preloaded.scanResults : ((await getV16Snapshot())?.scanResults || []);
+ const fundingHeatmap = Array.isArray(preloaded?.fundingHeatmap) ? preloaded.fundingHeatmap : ((await storeGet(['fundingHeatmap']))?.fundingHeatmap || []);
+ const notesStore = await storeGet(V16_LIVE_JOURNAL_NOTES_KEY);
+ const notesMap = notesStore?.[V16_LIVE_JOURNAL_NOTES_KEY] || {};
+ const autoTradeStore = await storeGet(['autoTradeLog', 'autoTradeSettings', 'optionsStraddleLog', V16_AUTO_TRADE_MANUAL_CONTROLS_KEY, V16_NOTIFICATION_FEED_KEY, V16_UX_HINT_DISMISSALS_KEY, 'alerts']);
+ const autoTradeLog = Array.isArray(autoTradeStore?.autoTradeLog) ? autoTradeStore.autoTradeLog : [];
+ const straddleLog = Array.isArray(autoTradeStore?.optionsStraddleLog) ? autoTradeStore.optionsStraddleLog : [];
+ const autoTradeSettings = autoTradeStore?.autoTradeSettings || {};
+ const manualControls = v16SanitizeManualControls(autoTradeStore?.[V16_AUTO_TRADE_MANUAL_CONTROLS_KEY] || {});
+ const notificationFeed = Array.isArray(autoTradeStore?.[V16_NOTIFICATION_FEED_KEY]) ? autoTradeStore[V16_NOTIFICATION_FEED_KEY] : [];
+ const uxHintDismissals = v16NormalizeUxHintDismissals(autoTradeStore?.[V16_UX_HINT_DISMISSALS_KEY] || {});
+ const alerts = Array.isArray(autoTradeStore?.alerts) ? autoTradeStore.alerts : [];
+ v16LiveAccountView.autoTradeSettings = autoTradeSettings;
+ v16LiveAccountView.uxHintDismissals = uxHintDismissals;
+ const activeProfileId = String(getV16ActiveAccountProfile().id || '').trim();
+ const productDefinitions = await v16BuildProductDefinitionsForSnapshot(snapshot);
+
+ // Auto-fill journal entries for auto-traded positions
+ let notesUpdated = false;
+ const allAutoEntries = [...autoTradeLog, ...straddleLog];
+ for (const atEntry of allAutoEntries) {
+ const sym = v16NormalizeSymbol(atEntry?.symbol || atEntry?.straddleLeg?.symbol || '');
+ if (!sym) continue;
+ // Build possible trade IDs that could match
+ const matchTradeIds = Object.keys(notesMap).length > 0 ? [] : null; // skip if no notes at all
+ // For each trade, check if notes already exist - if not, auto-generate
+ // This runs once per render - we'll match by symbol + close time
+ }
+ // Auto-fill: iterate resolved trades and match to auto-trade entries
+ const tempMetrics = v16ComputeSessionMetrics(snapshot, scanResults, notesMap, productDefinitions);
+ console.log('[JOURNAL] Auto-fill: trades=' + tempMetrics.trades.length + ' atLog=' + autoTradeLog.length + ' straddleLog=' + straddleLog.length);
+ for (const trade of tempMetrics.trades) {
+ const tradeId = String(trade.id || '');
+ const existingNotes = String(notesMap[tradeId]?.notes || '');
+ const hasManualNotes = !!existingNotes && !existingNotes.startsWith('[Auto]');
+ if (!tradeId || hasManualNotes) continue; // preserve manual notes, refresh auto-generated notes
+ const sym = v16NormalizeSymbol(trade.symbol || '');
+ // Match to futures auto-trade log
+ const atMatch = v16ResolveAutoTradeJournalMatch(trade, autoTradeLog);
+ // Match to straddle log
+ const stMatch = straddleLog.find(sl => {
+ const slSym = v16NormalizeSymbol(sl?.straddleLeg?.symbol || sl?.callLeg?.symbol || '');
+ return slSym === sym;
+ });
+ const matched = atMatch || stMatch;
+ console.log('[JOURNAL] Trade', tradeId, sym, 'match:', !!matched, 'hasNotes:', !!(notesMap[tradeId]?.notes));
+ if (!matched) continue;
+ const isStraddle = !!stMatch;
+ const score = Number(matched.score || matched.straddleLeg?.score || matched.tradeQuality || 0);
+ const tier = String(matched.tier || matched.alertTier || '').toUpperCase();
+ const direction = String(trade.side || v16ResolveEntryDirectionLabel(matched) || '').toUpperCase();
+ const closeReason = v16ResolveJournalCloseReason(trade, matched, tempMetrics.orderHistory || []);
+ const source = isStraddle ? 'Straddle Auto-Trade' : 'Scanner Auto-Trade';
+ const setupTag = isStraddle
+ ? (matched.type === 'native_straddle' ? 'Native Straddle' : 'Synthetic Straddle')
+ : (String(matched.setupFamilyLabel || '').trim()
+ || v16HumanizeSetupFamily(matched.setupFamily || '')
+ || (tier ? v16HumanizeSetupFamily(`auto_${tier.toLowerCase()}`) : 'Auto Trade'));
+ const confidence = score >= 85 ? 5 : score >= 70 ? 4 : score >= 50 ? 3 : score >= 30 ? 2 : 1;
+ const noteLines = [
+ `[Auto] ${source} | ${direction}`,
+ !isStraddle && setupTag ? `Setup: ${setupTag}` : '',
+ `Score: ${score}${tier ? ` | Tier: ${tier}` : ''}`,
+ isStraddle ? `Strike: ${matched.atmStrike || '?'} | Spot@Entry: $${Number(matched.spotAtEntry || 0).toFixed(0)}` : '',
+ matched.sl ? `SL: $${Number(matched.sl).toFixed(4)}` : '',
+ matched.tp ? `TP: $${Number(matched.tp).toFixed(4)}` : '',
+ closeReason && closeReason !== 'active' ? `Closed: ${closeReason}` : '',
+ ].filter(Boolean).join('\n');
+ notesMap[tradeId] = v16NormalizeJournalRecord({
+ notes: noteLines,
+ setupTag,
+ mistakeTag: '',
+ confidence,
+ checklist: { followedPlan: true, respectedRisk: true, cleanExecution: true },
+ updatedAt: Date.now(),
+ });
+ notesUpdated = true;
+ }
+ if (notesUpdated) {
+ await storeSet({ [V16_LIVE_JOURNAL_NOTES_KEY]: notesMap });
+ }
+ const metrics = v16ComputeSessionMetrics(snapshot, scanResults, notesMap, productDefinitions);
+ metrics.trades = (Array.isArray(metrics.trades) ? metrics.trades : []).map(trade =>
+ v16EnrichTradeWithAutoTradeContext(trade, autoTradeLog, metrics.orderHistory || [])
+ );
+ metrics.todayTrades = (Array.isArray(metrics.todayTrades) ? metrics.todayTrades : []).map(trade =>
+ v16EnrichTradeWithAutoTradeContext(trade, autoTradeLog, metrics.orderHistory || [])
+ );
+ const fundingLookup = v16BuildPositionFundingLookup(scanResults, fundingHeatmap);
+ metrics.positions = metrics.positions.map(position => ({
+ ...position,
+ notionalValue: v16ResolvePositionNotional(position),
+ fundingEstimate: v16ResolvePositionFundingEstimate(position, fundingLookup),
+ trailingEntry: v16ResolvePositionTrailingEntry(position, autoTradeLog, activeProfileId, autoTradeSettings),
+ protection: null,
+ }));
+ metrics.positions = metrics.positions.map(position => ({
+ ...position,
+ protection: v16ResolvePositionProtectionMeta(position, position.trailingEntry),
+ autoTradeSizingSummary: v16BuildAutoTradeSizingSummary(position.trailingEntry),
+ reverseTrade: v16ResolveReverseTradeMeta(position.trailingEntry || {}),
+ }));
+ const signalLookup = new Map();
+ (Array.isArray(scanResults) ? scanResults : []).forEach(s => {
+ if (s?.symbol) signalLookup.set(v16NormalizeSymbol(s.symbol), String(s.direction || '').toLowerCase());
+ });
+ metrics.positions = metrics.positions.map(position => ({
+ ...position,
+ currentSignal: signalLookup.get(v16NormalizeSymbol(position.symbol || '')) || '',
+ }));
+ const occupiedSymbols = new Set([
+ ...(Array.isArray(metrics.positions) ? metrics.positions : []).map(position => v16NormalizeSymbol(position?.symbol || '')),
+ ...(Array.isArray(metrics.openOrders) ? metrics.openOrders : [])
+ .filter(order => !order?.reduceOnly && ['open', 'pending'].includes(String(order?.state || '').toLowerCase()))
+ .map(order => v16NormalizeSymbol(order?.symbol || '')),
+ ].filter(Boolean));
+ metrics.manualControls = manualControls;
+ metrics.manualReservedSlots = v16CountReservedSlotsFromControls(manualControls, occupiedSymbols);
+ metrics.notificationFeed = notificationFeed;
+ metrics.uxHintDismissals = uxHintDismissals;
+ metrics.recentAlerts = alerts;
+ metrics.autoTradeLog = autoTradeLog;
+ v16LiveAccountView.lastPositionMetrics = metrics;
+ const straddleDashboard = await v16RuntimeSend('v17:getStraddleDashboard', {});
+ metrics.straddleDashboard = straddleDashboard?.ok ? straddleDashboard : { ok: false, entries: [], summary: { activeCount: 0, closedCount: 0, activePnlUSD: 0, premiumOpenUSD: 0 } };
+ const history = await v16AppendEquityHistory(metrics);
+ await v16SyncLiveManageHistory(metrics, history);
+ const activeRateLimit = v16NormalizeRateLimitMeta(snapshot?.rateLimit);
+ const fillAttemptError = (Array.isArray(metrics?.historyDiagnostics?.fills?.attempts) ? metrics.historyDiagnostics.fills.attempts : [])
+ .map(attempt => attempt?.error)
+ .find(Boolean) || '';
+ const orderAttemptError = (Array.isArray(metrics?.historyDiagnostics?.orderHistory?.attempts) ? metrics.historyDiagnostics.orderHistory.attempts : [])
+ .map(attempt => attempt?.error)
+ .find(Boolean) || '';
+ const rawHistoryCopy = (metrics.rawFillCount !== metrics.fills.length || metrics.rawOrderCount !== metrics.orderHistory.length)
+ ? ` | Raw ${metrics.rawFillCount} fills / ${metrics.rawOrderCount} orders`
+ : '';
+ const historyErrorCopy = (!metrics.fills.length && !metrics.orderHistory.length && (fillAttemptError || orderAttemptError))
+ ? ` | History error: ${fillAttemptError || orderAttemptError}`
+ : '';
+ const cooldownCopy = activeRateLimit
+ ? ` | API cooldown ${v16FormatDurationShort(activeRateLimit.waitMs)} | extra refresh paused`
+ : '';
+ const syncCopy = !syncEnabled ? ' | auto sync paused' : '';
+ const modeLabel = v16MarketDataModeLabel(snapshot?.marketDataMode || globalThis.deltaMarketDataMode || 'auto');
+ const updatedLabel = v16FormatFeedAge(snapshot?.fetchedAt || 0);
+ const compactStatus = `Wallet ${metrics.walletSymbol} ${v16FmtNumber(metrics.walletBalance, 2)} | Available ${v16FmtNumber(metrics.walletAvailable, 2)} | ${metrics.positions.length} pos | ${metrics.openOrders.length} orders | ${modeLabel}${syncEnabled ? '' : ' paused'} | ${updatedLabel}`;
+ const detailStatus = `Wallet ${metrics.walletSymbol} ${v16FmtNumber(metrics.walletBalance, 2)} | Available ${v16FmtNumber(metrics.walletAvailable, 2)} | ${metrics.positions.length} open positions | ${metrics.openOrders.length} open orders | Parsed ${metrics.fills.length} fills / ${metrics.orderHistory.length} orders${rawHistoryCopy}${historyErrorCopy}${syncCopy}${cooldownCopy} | Mode ${modeLabel} | Feed ${v16MarketDataSourceLabel(snapshot?.feedSource || 'rest')} | Updated ${updatedLabel}`;
+ const statusText = `${compactStatus}${historyErrorCopy}${activeRateLimit ? ` | cooldown ${v16FormatDurationShort(activeRateLimit.waitMs)}` : ''}`;
+ return {
+ syncEnabled,
+ snapshot,
+ metrics,
+ history,
+ activeRateLimit,
+ statusText,
+ statusDetail: detailStatus,

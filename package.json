@@ -1,0 +1,59 @@
+{
+  "name": "fwd-tradedesk-pro-windows",
+  "version": "0.1.0",
+  "private": true,
+  "author": "FWD TradeDesk Pro",
+  "description": "FWD TradeDesk Pro Windows desktop shell.",
+  "main": "src/main/main.js",
+ "scripts": {
+ "start": "electron .",
+ "build:renderer": "node scripts/sync-renderer-bundles.js",
+ "check:renderer": "node scripts/sync-renderer-bundles.js --check",
+ "check": "npm run check:renderer && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-js.ps1 && npm run check:brain && npm run check:radar && npm run check:reversal",
+ "check:visual": "node scripts/visual-smoke.js",
+ "check:options": "node scripts/options-safety-smoke.js",
+ "check:wizard": "node scripts/wizard-strategy-smoke.js",
+ "check:stage": "node scripts/stage-strategy-smoke.js",
+ "check:radar": "node scripts/radar-strategy-smoke.js",
+ "check:reversal": "node scripts/reversal-strategy-smoke.js",
+ "check:brain": "node scripts/action-brain-smoke.js",
+ "pack": "electron-builder --dir",
+ "dist": "electron-builder"
+ },
+  "build": {
+    "appId": "com.fwd.tradedeskpro",
+    "productName": "FWD TradeDesk Pro",
+    "copyright": "Copyright (c) 2026 FWD TradeDesk Pro",
+    "afterPack": "scripts/after-pack-branding.js",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "executableName": "FWD TradeDesk Pro",
+      "icon": "src/renderer/icons/fwd-tradedesk-pro.ico",
+      "signAndEditExecutable": false,
+      "legalTrademarks": "FWD TradeDesk Pro"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "include": "build/installer.nsh"
+    }
+  },
+  "devDependencies": {
+    "electron": "^41.3.0",
+    "electron-builder": "^26.0.0"
+  },
+  "dependencies": {
+    "lightweight-charts": "^5.2.0",
+    "qrcode": "^1.5.4"
+  },
+  "optionalDependencies": {
+    "argon2": "^0.44.0"
+  }
+}

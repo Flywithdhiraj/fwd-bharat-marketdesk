@@ -1,0 +1,218 @@
+/* ================================================================
+ Design-system hardening for high-density trader surfaces.
+ This avoids header/layout changes and tightens the work areas.
+ ================================================================ */
+:root {
+ --surface-0: #07111d;
+ --surface-1: #0a1726;
+ --surface-2: #0f1d2e;
+ --surface-line: rgba(148, 163, 184, 0.16);
+ --surface-line-strong: rgba(148, 163, 184, 0.28);
+ --control-radius: 7px;
+ --panel-radius: 10px;
+ --font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+ --font-display: 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif;
+}
+
+.pane,
+.modal,
+.settings-drawer,
+.command-palette,
+.app-lock-card {
+ border-color: var(--surface-line);
+}
+
+.pane .bsm,
+.pane .btn-save,
+.pane .od-ghost-btn,
+.pane .od-primary-btn,
+.pane .od-mini-btn,
+.pane .od-chip,
+.pane .od-mode-tab,
+.pane .od-view-tab,
+.pane .od-segment,
+.pane .preset-btn,
+.pane .fi,
+.pane .si,
+.modal .bsm,
+.modal .btn-save,
+.modal .si {
+ border-radius: var(--control-radius);
+ letter-spacing: 0;
+}
+
+.pane .bsm:active,
+.pane .btn-save:active,
+.pane .od-ghost-btn:active,
+.pane .od-primary-btn:active,
+.pane .od-mini-btn:active,
+.pane .od-chip:active,
+.pane .od-mode-tab:active,
+.pane .od-view-tab:active,
+.pane .od-segment:active {
+ transform: translateY(1px) scale(0.99);
+}
+
+.od-workflow-strip {
+ display: grid;
+ grid-template-columns: minmax(220px, 0.9fr) minmax(0, 2.4fr);
+ gap: 10px;
+ padding: 10px 12px;
+ border-bottom: 1px solid var(--surface-line);
+ background:
+  linear-gradient(180deg, rgba(8, 17, 29, 0.98), rgba(6, 13, 22, 0.98)),
+  radial-gradient(circle at top left, rgba(96, 165, 250, 0.055), transparent 34%);
+}
+
+.od-workflow-main {
+ min-width: 0;
+ display: flex;
+ flex-direction: column;
+ justify-content: center;
+ gap: 3px;
+}
+
+.od-workflow-main span,
+.od-workflow-step small {
+ color: var(--muted);
+ font-size: 9px;
+ font-weight: 800;
+ letter-spacing: 0.08em;
+ text-transform: uppercase;
+}
+
+.od-workflow-main strong {
+ color: #f5f9ff;
+ font-size: 14px;
+ line-height: 1.2;
+}
+
+.od-workflow-main small {
+ color: #91a5c0;
+ font-size: 10.5px;
+ line-height: 1.45;
+}
+
+.od-workflow-steps {
+ display: grid;
+ grid-template-columns: repeat(6, minmax(0, 1fr));
+ gap: 6px;
+ min-width: 0;
+}
+
+.od-workflow-step {
+ min-width: 0;
+ min-height: 48px;
+ display: grid;
+ grid-template-columns: auto minmax(0, 1fr);
+ grid-template-rows: auto auto;
+ column-gap: 7px;
+ row-gap: 1px;
+ align-items: center;
+ padding: 7px 8px;
+ border: 1px solid var(--surface-line);
+ border-radius: var(--control-radius);
+ background: rgba(255, 255, 255, 0.026);
+ color: var(--text-soft);
+ font: inherit;
+ text-align: left;
+ cursor: default;
+ transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.od-workflow-step[data-options-action]:not([data-options-action='']) {
+ cursor: pointer;
+}
+
+.od-workflow-step span {
+ grid-row: 1 / 3;
+ width: 22px;
+ height: 22px;
+ display: inline-flex;
+ align-items: center;
+ justify-content: center;
+ border: 1px solid rgba(148, 163, 184, 0.22);
+ border-radius: 999px;
+ color: #9fb3cf;
+ font-size: 10px;
+ font-weight: 900;
+}
+
+.od-workflow-step strong {
+ min-width: 0;
+ overflow: hidden;
+ text-overflow: ellipsis;
+ white-space: nowrap;
+ color: #e9f2ff;
+ font-size: 11px;
+ line-height: 1.15;
+}
+
+.od-workflow-step small {
+ min-width: 0;
+ overflow: hidden;
+ text-overflow: ellipsis;
+ white-space: nowrap;
+ letter-spacing: 0;
+ text-transform: none;
+}
+
+.od-workflow-step.done {
+ border-color: rgba(47, 224, 161, 0.24);
+ background: rgba(47, 224, 161, 0.055);
+}
+
+.od-workflow-step.done span {
+ border-color: rgba(47, 224, 161, 0.3);
+ color: var(--tone-good);
+}
+
+.od-workflow-step.active {
+ border-color: rgba(96, 165, 250, 0.42);
+ background: rgba(96, 165, 250, 0.09);
+}
+
+.od-workflow-step:hover {
+ border-color: var(--surface-line-strong);
+ background: rgba(255, 255, 255, 0.045);
+}
+
+.diagnostics-export-card {
+ display: grid;
+ grid-template-columns: minmax(0, 1fr) auto;
+ gap: 10px;
+ align-items: center;
+ padding: 10px 12px;
+ border-bottom: 1px solid var(--surface-line);
+ background: rgba(96, 165, 250, 0.045);
+}
+
+.diagnostics-export-card strong {
+ display: block;
+ color: #f4f8ff;
+ font-size: 12px;
+}
+
+.diagnostics-export-card small {
+ display: block;
+ margin-top: 3px;
+ color: var(--muted);
+ font-size: 10px;
+ line-height: 1.4;
+}
+
+@media (max-width: 1120px) {
+ .od-workflow-strip {
+  grid-template-columns: 1fr;
+ }
+
+ .od-workflow-steps {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+ }
+}
+
+@media (max-width: 700px) {
+ .od-workflow-steps {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+ }
+}

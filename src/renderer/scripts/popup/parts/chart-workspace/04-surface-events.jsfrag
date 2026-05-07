@@ -1,0 +1,1052 @@
+// Surface rendering, delegated controls, keyboard and storage listeners
+ function queueSurfaceRender(surface = SURFACE_PREVIEW, force = false) {
+ const runRender = () => {
+ if (surface === SURFACE_TAB) {
+ tabRenderPromise = tabRenderPromise.then(() => renderSurface(SURFACE_TAB, force)).catch(() => {});
+ return tabRenderPromise;
+ }
+ if (surface === SURFACE_REVIEW) {
+ reviewRenderPromise = reviewRenderPromise.then(() => renderSurface(SURFACE_REVIEW, force)).catch(() => {});
+ return reviewRenderPromise;
+ }
+ if (surface === SURFACE_DETACHED) {
+ detachedRenderPromise = detachedRenderPromise.then(() => renderSurface(SURFACE_DETACHED, force)).catch(() => {});
+ return detachedRenderPromise;
+ }
+ previewRenderPromise = previewRenderPromise.then(() => renderSurface(SURFACE_PREVIEW, force)).catch(() => {});
+ return previewRenderPromise;
+ };
+ if (!force) {
+ clearTimeout(renderDebounceTimers.get(surface));
+ return new Promise(resolve => {
+ const pending = renderDebounceResolvers.get(surface) || [];
+ pending.push(resolve);
+ renderDebounceResolvers.set(surface, pending);
+ renderDebounceTimers.set(surface, setTimeout(() => {
+ renderDebounceTimers.delete(surface);
+ runRender().finally(() => {
+ const resolvers = renderDebounceResolvers.get(surface) || [];
+ renderDebounceResolvers.delete(surface);
+ resolvers.forEach(done => done());
+ });
+ }, CHART_RENDER_DEBOUNCE_MS));
+ });
+ }
+ clearTimeout(renderDebounceTimers.get(surface));
+ renderDebounceTimers.delete(surface);
+ const resolvers = renderDebounceResolvers.get(surface) || [];
+ renderDebounceResolvers.delete(surface);
+ const promise = runRender();
+ promise.finally(() => resolvers.forEach(done => done()));
+ return promise;
+ }
+
+ async function persistPreviewOrderContext(orderContext = null, state = null) {
+ if (!previewSurface.mounted || !orderContext) return;
+ const currentState = state || await getChartState();
+ const currentPayload = JSON.stringify(normalizeOrderContext(currentState.orderContext) || null);
+ const nextPayload = JSON.stringify(normalizeOrderContext(orderContext) || null);
+ if (currentPayload === nextPayload) return;
+ await setChartState({ orderContext: normalizeOrderContext(orderContext) });
+ }
+
+ function buildWatchlistSignals(symbols = [], scanResults = []) {
+ const resultMap = new Map((Array.isArray(scanResults) ? scanResults : []).map(item => [String(item?.symbol || '').trim().toUpperCase(), item]));
+ return (Array.isArray(symbols) ? symbols : [])
+ .map(symbol => {
+ const key = String(symbol || '').trim().toUpperCase();
+ return resultMap.get(key) || (key ? { symbol: key } : null);
+ })
+ .filter(Boolean);
+ }
+
+ function chartNeedsIndicators(state = {}, presetMeta = {}) {
+ const raw = sanitizeIndicatorState(state.indicators || {});
+ return !!(
+ raw.ema || raw.sma || raw.vwap || raw.bollinger || raw.supertrend || raw.rsi || raw.macd || raw.obv || raw.atr ||
+ state.showVwap ||
+ presetMeta.showEma || presetMeta.showSma || presetMeta.showVwap || presetMeta.showBollinger ||
+ presetMeta.showSupertrend || presetMeta.showRsi || presetMeta.showMacd || presetMeta.showObv || presetMeta.showAtr ||
+ presetMeta.showIntelligence
+ );
+ }
+
+ function requestedIndicatorKeys(state = {}, presetMeta = {}) {
+ const keys = [];
+ if (isIndicatorGroupActive(state, presetMeta, 'ema')) keys.push('ema');
+ if (isIndicatorGroupActive(state, presetMeta, 'sma')) keys.push('sma');
+ if (isIndicatorGroupActive(state, presetMeta, 'vwap')) keys.push('vwap');
+ if (isIndicatorGroupActive(state, presetMeta, 'bollinger')) keys.push('bollinger');
+ if (isIndicatorGroupActive(state, presetMeta, 'supertrend')) keys.push('supertrend');
+ if (isIndicatorGroupActive(state, presetMeta, 'rsi')) keys.push('rsi');
+ if (isIndicatorGroupActive(state, presetMeta, 'macd')) keys.push('macd');
+ if (isIndicatorGroupActive(state, presetMeta, 'obv')) keys.push('obv');
+ if (isIndicatorGroupActive(state, presetMeta, 'atr')) keys.push('atr');
+ if (presetMeta.showIntelligence) keys.push('ema', 'vwap', 'rsi', 'macd', 'atr', 'obv');
+ return [...new Set(keys)];
+ }
+
+ async function buildChartPayload(surface = SURFACE_PREVIEW, state = {}, strategy = {}, orderContext = null, signal = null, marketIndex = null, force = false) {
+ const dataset = await loadChartDataset(state, strategy, { force });
+ const model = dataset?.ok ? buildChartModel(dataset, state, strategy, orderContext) : null;
+ const indicatorApi = globalThis.FWDTradeDeskIndicators;
+ const normalizedCandles = indicatorApi?.normalizeCandles(dataset?.candles || []) || [];
+ const presetMeta = getPresetMeta(state.preset);
+ const shouldBuildIntelligence = model
+ && indicatorApi?.buildAdvancedChartIntelligence
+ && state.intelligenceOverlays !== false
+ && normalizePreset(state.preset) !== 'clean'
+ && normalizePreset(state.preset) !== 'key';
+ const indicators = normalizedCandles.length && indicatorApi?.calculate && (chartNeedsIndicators(state, presetMeta) || shouldBuildIntelligence)
+ ? indicatorApi.calculate(normalizedCandles, dataset?.studies || {}, { only: requestedIndicatorKeys(state, presetMeta), obvSmaLength: sanitizeIndicatorState(state.indicators || {}).obvSmaLength })
+ : {};
+ const intelligence = shouldBuildIntelligence
+ ? indicatorApi.buildAdvancedChartIntelligence(normalizedCandles, indicators, {
+ surface,
+ state,
+ strategy,
+ dataset,
+ model,
+ signal,
+ marketIndex,
+ orderContext,
+ presetMeta,
+ })
+ : null;
+ return { state, dataset, model, indicators, intelligence };
+ }
+
+ async function renderDeskSurface(surface = SURFACE_TAB, surfaceRef, state = {}, strategy = {}, orderContext = null, signalState = {}, activeSignal = null, force = false) {
+ const fastSingle = state.chartFullscreen === true || state.deskLayoutMode === 'single';
+ const primaryTimeframe = normalizeTimeframe(state.primaryTimeframe || state.timeframe || '15m');
+ const executionTimeframe = normalizeTimeframe(state.executionTimeframe || state.timeframe || '15m');
+ const primaryState = {
+ ...state,
+ timeframe: primaryTimeframe,
+ visibleCandleCount: Math.max(80, state.visibleCandleCount || defaultVisibleCount(primaryTimeframe)),
+ };
+ const executionState = {
+ ...state,
+ timeframe: executionTimeframe,
+ visibleCandleCount: Math.max(80, state.visibleCandleCount || defaultVisibleCount(executionTimeframe)),
+ };
+ const primaryPayload = await buildChartPayload(`${surface}-primary`, primaryState, strategy, orderContext, activeSignal, signalState?.marketIndex || null, force);
+ const executionPayload = fastSingle
+ ? { state: executionState, dataset: null, model: null, indicators: {}, intelligence: null }
+ : await buildChartPayload(`${surface}-execution`, executionState, strategy, orderContext, activeSignal, signalState?.marketIndex || null, force);
+ const scanResults = Array.isArray(signalState?.scanResults) ? signalState.scanResults : [];
+ const contextData = {
+ scanResults,
+ decisionShortlist: Array.isArray(signalState?.decisionShortlist) ? signalState.decisionShortlist : [],
+ manualWatchlistSignals: buildWatchlistSignals(signalState?.manualWatchlist || signalState?.watchlist || [], scanResults),
+ autoWatchlistSignals: buildWatchlistSignals(signalState?.autoWatchlist || [], scanResults),
+ };
+ const markup = buildDeskMarkup(surface, state, strategy, primaryPayload, executionPayload, activeSignal, signalState?.marketIndex || null, contextData);
+ if (!force && markup === surfaceRef.lastMarkup) return;
+ surfaceRef.lastMarkup = markup;
+ surfaceRef.root.innerHTML = markup;
+ bindSurfaceControls(surface, state, executionPayload.model || primaryPayload.model);
+ const renderCharts = () => {
+ const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+ const chartItems = [
+ { key: 'primary', payload: primaryPayload },
+ ...(fastSingle ? [] : [{ key: 'execution', payload: executionPayload }]),
+ ];
+ for (const item of chartItems) {
+ const chartId = `${surface}-${item.key}`;
+ const chartContainer = surfaceRef.root.querySelector(`[data-ds-lwc-chart="${chartId}"]`);
+ if (chartContainer && item.payload.model && item.payload.dataset?.ok && globalThis.FWDTradeDeskChartEngine?.render) {
+ globalThis.FWDTradeDeskChartEngine.render(chartContainer, {
+ surface: chartId,
+ state: item.payload.state,
+ strategy,
+ dataset: item.payload.dataset,
+ model: item.payload.model,
+ intelligence: item.payload.intelligence,
+ indicators: item.payload.indicators,
+ presetMeta: getPresetMeta(state.preset),
+ });
+ if (typeof globalThis.recordPopupPerformanceMetric === 'function') {
+ Promise.resolve(globalThis.recordPopupPerformanceMetric('chart', {
+ durationMs: ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt,
+ surface,
+ charts: fastSingle ? 1 : 2,
+ })).catch(() => {});
+ }
+ }
+ }
+ }
+ if (typeof requestAnimationFrame === 'function') {
+ requestAnimationFrame(renderCharts);
+ } else {
+ setTimeout(renderCharts, 0);
+ }
+ }
+
+ async function renderSurface(surface = SURFACE_PREVIEW, force = false) {
+ const surfaceRef = getSurfaceRef(surface);
+ if (!surfaceRef.mounted || !surfaceRef.root || !document.body.contains(surfaceRef.root)) return;
+ const strategy = await getStrategy();
+ const state = await getChartState();
+ let orderContext = surface === SURFACE_PREVIEW && typeof previewSurface.getOrderContext === 'function'
+ ? normalizeOrderContext(previewSurface.getOrderContext())
+ : normalizeOrderContext(state.orderContext);
+ if (!orderContext && state.orderContext) {
+ orderContext = normalizeOrderContext(state.orderContext);
+ }
+ if (surface === SURFACE_PREVIEW && orderContext) {
+ await persistPreviewOrderContext(orderContext, state);
+ }
+ const refreshChanged = surfaceRef.refreshNonce !== Number(state.refreshNonce || 0);
+ const signalState = await localGet(['scanResults', 'marketIndex', 'decisionShortlist', 'manualWatchlist', 'watchlist', 'autoWatchlist']);
+ const activeSignal = (Array.isArray(signalState?.scanResults) ? signalState.scanResults : [])
+ .find(item => String(item?.symbol || '').trim().toUpperCase() === String(state.symbol || '').trim().toUpperCase()) || null;
+ surfaceRef.refreshNonce = Number(state.refreshNonce || 0);
+ const uiMode = String(state.uiMode || surfaceRef.uiMode || 'default').trim().toLowerCase() || 'default';
+ if ((surface === SURFACE_TAB || surface === SURFACE_DETACHED) && uiMode !== 'journal') {
+ await renderDeskSurface(surface, surfaceRef, state, strategy, orderContext, signalState, activeSignal, force || refreshChanged);
+ return;
+ }
+ const dataset = await loadChartDataset(state, strategy, {
+ force: force || refreshChanged,
+ });
+ const model = dataset?.ok ? buildChartModel(dataset, state, strategy, orderContext) : null;
+ const indicatorApi = globalThis.FWDTradeDeskIndicators;
+ const normalizedCandles = indicatorApi?.normalizeCandles(dataset?.candles || []) || [];
+ const presetMeta = getPresetMeta(state.preset);
+ const shouldBuildIntelligence = model
+ && indicatorApi?.buildAdvancedChartIntelligence
+ && state.intelligenceOverlays !== false
+ && normalizePreset(state.preset) !== 'clean'
+ && normalizePreset(state.preset) !== 'key';
+ const calculatedIndicators = normalizedCandles.length && indicatorApi?.calculate && (chartNeedsIndicators(state, presetMeta) || shouldBuildIntelligence)
+ ? indicatorApi.calculate(normalizedCandles, dataset?.studies || {}, { only: requestedIndicatorKeys(state, presetMeta), obvSmaLength: sanitizeIndicatorState(state.indicators || {}).obvSmaLength })
+ : {};
+ const intelligence = shouldBuildIntelligence
+ ? indicatorApi.buildAdvancedChartIntelligence(normalizedCandles, calculatedIndicators, {
+ surface,
+ state,
+ strategy,
+ dataset,
+ model,
+ signal: activeSignal,
+ marketIndex: signalState?.marketIndex || null,
+ orderContext,
+ presetMeta,
+ })
+ : null;
+ const markup = buildChartMarkup(
+ surface,
+ state,
+ strategy,
+ dataset,
+ model,
+ activeSignal,
+ signalState?.marketIndex || null,
+ uiMode,
+ intelligence,
+ calculatedIndicators
+ );
+ if (!force && markup === surfaceRef.lastMarkup) return;
+ surfaceRef.lastMarkup = markup;
+ surfaceRef.root.innerHTML = markup;
+ bindSurfaceControls(surface, state, model);
+ const renderChart = () => {
+ const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+ const chartContainer = surfaceRef.root.querySelector(`[data-ds-lwc-chart="${surface}"]`);
+ if (!chartContainer || !model || !dataset?.ok || !globalThis.FWDTradeDeskChartEngine?.render) return;
+ globalThis.FWDTradeDeskChartEngine.render(chartContainer, {
+ surface,
+ state,
+ strategy,
+ dataset,
+ model,
+ intelligence,
+ indicators: calculatedIndicators,
+ presetMeta,
+ });
+ if (typeof globalThis.recordPopupPerformanceMetric === 'function') {
+ Promise.resolve(globalThis.recordPopupPerformanceMetric('chart', {
+ durationMs: ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt,
+ surface,
+ charts: 1,
+ })).catch(() => {});
+ }
+ };
+ if (typeof requestAnimationFrame === 'function') {
+ requestAnimationFrame(renderChart);
+ } else {
+ setTimeout(renderChart, 0);
+ }
+ }
+
+ const chartReplayTimers = new Map();
+
+ function buildDraftPatchForPrice(currentState = {}, role = '', price = 0) {
+ const value = Number(price || 0);
+ if (!(value > 0)) return {};
+ const currentDraft = normalizeChartTradingDraft(currentState.chartTradingDraft) || {};
+ const positionSize = Number(currentState.orderContext?.position?.size || 0) || 0;
+ const draft = {
+ symbol: String(currentState.symbol || currentDraft.symbol || '').trim().toUpperCase(),
+ side: currentDraft.side || '',
+ entry: Number(currentDraft.entry || 0) || 0,
+ stopLoss: Number(currentDraft.stopLoss || 0) || 0,
+ takeProfit: Number(currentDraft.takeProfit || 0) || 0,
+ size: Number(currentDraft.size || positionSize || 1) || 1,
+ sizeMode: currentDraft.sizeMode || 'contracts',
+ orderType: currentDraft.orderType || 'market_order',
+ updatedAt: Date.now(),
+ };
+ if (role === 'entry') draft.entry = value;
+ if (role === 'stop') draft.stopLoss = value;
+ if (role === 'target') draft.takeProfit = value;
+ return { chartTradingDraft: normalizeChartTradingDraft(draft) };
+ }
+
+ function nearestDraftRole(draft = null, price = 0) {
+ const normalized = normalizeChartTradingDraft(draft);
+ if (!normalized || !(Number(price) > 0)) return '';
+ return [
+ ['entry', normalized.entry],
+ ['stop', normalized.stopLoss],
+ ['target', normalized.takeProfit],
+ ].filter(([, value]) => Number(value) > 0)
+ .sort((a, b) => Math.abs(Number(a[1]) - Number(price)) - Math.abs(Number(b[1]) - Number(price)))[0]?.[0] || '';
+ }
+
+ async function openChartProtectionPreview(kind = 'stop', preferredSurface = '') {
+ const context = resolveChartTradeShortcutContext(preferredSurface);
+ const state = context?.state || await getChartState();
+ const orderContext = normalizeOrderContext(state.orderContext);
+ const draft = normalizeChartTradingDraft(state.chartTradingDraft);
+ const triggerPrice = kind === 'target' ? Number(draft?.takeProfit || 0) : Number(draft?.stopLoss || 0);
+ const position = orderContext?.position || null;
+ if (position && typeof globalThis.openV16ProtectionOrderPreview === 'function') {
+ await globalThis.openV16ProtectionOrderPreview(position, kind, triggerPrice > 0 ? { triggerPrice } : {});
+ return;
+ }
+ if (typeof globalThis.openV16OpenOrderEditor === 'function' && orderContext?.linkedOrders?.length) {
+ const role = kind === 'target' ? 'take_profit' : 'stop_loss';
+ const linked = orderContext.linkedOrders.find(order => String(order.role || '').toLowerCase() === role) || orderContext.linkedOrders[0];
+ await globalThis.openV16OpenOrderEditor(linked, triggerPrice > 0 ? { triggerPrice } : {});
+ return;
+ }
+ globalThis.showSystemToast?.('Protection preview needs a position', 'Open the chart from a live position or create a buy/sell preview first.', 'warn', 3200);
+ }
+
+ function updateReplayCursorState(currentState = {}, action = 'forward') {
+ const replay = normalizeReplayMode(currentState.replayMode);
+ const stepMap = { back: -1, forward: 1, back10: -10, forward10: 10 };
+ const step = stepMap[action] || 0;
+ if (!replay?.active) {
+ if (currentState.replaySeed) {
+ return { replaySeed: { ...currentState.replaySeed, cursorOffset: action === 'reset' ? 0 : Number(currentState.replaySeed.cursorOffset || 0) + step } };
+ }
+ return {};
+ }
+ if (replay.type === 'trade') {
+ return {
+ replayMode: { ...replay, playing: action === 'reset' ? false : replay.playing },
+ replaySeed: currentState.replaySeed ? { ...currentState.replaySeed, cursorOffset: action === 'reset' ? 0 : Number(currentState.replaySeed.cursorOffset || 0) + step } : null,
+ };
+ }
+ const currentIndex = Number.isFinite(Number(replay.cursorIndex)) ? Math.round(Number(replay.cursorIndex)) : null;
+ if (currentIndex == null && action !== 'reset') {
+ return {
+ replayMode: {
+ ...replay,
+ playing: false,
+ cursorIndex: null,
+ },
+ };
+ }
+ return {
+ replayMode: {
+ ...replay,
+ playing: action === 'reset' ? false : replay.playing,
+ cursorIndex: action === 'reset' ? null : Math.max(0, currentIndex + step),
+ },
+ };
+ }
+
+ function syncReplayPlayback(surface = SURFACE_PREVIEW, state = {}) {
+ const replay = normalizeReplayMode(state.replayMode);
+ clearInterval(chartReplayTimers.get(surface));
+ chartReplayTimers.delete(surface);
+ if (!replay?.active || replay.playing !== true) return;
+ const timer = setInterval(() => {
+ void updateChartState(surface, currentState => updateReplayCursorState(currentState, 'forward'), { forceRender: true });
+ }, replay.speedMs || 900);
+ chartReplayTimers.set(surface, timer);
+ }
+
+ function bindChartTradingSurface(root = document, surface = SURFACE_PREVIEW, state = {}) {
+ root.querySelectorAll('[data-ds-lwc-chart]').forEach(chartContainer => {
+ let dragRole = '';
+ const readPrice = event => globalThis.FWDTradeDeskChartEngine?.readPoint?.(chartContainer, event)?.price || 0;
+ const updateDraftAtEvent = async (event, forcedRole = '') => {
+ const mode = normalizeChartTradingMode((await getChartState()).chartTradingMode || state.chartTradingMode);
+ const price = readPrice(event);
+ const currentState = await getChartState();
+ const role = forcedRole || (mode === 'adjust' ? nearestDraftRole(currentState.chartTradingDraft, price) : mode);
+ if (!['entry', 'stop', 'target'].includes(role)) return;
+ await updateChartState(surface, current => buildDraftPatchForPrice(current, role, price), { forceRender: true });
+ };
+ chartContainer.addEventListener('click', event => {
+ const mode = normalizeChartTradingMode(state.chartTradingMode);
+ if (!['entry', 'stop', 'target', 'adjust'].includes(mode)) return;
+ event.preventDefault();
+ void updateDraftAtEvent(event);
+ });
+ chartContainer.addEventListener('pointerdown', async event => {
+ const currentState = await getChartState();
+ if (normalizeChartTradingMode(currentState.chartTradingMode) !== 'adjust') return;
+ const price = readPrice(event);
+ dragRole = nearestDraftRole(currentState.chartTradingDraft, price);
+ });
+ chartContainer.addEventListener('pointermove', event => {
+ if (!dragRole) return;
+ event.preventDefault();
+ void updateDraftAtEvent(event, dragRole);
+ });
+ const clearDrag = () => { dragRole = ''; };
+ chartContainer.addEventListener('pointerup', clearDrag);
+ chartContainer.addEventListener('pointerleave', clearDrag);
+ });
+ }
+
+ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel = null) {
+ const surfaceRef = getSurfaceRef(surface);
+ const root = surfaceRef.root;
+ if (!root) return;
+ syncReplayPlayback(surface, state);
+ bindChartTradingSurface(root, surface, state);
+ chartTradeShortcutContext.set(surface, { state, chartModel });
+ bindChartTradeShortcuts();
+ if (!fullscreenEscapeListenerBound) {
+ fullscreenEscapeListenerBound = true;
+ const bindKeydown = globalThis.FWDTradeDeskUiEvents?.bindOnce || ((target, type, key, handler) => {
+  target.addEventListener(type, handler);
+  return true;
+ });
+ bindKeydown(document, 'keydown', 'chart-fullscreen-escape', async event => {
+ if (event.key !== 'Escape') return;
+ const currentState = await getChartState();
+ if (currentState.chartFullscreen !== true) return;
+ event.preventDefault();
+ const activeSurface = currentState.chartViewMode === 'detached' ? SURFACE_DETACHED : SURFACE_TAB;
+ await updateChartState(activeSurface, { chartFullscreen: false }, { forceRender: true });
+ });
+ }
+ root.querySelectorAll('[data-ds-chart-tf]').forEach(button => {
+ button.addEventListener('click', async () => {
+ const timeframe = normalizeTimeframe(button.dataset.dsChartTf || '5m');
+ const allCandles = button.dataset.dsChartAllCandles === '1';
+ await updateChartState(surface, currentState => {
+ const nextVisible = allCandles ? MAX_RENDER_CANDLES : (currentState.replaySeed?.baselineVisibleCount || defaultVisibleCount(timeframe));
+ return {
+ timeframe,
+ visibleCandleCount: nextVisible,
+ replaySeed: currentState.replaySeed
+ ? {
+ ...currentState.replaySeed,
+ cursorOffset: 0,
+ baselineVisibleCount: Math.max(24, nextVisible),
+ }
+ : null,
+ };
+ });
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-range]').forEach(button => {
+ button.addEventListener('click', async () => {
+ const range = String(button.dataset.dsChartRange || 'recent').trim().toLowerCase();
+ await updateChartState(surface, currentState => {
+ const timeframe = normalizeTimeframe(currentState.timeframe || '15m');
+ const nextVisible = range === 'all'
+ ? MAX_RENDER_CANDLES
+ : range === '2y'
+ ? (timeframe === '1d' ? 730 : MAX_RENDER_CANDLES)
+ : range === '1y'
+ ? (timeframe === '1d' ? 365 : MAX_RENDER_CANDLES)
+ : defaultVisibleCount(timeframe);
+ return {
+ visibleCandleCount: Math.max(24, Math.min(MAX_RENDER_CANDLES, nextVisible)),
+ replayMode: currentState.replayMode ? { ...currentState.replayMode, cursorIndex: null, playing: false } : null,
+ replaySeed: currentState.replaySeed ? { ...currentState.replaySeed, cursorOffset: 0, baselineVisibleCount: Math.max(24, Math.min(MAX_RENDER_CANDLES, nextVisible)) } : null,
+ };
+ });
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-preset]').forEach(button => {
+ button.addEventListener('click', async () => {
+ const preset = normalizePreset(button.dataset.dsChartPreset || 'clean');
+ await updateChartState(surface, currentState => ({
+ preset,
+ showVwap: getPresetMeta(preset).showVwap ? true : currentState.showVwap,
+ indicators: presetIndicatorDefaults(preset, currentState.indicators || {}),
+ }));
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-setting]').forEach(button => {
+ button.addEventListener('click', async () => {
+ const key = String(button.dataset.dsChartSetting || '').trim();
+ const value = String(button.dataset.dsChartSettingValue || '').trim();
+ if (key === 'chartType') {
+ await updateChartState(surface, { chartType: normalizeChartType(value) });
+ return;
+ }
+ if (key === 'indicatorStyle') {
+ await updateChartState(surface, { indicatorStyle: normalizeIndicatorStyle(value) });
+ }
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-setting-toggle]').forEach(button => {
+ button.addEventListener('click', async () => {
+ const key = String(button.dataset.dsChartSettingToggle || '').trim();
+ if (key === 'showReadout') {
+ await updateChartState(surface, currentState => ({ showReadout: currentState.showReadout !== true }));
+ return;
+ }
+ if (key === 'showIndicatorLegend') {
+ await updateChartState(surface, currentState => ({ showIndicatorLegend: currentState.showIndicatorLegend === false }));
+ return;
+ }
+ if (key === 'showGrid') {
+ await updateChartState(surface, currentState => ({ showGrid: currentState.showGrid !== true }));
+ return;
+ }
+ if (key === 'hideEventCandles') {
+ await updateChartState(surface, currentState => ({ hideEventCandles: currentState.hideEventCandles !== true }), { forceRender: true });
+ }
+ });
+ });
+ root.querySelectorAll('[data-ds-key-level-setting]').forEach(button => {
+ button.addEventListener('click', async () => {
+ const key = String(button.dataset.dsKeyLevelSetting || '').trim();
+ const rawValue = String(button.dataset.dsKeyLevelValue || '').trim();
+ if (!['numberOfLevels', 'pivotLength', 'pivotMemory', 'displayStrengthAs', 'thickness'].includes(key)) return;
+ const value = key === 'displayStrengthAs' ? rawValue : Number(rawValue || 0);
+ await updateKeyLevelSettings(surface, { [key]: value });
+ });
+ });
+ root.querySelectorAll('[data-ds-key-level-toggle]').forEach(button => {
+ button.addEventListener('click', async () => {
+ const key = String(button.dataset.dsKeyLevelToggle || '').trim();
+ if (!['showPivotCircles', 'showLevelGlow'].includes(key)) return;
+ await updateKeyLevelSettings(surface, currentSettings => ({ [key]: currentSettings[key] === false }));
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-toggle]').forEach(button => {
+ button.addEventListener('click', async () => {
+ const toggle = String(button.dataset.dsChartToggle || '').trim();
+ if (toggle === 'orders') {
+ await updateChartState(surface, currentState => ({ showOrders: !currentState.showOrders }));
+ return;
+ }
+ if (toggle === 'vwap') {
+ await updateChartState(surface, currentState => {
+ const nextVwap = !currentState.showVwap;
+ return {
+ showVwap: nextVwap,
+ indicators: sanitizeIndicatorState({ ...(currentState.indicators || {}), vwap: nextVwap }),
+ };
+ });
+ return;
+ }
+ if (toggle === 'right-panel') {
+ await updateChartState(surface, currentState => ({ rightPanelOpen: currentState.rightPanelOpen === false }));
+ return;
+ }
+ if (toggle === 'intel-overlays') {
+ await updateChartState(surface, currentState => ({ intelligenceOverlays: currentState.intelligenceOverlays === false }));
+ }
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-trade]').forEach(button => {
+ button.addEventListener('click', async event => {
+ event.preventDefault();
+ event.stopPropagation();
+ const side = String(button.dataset.dsChartTrade || '').trim().toLowerCase() === 'sell' ? 'sell' : 'buy';
+ await openChartTradePreview(side, surface);
+ });
+ root.querySelectorAll('[data-ds-chart-trading-mode]').forEach(button => {
+ button.addEventListener('click', async () => {
+ const mode = normalizeChartTradingMode(button.dataset.dsChartTradingMode);
+ await updateChartState(surface, { chartTradingMode: mode }, { forceRender: true });
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-draft-clear]').forEach(button => {
+ button.addEventListener('click', async () => {
+ await updateChartState(surface, { chartTradingDraft: null, chartTradingMode: 'select' }, { forceRender: true });
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-preview-protection]').forEach(button => {
+ button.addEventListener('click', async event => {
+ event.preventDefault();
+ event.stopPropagation();
+ await openChartProtectionPreview(String(button.dataset.dsChartPreviewProtection || 'stop').trim().toLowerCase() === 'target' ? 'target' : 'stop', surface);
+ });
+ });
+ });
+ root.querySelectorAll('[data-ds-review-tab]').forEach(button => {
+ button.addEventListener('click', async event => {
+ event.preventDefault();
+ event.stopPropagation();
+ const tabId = String(button.dataset.dsReviewTab || '').trim();
+ if (!tabId) return;
+ await activateChartReviewTab(tabId);
+ await queueSurfaceRender(surface, true);
+ });
+ });
+ root.querySelectorAll('[data-ds-review-tab-close]').forEach(button => {
+ button.addEventListener('click', async event => {
+ event.preventDefault();
+ event.stopPropagation();
+ const tabId = String(button.dataset.dsReviewTabClose || '').trim();
+ if (!tabId) return;
+ await closeChartReviewTab(tabId);
+ await queueSurfaceRender(surface, true);
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-indicator]').forEach(button => {
+ button.addEventListener('click', async () => {
+ const indicator = String(button.dataset.dsChartIndicator || '').trim().toLowerCase();
+ if (!INDICATOR_DEFS.some(definition => definition.key === indicator)) return;
+ await updateChartState(surface, currentState => {
+ const currentIndicators = sanitizeIndicatorState(currentState.indicators || {});
+ const nextValue = !currentIndicators[indicator];
+ return {
+ showVwap: indicator === 'vwap' ? nextValue : currentState.showVwap,
+ indicators: applyIndicatorGroup(currentIndicators, indicator, nextValue),
+ };
+ });
+ });
+ });
+ root.querySelectorAll('[data-ds-indicator-action]').forEach(button => {
+ button.addEventListener('click', async event => {
+ event.preventDefault();
+ event.stopPropagation();
+ const action = String(button.dataset.dsIndicatorAction || '').trim().toLowerCase();
+ const target = String(button.dataset.dsIndicatorTarget || '').trim().toLowerCase();
+ if (!target) return;
+ await updateChartState(surface, currentState => {
+ const presetMeta = getPresetMeta(currentState.preset);
+ const currentIndicators = sanitizeIndicatorState(currentState.indicators || {});
+ const active = isIndicatorGroupActive(currentState, presetMeta, target);
+ const nextValue = action === 'remove' ? false : !active;
+ return {
+ showVwap: target === 'vwap' ? nextValue : currentState.showVwap,
+ indicators: applyIndicatorGroup(currentIndicators, target, nextValue),
+ };
+ });
+ });
+ });
+ root.querySelectorAll('[data-ds-indicator-line]').forEach(button => {
+ button.addEventListener('click', async event => {
+ event.preventDefault();
+ event.stopPropagation();
+ const lineKey = String(button.dataset.dsIndicatorLine || '').trim();
+ if (!lineKey) return;
+ await updateChartState(surface, currentState => {
+ const currentIndicators = sanitizeIndicatorState(currentState.indicators || {});
+ const nextIndicators = sanitizeIndicatorState({
+ ...currentIndicators,
+ [lineKey]: currentIndicators[lineKey] === false,
+ });
+ if (lineKey.startsWith('ema')) nextIndicators.ema = true;
+ if (lineKey.startsWith('obv')) nextIndicators.obv = true;
+ return { indicators: nextIndicators };
+ });
+ });
+ });
+ root.querySelectorAll('[data-ds-indicator-number]').forEach(input => {
+ input.addEventListener('change', async event => {
+ event.preventDefault();
+ event.stopPropagation();
+ const numberKey = String(input.dataset.dsIndicatorNumber || '').trim();
+ if (numberKey !== 'obvSmaLength') return;
+ await updateChartState(surface, currentState => ({
+ indicators: sanitizeIndicatorState({
+ ...(currentState.indicators || {}),
+ obv: true,
+ obvSma: true,
+ obvSmaLength: clampNumber(input.value, DEFAULT_OBV_SMA_LENGTH, 1, 500, 0),
+ }),
+ }));
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-nav]').forEach(button => {
+ button.addEventListener('click', event => {
+ event.preventDefault();
+ event.stopPropagation();
+ const action = String(button.dataset.dsChartNav || '').trim();
+ const target = String(button.dataset.dsChartNavTarget || '').trim();
+ const chartContainer = target
+ ? Array.from(root.querySelectorAll('[data-ds-lwc-chart]')).find(node => node.dataset.dsLwcChart === target)
+ : button.closest('[data-ds-chart-shell]')?.querySelector('[data-ds-lwc-chart]');
+ if (chartContainer && globalThis.FWDTradeDeskChartEngine?.navigate) {
+ globalThis.FWDTradeDeskChartEngine.navigate(chartContainer, action);
+ }
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-zoom]').forEach(button => {
+ button.addEventListener('click', async () => {
+ const direction = String(button.dataset.dsChartZoom || 'in').trim().toLowerCase();
+ await updateChartState(surface, currentState => {
+ const current = Number(currentState.visibleCandleCount || defaultVisibleCount(currentState.timeframe));
+ const step = Math.max(4, Math.round(current * 0.15));
+ const delta = direction === 'out' ? step : -step;
+ return { visibleCandleCount: Math.max(24, Math.min(MAX_RENDER_CANDLES, current + delta)) };
+ });
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-fit]').forEach(button => {
+ button.addEventListener('click', async () => {
+ await updateChartState(surface, currentState => {
+ const baseline = currentState.replaySeed?.baselineVisibleCount || defaultVisibleCount(currentState.timeframe);
+ return {
+ visibleCandleCount: baseline,
+ replaySeed: currentState.replaySeed ? { ...currentState.replaySeed, cursorOffset: 0 } : null,
+ };
+ });
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-refresh]').forEach(button => {
+ button.addEventListener('click', async () => {
+ await updateChartState(surface, { refreshNonce: Date.now() }, { forceRender: true });
+ });
+ });
+ root.querySelectorAll('[data-ds-desk-tf]').forEach(select => {
+ select.addEventListener('change', async () => {
+ const panel = String(select.dataset.dsDeskTf || '').trim();
+ const timeframe = normalizeTimeframe(select.value || '5m');
+ await updateChartState(surface, currentState => ({
+ timeframe: panel === 'execution' ? timeframe : currentState.timeframe,
+ primaryTimeframe: panel === 'primary' ? timeframe : currentState.primaryTimeframe,
+ executionTimeframe: panel === 'execution' ? timeframe : currentState.executionTimeframe,
+ visibleCandleCount: defaultVisibleCount(timeframe),
+ }), { forceRender: true });
+ });
+ });
+ root.querySelectorAll('[data-ds-context-tab]').forEach(button => {
+ button.addEventListener('click', async () => {
+ await updateChartState(surface, { contextTab: normalizeContextTab(button.dataset.dsContextTab) }, { forceRender: true });
+ });
+ });
+ root.querySelectorAll('[data-ds-watchlist-tab]').forEach(button => {
+ button.addEventListener('click', async () => {
+ await updateChartState(surface, { watchlistTab: normalizeWatchlistTab(button.dataset.dsWatchlistTab) }, { forceRender: true });
+ });
+ });
+ root.querySelectorAll('[data-ds-overlay-density]').forEach(button => {
+ button.addEventListener('click', async () => {
+ await updateChartState(surface, { overlayDensity: normalizeOverlayDensity(button.dataset.dsOverlayDensity) }, { forceRender: true });
+ });
+ });
+ root.querySelectorAll('[data-ds-desk-sync]').forEach(button => {
+ button.addEventListener('click', async () => {
+ await updateChartState(surface, currentState => ({ syncCharts: currentState.syncCharts === false }), { forceRender: true });
+ });
+ });
+ root.querySelectorAll('[data-ds-layout-mode]').forEach(button => {
+ button.addEventListener('click', async () => {
+ const mode = String(button.dataset.dsLayoutMode || '').trim() === 'threePart' ? 'threePart' : 'single';
+ await updateChartState(surface, currentState => ({
+ deskLayoutMode: mode,
+ chartFullscreen: false,
+ preset: mode === 'single' ? 'clean' : normalizePreset(currentState.preset || 'decision'),
+ primaryTimeframe: mode === 'single' ? normalizeTimeframe(currentState.primaryTimeframe || currentState.timeframe || '15m') : (currentState.primaryTimeframe || '1d'),
+ executionTimeframe: currentState.executionTimeframe || currentState.timeframe || '15m',
+ rightPanelOpen: mode === 'threePart' ? currentState.rightPanelOpen !== false : false,
+ intelligenceOverlays: mode === 'threePart' ? currentState.intelligenceOverlays !== false : false,
+ overlayDensity: mode === 'single' ? 'minimal' : normalizeOverlayDensity(currentState.overlayDensity || 'trade'),
+ collapsedPanels: mode === 'single' ? { execution: true, context: true } : sanitizeCollapsedPanels(currentState.collapsedPanels),
+ maximizedPanel: null,
+ }), { forceRender: true });
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-fullscreen]').forEach(button => {
+ button.addEventListener('click', async () => {
+ await updateChartState(surface, currentState => {
+ const nextFullscreen = currentState.chartFullscreen !== true;
+ const currentPreset = normalizePreset(currentState.preset || 'key');
+ return {
+ chartFullscreen: nextFullscreen,
+ deskLayoutMode: nextFullscreen ? 'single' : (currentState.deskLayoutMode || 'single'),
+ preset: currentPreset,
+ rightPanelOpen: nextFullscreen ? false : currentState.rightPanelOpen,
+ intelligenceOverlays: nextFullscreen ? false : currentState.intelligenceOverlays,
+ overlayDensity: nextFullscreen ? 'minimal' : normalizeOverlayDensity(currentState.overlayDensity || 'minimal'),
+ collapsedPanels: nextFullscreen ? { execution: true, context: true } : sanitizeCollapsedPanels(currentState.collapsedPanels),
+ maximizedPanel: null,
+ };
+ }, { forceRender: true });
+ });
+ });
+ root.querySelectorAll('[data-ds-desk-collapse]').forEach(button => {
+ button.addEventListener('click', async () => {
+ const panel = String(button.dataset.dsDeskCollapse || '').trim();
+ if (!['primary', 'execution', 'context'].includes(panel)) return;
+ await updateChartState(surface, currentState => {
+ const collapsedPanels = sanitizeCollapsedPanels(currentState.collapsedPanels);
+ collapsedPanels[panel] = !collapsedPanels[panel];
+ return {
+ collapsedPanels,
+ rightPanelOpen: panel === 'context' ? collapsedPanels.context === false : currentState.rightPanelOpen,
+ maximizedPanel: null,
+ };
+ }, { forceRender: true });
+ });
+ });
+ root.querySelectorAll('[data-ds-desk-maximize]').forEach(button => {
+ button.addEventListener('click', async () => {
+ const panel = normalizeMaximizedPanel(button.dataset.dsDeskMaximize);
+ await updateChartState(surface, currentState => ({ maximizedPanel: currentState.maximizedPanel === panel ? null : panel }), { forceRender: true });
+ });
+ });
+ root.querySelectorAll('[data-ds-desk-restore]').forEach(button => {
+ button.addEventListener('click', async () => {
+ await updateChartState(surface, { maximizedPanel: null, collapsedPanels: {} }, { forceRender: true });
+ });
+ });
+ root.querySelectorAll('[data-ds-context-symbol]').forEach(button => {
+ button.addEventListener('click', async () => {
+ const symbol = String(button.dataset.dsContextSymbol || '').trim().toUpperCase();
+ if (!symbol) return;
+ await setChartSymbolFromSignal({ symbol }, { chartViewMode: surface, preset: 'clean', timeframe: '15m', showOrders: false, showVwap: false, rightPanelOpen: false, intelligenceOverlays: false, deskLayoutMode: 'single', overlayDensity: 'minimal' });
+ await queueSurfaceRender(surface, true);
+ });
+ });
+ root.querySelectorAll('[data-ds-desk-splitter]').forEach(splitter => {
+ splitter.addEventListener('pointerdown', event => {
+ event.preventDefault();
+ const kind = String(splitter.dataset.dsDeskSplitter || '');
+ const desk = splitter.closest('.ds-chart-desk');
+ if (!desk) return;
+ const startX = event.clientX;
+ const startWidths = sanitizePanelWidths(state.panelWidths);
+ const rect = desk.getBoundingClientRect();
+ const onMove = moveEvent => {
+ const deltaPct = ((moveEvent.clientX - startX) / Math.max(1, rect.width)) * 100;
+ let next = { ...startWidths };
+ if (kind === 'primary-execution') {
+ next.primary = startWidths.primary + deltaPct;
+ next.execution = startWidths.execution - deltaPct;
+ } else {
+ next.execution = startWidths.execution + deltaPct;
+ next.context = startWidths.context - deltaPct;
+ }
+ next = sanitizePanelWidths(next);
+ desk.style.setProperty('--ds-primary', `${next.primary}fr`);
+ desk.style.setProperty('--ds-execution', `${next.execution}fr`);
+ desk.style.setProperty('--ds-context', `${next.context}fr`);
+ splitter._nextPanelWidths = next;
+ };
+ const onUp = async () => {
+ document.removeEventListener('pointermove', onMove);
+ document.removeEventListener('pointerup', onUp);
+ if (splitter._nextPanelWidths) {
+ await updateChartState(surface, { panelWidths: splitter._nextPanelWidths }, { forceRender: true });
+ }
+ };
+ document.addEventListener('pointermove', onMove);
+ document.addEventListener('pointerup', onUp);
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-open]').forEach(button => {
+ button.addEventListener('click', async () => {
+ await openDetachedChart({ uiMode: surfaceRef.uiMode || state.uiMode || 'default' });
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-load-best]').forEach(button => {
+ button.addEventListener('click', async () => {
+ await autoSelectBestSignalForChart(true);
+ await queueSurfaceRender(surface, true);
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-refresh-symbols]').forEach(button => {
+ button.addEventListener('click', async () => {
+ button.disabled = true;
+ const products = await loadChartMarketSymbols(true);
+ updateChartSymbolDatalist(root, products);
+ button.disabled = false;
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-symbol-form]').forEach(form => {
+ const input = form.querySelector('[data-ds-chart-symbol-input]');
+ input?.addEventListener('focus', async () => {
+ const products = await loadChartMarketSymbols(false);
+ updateChartSymbolDatalist(root, products);
+ });
+ input?.addEventListener('input', async () => {
+ if (!chartMarketSymbolsCache?.length && String(input.value || '').trim().length >= 1) {
+ const products = await loadChartMarketSymbols(false);
+ updateChartSymbolDatalist(root, products);
+ }
+ });
+ form.addEventListener('submit', async event => {
+ event.preventDefault();
+ const products = await loadChartMarketSymbols(false);
+ updateChartSymbolDatalist(root, products);
+ const symbol = normalizeChartSymbolInput(form.querySelector('[data-ds-chart-symbol-input]')?.value || '', products);
+ if (!symbol) return;
+ await setChartSymbolFromSignal({ symbol }, {
+ chartViewMode: surface,
+ timeframe: '15m',
+ showOrders: false,
+ showVwap: false,
+ rightPanelOpen: false,
+ intelligenceOverlays: false,
+ deskLayoutMode: 'single',
+ overlayDensity: 'minimal',
+ });
+ await queueSurfaceRender(surface, true);
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-replay]').forEach(button => {
+ button.addEventListener('click', async () => {
+ const action = String(button.dataset.dsChartReplay || '').trim().toLowerCase();
+ await updateChartState(surface, currentState => updateReplayCursorState(currentState, action), { forceRender: true });
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-replay-mode]').forEach(button => {
+ button.addEventListener('click', async () => {
+ const mode = String(button.dataset.dsChartReplayMode || '').trim().toLowerCase();
+ const defaultMarketCursor = chartModel?.totalCount
+ ? Math.max(0, Number(chartModel.totalCount || 0) - Math.max(12, Math.round(Number(chartModel.visibleCount || 120) * 0.75)))
+ : null;
+ await updateChartState(surface, currentState => {
+ if (mode === 'off') return { replayMode: null, replaySeed: currentState.replaySeed ? { ...currentState.replaySeed, cursorOffset: 0 } : null };
+ if (mode === 'trade' && currentState.replaySeed) return { replayMode: normalizeReplayMode({ active: true, type: 'trade', playing: false, speedMs: currentState.replayMode?.speedMs || 900, cursorIndex: null }), replaySeed: { ...currentState.replaySeed, cursorOffset: 0 } };
+ return { replayMode: normalizeReplayMode({ active: true, type: 'market', playing: false, speedMs: currentState.replayMode?.speedMs || 900, cursorIndex: defaultMarketCursor }) };
+ }, { forceRender: true });
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-replay-play]').forEach(button => {
+ button.addEventListener('click', async () => {
+ await updateChartState(surface, currentState => {
+ const replay = normalizeReplayMode(currentState.replayMode) || normalizeReplayMode({ active: true, type: currentState.replaySeed ? 'trade' : 'market', speedMs: 900 });
+ const currentCursor = Number(replay?.cursorIndex);
+ const renderedCursor = Number(chartModel?.replayCursor?.index);
+ const cursorIndex = replay?.type === 'market' && !Number.isFinite(currentCursor) && Number.isFinite(renderedCursor)
+ ? renderedCursor
+ : replay?.cursorIndex;
+ return { replayMode: { ...replay, cursorIndex, playing: replay.playing !== true } };
+ }, { forceRender: true });
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-replay-speed]').forEach(select => {
+ select.addEventListener('change', async () => {
+ await updateChartState(surface, currentState => {
+ const replay = normalizeReplayMode(currentState.replayMode) || normalizeReplayMode({ active: true, type: currentState.replaySeed ? 'trade' : 'market' });
+ return { replayMode: { ...replay, speedMs: clampNumber(select.value, 900, 180, 5000, 0) } };
+ }, { forceRender: true });
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-shell]').forEach(shell => {
+ shell.addEventListener('wheel', async event => {
+ event.preventDefault();
+ if (event.shiftKey) {
+ await updateChartState(surface, currentState => {
+ const step = event.deltaY < 0 ? -5 : 5;
+ const action = step < 0 ? 'back10' : 'forward10';
+ return updateReplayCursorState(currentState, action);
+ }, { forceRender: true });
+ } else {
+ await updateChartState(surface, currentState => {
+ const current = Number(currentState.visibleCandleCount || defaultVisibleCount(currentState.timeframe));
+ const step = Math.max(4, Math.round(current * 0.1));
+ const delta = event.deltaY < 0 ? -step : step;
+ return { visibleCandleCount: Math.max(24, Math.min(MAX_RENDER_CANDLES, current + delta)) };
+ });
+ }
+ }, { passive: false });
+ });
+ const crosshairTarget = root.querySelector('[data-ds-chart-crosshair]');
+ const crosshairLayer = root.querySelector('[data-ds-crosshair-layer]');
+ if (crosshairTarget && crosshairLayer && chartModel) {
+ const shellEl = crosshairTarget.closest('.ds-chart-shell');
+ crosshairTarget.addEventListener('mousemove', event => {
+ if (!shellEl) return;
+ const rect = shellEl.getBoundingClientRect();
+ const xPct = ((event.clientX - rect.left) / rect.width) * 100;
+ const yPct = ((event.clientY - rect.top) / rect.height) * 100;
+ crosshairLayer.hidden = false;
+ const hLine = crosshairLayer.querySelector('.ds-chart-crosshair-h');
+ const vLine = crosshairLayer.querySelector('.ds-chart-crosshair-v');
+ const tooltip = crosshairLayer.querySelector('.ds-chart-crosshair-tooltip');
+ if (hLine) hLine.style.top = `${yPct}%`;
+ if (vLine) vLine.style.left = `${xPct}%`;
+ if (tooltip) {
+ const candleIndex = Math.round((xPct / 100) * Math.max(0, chartModel.candles.length - 1));
+ const candle = chartModel.candles[Math.max(0, Math.min(candleIndex, chartModel.candles.length - 1))];
+ if (candle) {
+ tooltip.style.left = `${Math.min(xPct, 75)}%`;
+ tooltip.style.top = `${Math.max(yPct - 12, 2)}%`;
+ const d = new Date(candle.time);
+ tooltip.textContent = `O:${formatPrice(candle.open)} H:${formatPrice(candle.high)} L:${formatPrice(candle.low)} C:${formatPrice(candle.close)} V:${candle.volume.toLocaleString()} ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+ }
+ }
+ });
+ crosshairTarget.addEventListener('mouseleave', () => {
+ crosshairLayer.hidden = true;
+ });
+ }
+ }
+
+ function bindKeyboardShortcuts(surface = SURFACE_DETACHED) {
+ if (surface !== SURFACE_DETACHED) return;
+ if (keyboardShortcutSurfacesBound.has(surface)) return;
+ keyboardShortcutSurfacesBound.add(surface);
+ document.addEventListener('keydown', async event => {
+ const key = event.key;
+ if (key === 'ArrowLeft' || key === 'ArrowRight') {
+ event.preventDefault();
+ const step = event.shiftKey ? 10 : 1;
+ const action = key === 'ArrowLeft' ? (step === 10 ? 'back10' : 'back') : (step === 10 ? 'forward10' : 'forward');
+ await updateChartState(surface, currentState => updateReplayCursorState(currentState, action), { forceRender: true });
+ } else if (key === '+' || key === '=') {
+ event.preventDefault();
+ await updateChartState(surface, currentState => {
+ const current = Number(currentState.visibleCandleCount || defaultVisibleCount(currentState.timeframe));
+ return { visibleCandleCount: Math.max(24, current - Math.max(4, Math.round(current * 0.15))) };
+ });
+ } else if (key === '-') {
+ event.preventDefault();
+ await updateChartState(surface, currentState => {
+ const current = Number(currentState.visibleCandleCount || defaultVisibleCount(currentState.timeframe));
+ return { visibleCandleCount: Math.min(MAX_RENDER_CANDLES, current + Math.max(4, Math.round(current * 0.15))) };
+ });
+ } else if (key === '0') {
+ event.preventDefault();
+ await updateChartState(surface, currentState => {
+ const baseline = currentState.replaySeed?.baselineVisibleCount || defaultVisibleCount(currentState.timeframe);
+ return { visibleCandleCount: baseline, replayMode: currentState.replayMode ? { ...currentState.replayMode, cursorIndex: null, playing: false } : null, replaySeed: currentState.replaySeed ? { ...currentState.replaySeed, cursorOffset: 0 } : null };
+ });
+ }
+ });
+ }
+
+ function bindStorageListener() {
+ if (storageListenerBound || !chrome.storage?.onChanged) return;
+ storageListenerBound = true;
+ let storageDebounceTimer = null;
+ chrome.storage.onChanged.addListener((changes, areaName) => {
+ if (areaName !== 'local') return;
+ const changedKeys = Object.keys(changes || {});
+ if (!changedKeys.length) return;
+ const relevant =
+ changedKeys.includes(DS_V17_CHART_STATE_KEY) ||
+ changedKeys.includes('strategy') ||
+ changedKeys.includes(DS_V17_CHART_CACHE_KEY);
+ if (!relevant) return;
+ clearTimeout(storageDebounceTimer);
+ storageDebounceTimer = setTimeout(() => {
+ void queueSurfaceRender(SURFACE_PREVIEW);
+ void queueSurfaceRender(SURFACE_TAB);
+ void queueSurfaceRender(SURFACE_DETACHED);
+ }, 150);
+ });
+ }
