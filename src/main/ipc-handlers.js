@@ -116,7 +116,6 @@ function createIpcHandlers({
    if (type === 'auth_setup') return auth.setup(message, event);
    if (type === 'auth_login') return auth.login(message, event);
    if (type === 'auth_reset_password') return auth.resetPassword(message, event);
-   if (type === 'auth_update_auto_lock') return auth.updateAutoLock(message, event);
    if (type === 'auth_update_security') return auth.updateSecurity(message, event);
    if (type === 'auth_logout') {
     auth.lock();
@@ -128,6 +127,15 @@ function createIpcHandlers({
    if (authBlock) return authBlock;
 
    if (type === 'open_desktop_window') return createAuxiliaryWindow({ url: message.url, state: message.state });
+   if (type === 'set_window_fullscreen') {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) return { ok: false, error: 'Window is not available.' };
+    const fullscreen = message.fullscreen === true;
+    win.setAutoHideMenuBar(fullscreen);
+    win.setMenuBarVisibility(!fullscreen);
+    win.setFullScreen(fullscreen);
+    return { ok: true, fullscreen };
+   }
    if (type === 'desktop_notification') return desktopNotifications.notify(message);
    if (type === 'error_journal_get') return { ok: true, entries: await errorJournal.list(message.limit) };
    if (type === 'error_journal_clear') return errorJournal.clear();

@@ -35,7 +35,9 @@
 
  const DS_V17_CHART_STATE_KEY = 'dsDetachedChartStateV17';
  const DS_V17_CHART_CACHE_KEY = 'dsChartCacheV17';
- const RESOLUTIONS = Object.freeze(['1m', '5m', '15m', '1h', '4h', '1d']);
+ let chartRuntimeCache = {};
+ let chartPersistentCacheCleared = false;
+ const RESOLUTIONS = Object.freeze(['1m', '5m', '15m', '1h', '4h', '1d', '1w']);
  const RESOLUTION_LABELS = Object.freeze({
  '1m': '1m',
  '5m': '5m',
@@ -43,6 +45,7 @@
  '1h': '1h',
  '4h': '4h',
  '1d': '1D',
+ '1w': '1W',
  });
  const TTL_MS = Object.freeze({
  '1m': 30000,
@@ -51,6 +54,7 @@
  '1h': 600000,
  '4h': 1800000,
  '1d': 14400000,
+ '1w': 43200000,
  });
  const DEFAULT_VISIBLE_COUNTS = Object.freeze({
  '1m': 260,
@@ -59,6 +63,7 @@
  '1h': 420,
  '4h': 520,
  '1d': 520,
+ '1w': 520,
  });
  const MAX_RENDER_CANDLES = 20000;
  const DEFAULT_OBV_SMA_LENGTH = 100;
@@ -69,23 +74,16 @@
  '1h': 120,
  '4h': 140,
  '1d': 140,
+ '1w': 80,
  });
  const PRESET_META = Object.freeze({
  clean: { id: 'clean', label: 'Clean', showEma: false, showSma: false, showKeyLevels: false },
- trend: { id: 'trend', label: 'Trend', showEma: true, showSma: true, showKeyLevels: false, showSupertrend: true },
- momentum: { id: 'momentum', label: 'Momentum', showEma: false, showSma: false, showKeyLevels: false, showRsi: true, showMacd: true },
  key: { id: 'key', label: 'Key Levels', showEma: false, showSma: false, showKeyLevels: true },
- trade: { id: 'trade', label: 'Trade Read', showEma: true, showSma: false, showKeyLevels: true, showVwap: true, showRsi: false, showMacd: false, showIntelligence: true },
- decision: { id: 'decision', label: 'Decision', showEma: true, showSma: false, showKeyLevels: true, showVwap: true, showRsi: false, showMacd: false, showIntelligence: true, showDecision: true },
- analysis: { id: 'analysis', label: 'Full Analysis', showEma: true, showSma: true, showKeyLevels: true, showVwap: true, showBollinger: true, showRsi: true, showMacd: true, showAtr: true, showIntelligence: true },
- ema: { id: 'ema', label: 'EMA', showEma: true, showSma: false, showKeyLevels: false },
- ema_obv: { id: 'ema_obv', label: 'EMA + OBV SMA', showEma: true, showSma: false, showKeyLevels: false, showObv: true, showObvSma: true },
+ decision: { id: 'decision', label: 'Decision', showEma: true, showSma: false, showKeyLevels: true, showObv: true, showObvSma: true, showIntelligence: true, showDecision: true },
+ ema_obv: { id: 'ema_obv', label: 'EMA + OBV', showEma: true, showSma: false, showKeyLevels: false, showObv: true, showObvSma: true },
  });
  const PRESET_GROUPS = Object.freeze([
- { label: 'Decision', presets: ['decision', 'trade'] },
- { label: 'Simple', presets: ['clean', 'key'] },
- { label: 'Technical', presets: ['ema_obv', 'ema', 'trend', 'momentum'] },
- { label: 'Advanced', presets: ['analysis'] },
+ { label: 'Chart Preset', presets: ['clean', 'decision', 'ema_obv'] },
  ]);
  const INDICATOR_DEFS = Object.freeze([
  { key: 'volume', label: 'Volume' },
@@ -98,6 +96,7 @@
  { key: 'macd', label: 'MACD' },
  { key: 'obv', label: 'OBV' },
  { key: 'atr', label: 'ATR' },
+ { key: 'darvas', label: 'Darvas Box' },
  ]);
  const DEFAULT_INDICATORS = Object.freeze({
  volume: true,
@@ -125,6 +124,31 @@
  obvSmaLength: DEFAULT_OBV_SMA_LENGTH,
  atr: false,
  atrRemoved: false,
+ darvas: false,
+ darvasRemoved: false,
+ });
+ const DARVAS_BOX_DEFAULTS = Object.freeze({
+ enabled: false,
+ lookback: 0,
+ confirmationCandles: 3,
+ volumeMultiplier: 1.5,
+ atrBreakoutBuffer: 0.10,
+ retestAtrTolerance: 0.25,
+ stopLossAtrBuffer: 0.25,
+ maxIntradayHeightPct: 5,
+ maxDailyHeightPct: 10,
+ showHistoricalBoxes: true,
+ maxBoxesVisible: 10,
+ showScannerDetails: true,
+ chartLabels: 'minimal',
+ showEntryLine: true,
+ showTargetLines: true,
+ showTargets: true,
+ showStopLoss: true,
+ showTooltip: true,
+ showFailedBoxes: true,
+ showWeakBreakoutBoxes: true,
+ showOnlyHighQuality: false,
  });
  const SURFACE_PREVIEW = 'preview';
  const SURFACE_DETACHED = 'detached';
@@ -138,9 +162,13 @@
  const CHART_RENDER_DEBOUNCE_MS = 90;
  const CHART_MARKET_SYMBOLS_KEY = 'dsChartMarketSymbolsV17';
  const CHART_MARKET_SYMBOLS_TTL_MS = 6 * 60 * 60 * 1000;
+ const FWD_INDEX_HISTORY_CACHE_KEY = 'dsFwdIndexDailyHistoryV17';
+ const FWD_INDEX_HISTORY_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+ const FWD_INDEX_MAX_HISTORY_CANDIDATES = 360;
  const FWD_INDEX_CHART_HISTORY_LIMIT = 5000;
- const FWD_INDEX_SYMBOL = 'FWD10';
- const FWD_INDEX_ALIASES = Object.freeze(['FWD10', 'FWD-10', 'FWD10INDEX', 'FWD-10INDEX', 'F10', 'FWDINDEX']);
+ const FWD_INDEX_DAILY_HISTORY_LIMIT = 730;
+ const FWD_INDEX_SYMBOL = 'FWD100';
+ const FWD_INDEX_ALIASES = Object.freeze(['FWD100', 'FWD-100', 'FWD100INDEX', 'FWD-100INDEX', 'F100', 'FWD10', 'FWD-10', 'FWD10INDEX', 'FWD-10INDEX', 'F10', 'FWDINDEX']);
  let chartMarketSymbolsCache = null;
  let chartMarketSymbolsPromise = null;
  const detachedSurface = {
@@ -281,8 +309,9 @@
  })
  .filter(product => product.symbol)
  .sort((a, b) => a.symbol.localeCompare(b.symbol));
+ const indexProduct = { symbol: FWD_INDEX_SYMBOL, name: 'FWD-100 Equal-Weight Index', description: 'FWD-100 Equal-Weight Index', instrumentDescription: 'FWD-100 Equal-Weight Index', sector: 'Market Index', synthetic: true };
  const withIndex = [
- { symbol: FWD_INDEX_SYMBOL, name: 'FWD-10 INDEX', sector: 'Market Index', synthetic: true },
+ indexProduct,
  ...products.filter(product => product.symbol !== FWD_INDEX_SYMBOL),
  ];
  if (withIndex.length) {
@@ -290,7 +319,7 @@
  await localSet({ [CHART_MARKET_SYMBOLS_KEY]: { products: withIndex, fetchedAt: Date.now() } });
  return withIndex;
  }
- chartMarketSymbolsCache = [{ symbol: FWD_INDEX_SYMBOL, name: 'FWD-10 INDEX', sector: 'Market Index', synthetic: true }, ...cachedRows.filter(product => product.symbol !== FWD_INDEX_SYMBOL)];
+ chartMarketSymbolsCache = [indexProduct, ...cachedRows.filter(product => product.symbol !== FWD_INDEX_SYMBOL)];
  return chartMarketSymbolsCache;
  })().finally(() => {
  chartMarketSymbolsPromise = null;
@@ -476,16 +505,20 @@
 
  function normalizeTimeframe(value = '') {
  const next = String(value || '').trim().toLowerCase();
+ if (next === 'w' || next === '1wk' || next === 'week' || next === 'weekly') return '1w';
  if (next === '1d') return '1d';
  return RESOLUTIONS.includes(next) ? next : '5m';
  }
 
  function normalizePreset(value = '') {
  const preset = String(value || '').trim().toLowerCase();
- if (preset === 'traderead' || preset === 'trade-read') return 'trade';
+ if (preset === 'traderead' || preset === 'trade-read' || preset === 'trade') return 'decision';
  if (preset === 'decisionworkflow' || preset === 'decision-workflow') return 'decision';
  if (preset === 'ema-obv' || preset === 'emaobv' || preset === 'ema_obv_sma') return 'ema_obv';
- return PRESET_META[preset] ? preset : 'clean';
+ if (preset === 'trend' || preset === 'momentum' || preset === 'analysis' || preset === 'full-analysis' || preset === 'ema') return 'ema_obv';
+ if (preset === 'clean') return 'clean';
+ if (preset === 'key' || preset === 'key-levels') return 'key';
+ return PRESET_META[preset] ? preset : 'decision';
  }
 
  function normalizeContextTab(value = '') {
@@ -517,6 +550,35 @@
  const symbol = String(raw.symbol || '').trim().toUpperCase();
  const hasLine = entry > 0 || stopLoss > 0 || takeProfit > 0;
  if (!hasLine && !symbol) return null;
+ const rawDarvasBox = raw.darvasBox && typeof raw.darvasBox === 'object' ? raw.darvasBox : null;
+ const darvasTop = Number(rawDarvasBox?.top || rawDarvasBox?.boxTop || 0);
+ const darvasBottom = Number(rawDarvasBox?.bottom || rawDarvasBox?.boxBottom || 0);
+ const darvasBox = darvasTop > 0 && darvasBottom > 0 && darvasTop > darvasBottom
+ ? {
+  top: darvasTop,
+  bottom: darvasBottom,
+  age: Math.max(2, Math.min(200, Math.round(Number(rawDarvasBox?.age || rawDarvasBox?.boxAge || 24) || 24))),
+  eventType: String(rawDarvasBox?.eventType || '').trim().toLowerCase(),
+  label: String(rawDarvasBox?.label || 'Darvas Box').trim(),
+  status: String(rawDarvasBox?.status || '').trim(),
+  score: clampNumber(rawDarvasBox?.score || rawDarvasBox?.breakoutScore, 0, 0, 100, 0),
+  quality: String(rawDarvasBox?.quality || '').trim(),
+  heightPercent: clampNumber(rawDarvasBox?.heightPercent || rawDarvasBox?.boxHeightPct, 0, 0, 500, 2),
+  volumeConfirmed: rawDarvasBox?.volumeConfirmed === true,
+  volumeRatio: Number(rawDarvasBox?.volumeRatio || 0) || 0,
+  riskPercent: clampNumber(rawDarvasBox?.riskPercent || rawDarvasBox?.riskPct, 0, 0, 500, 2),
+  stopLoss: Number(rawDarvasBox?.stopLoss || rawDarvasBox?.sl || 0) || 0,
+  target1: Number(rawDarvasBox?.target1 || rawDarvasBox?.t1 || 0) || 0,
+  target2: Number(rawDarvasBox?.target2 || rawDarvasBox?.t2 || 0) || 0,
+  reason: String(rawDarvasBox?.reason || '').trim().slice(0, 360),
+  startTime: normalizeTsMs(rawDarvasBox?.startTime || rawDarvasBox?.fromTime || 0),
+  endTime: normalizeTsMs(rawDarvasBox?.endTime || rawDarvasBox?.toTime || 0),
+  formedAt: normalizeTsMs(rawDarvasBox?.formedAt || rawDarvasBox?.confirmedAt || 0),
+  breakoutAt: normalizeTsMs(rawDarvasBox?.breakoutAt || 0),
+  retestAt: normalizeTsMs(rawDarvasBox?.retestAt || 0),
+  failedAt: normalizeTsMs(rawDarvasBox?.failedAt || 0),
+ }
+ : null;
  return {
  symbol,
  side,
@@ -526,7 +588,10 @@
  size: Math.max(0, Number(raw.size || 0) || 0),
  sizeMode: String(raw.sizeMode || 'contracts').trim().toLowerCase() || 'contracts',
  orderType: String(raw.orderType || 'market_order').trim().toLowerCase() || 'market_order',
+ source: String(raw.source || '').trim().slice(0, 80),
+ note: String(raw.note || '').trim().slice(0, 240),
  updatedAt: clampNumber(raw.updatedAt, Date.now(), 0, Number.MAX_SAFE_INTEGER, 0),
+ ...(darvasBox ? { darvasBox } : {}),
  };
  }
 
@@ -648,6 +713,7 @@
  '1h': 60 * 60 * 1000,
  '4h': 4 * 60 * 60 * 1000,
  '1d': 24 * 60 * 60 * 1000,
+ '1w': 7 * 24 * 60 * 60 * 1000,
  };
  return map[normalizeTimeframe(resolution)] || map['5m'];
  }
@@ -704,6 +770,9 @@
  kind: String(line.kind || '').trim().toLowerCase() || '',
  source: String(line.source || '').trim().toLowerCase() || '',
  meta: String(line.meta || '').trim(),
+ orderId: String(line.orderId || line.id || '').trim(),
+ clientOrderId: String(line.clientOrderId || '').trim(),
+ role: String(line.role || line.kind || line.tone || '').trim().toLowerCase(),
  };
  }
 
@@ -720,6 +789,14 @@
  role: String(order.role || '').trim().toLowerCase(),
  side: String(order.side || '').trim().toLowerCase(),
  reduceOnly: !!order.reduceOnly,
+ productId: Number(order.productId || 0),
+ state: String(order.state || '').trim().toLowerCase(),
+ orderType: String(order.orderType || order.type || '').trim().toLowerCase(),
+ stopOrderType: String(order.stopOrderType || '').trim().toLowerCase(),
+ postOnly: order.postOnly === true,
+ remainingSize: Number(order.remainingSize || order.unfilledSize || order.size || 0) || 0,
+ size: Number(order.size || order.remainingSize || order.unfilledSize || 0) || 0,
+ price: Number(order.price || order.limitPrice || order.stopPrice || 0) || 0,
  limitPrice: Number(order.limitPrice || 0),
  stopPrice: Number(order.stopPrice || 0),
  }))
@@ -754,6 +831,39 @@
  function normalizeIndicatorStyle(raw = '') {
  const value = String(raw || '').trim().toLowerCase();
  return value === 'clean' ? 'clean' : 'tradingview';
+ }
+
+ function defaultDarvasLookback(timeframe = '15m') {
+ const tf = normalizeTimeframe(timeframe || '15m');
+ return tf === '1d' || tf === '1w' ? 50 : 20;
+ }
+
+ function sanitizeDarvasBoxSettings(value = {}, timeframe = '15m') {
+ const raw = value && typeof value === 'object' ? value : {};
+ return {
+ enabled: Object.prototype.hasOwnProperty.call(raw, 'enabled') ? raw.enabled !== false : DARVAS_BOX_DEFAULTS.enabled,
+ lookback: clampNumber(raw.lookback, DARVAS_BOX_DEFAULTS.lookback, 0, 160, 0),
+ confirmationCandles: clampNumber(raw.confirmationCandles, DARVAS_BOX_DEFAULTS.confirmationCandles, 2, 8, 0),
+ volumeMultiplier: clampNumber(raw.volumeMultiplier, DARVAS_BOX_DEFAULTS.volumeMultiplier, 0.5, 5, 2),
+ atrBreakoutBuffer: clampNumber(raw.atrBreakoutBuffer, DARVAS_BOX_DEFAULTS.atrBreakoutBuffer, 0, 2, 2),
+ retestAtrTolerance: clampNumber(raw.retestAtrTolerance, DARVAS_BOX_DEFAULTS.retestAtrTolerance, 0.05, 2, 2),
+ stopLossAtrBuffer: clampNumber(raw.stopLossAtrBuffer, DARVAS_BOX_DEFAULTS.stopLossAtrBuffer, 0, 2, 2),
+ maxIntradayHeightPct: clampNumber(raw.maxIntradayHeightPct, DARVAS_BOX_DEFAULTS.maxIntradayHeightPct, 1, 25, 1),
+ maxDailyHeightPct: clampNumber(raw.maxDailyHeightPct, DARVAS_BOX_DEFAULTS.maxDailyHeightPct, 2, 40, 1),
+ showHistoricalBoxes: Object.prototype.hasOwnProperty.call(raw, 'showHistoricalBoxes') ? raw.showHistoricalBoxes !== false : DARVAS_BOX_DEFAULTS.showHistoricalBoxes,
+ maxBoxesVisible: clampNumber(raw.maxBoxesVisible, DARVAS_BOX_DEFAULTS.maxBoxesVisible, 1, 50, 0),
+ showScannerDetails: Object.prototype.hasOwnProperty.call(raw, 'showScannerDetails') ? raw.showScannerDetails !== false : DARVAS_BOX_DEFAULTS.showScannerDetails,
+ chartLabels: String(raw.chartLabels || DARVAS_BOX_DEFAULTS.chartLabels).trim().toLowerCase() === 'detailed' ? 'detailed' : 'minimal',
+ showEntryLine: Object.prototype.hasOwnProperty.call(raw, 'showEntryLine') ? raw.showEntryLine !== false : DARVAS_BOX_DEFAULTS.showEntryLine,
+ showTargetLines: Object.prototype.hasOwnProperty.call(raw, 'showTargetLines') ? raw.showTargetLines !== false : DARVAS_BOX_DEFAULTS.showTargetLines,
+ showTargets: Object.prototype.hasOwnProperty.call(raw, 'showTargets') ? raw.showTargets !== false : DARVAS_BOX_DEFAULTS.showTargets,
+ showStopLoss: Object.prototype.hasOwnProperty.call(raw, 'showStopLoss') ? raw.showStopLoss !== false : DARVAS_BOX_DEFAULTS.showStopLoss,
+ showTooltip: Object.prototype.hasOwnProperty.call(raw, 'showTooltip') ? raw.showTooltip !== false : DARVAS_BOX_DEFAULTS.showTooltip,
+ showFailedBoxes: Object.prototype.hasOwnProperty.call(raw, 'showFailedBoxes') ? raw.showFailedBoxes !== false : DARVAS_BOX_DEFAULTS.showFailedBoxes,
+ showWeakBreakoutBoxes: Object.prototype.hasOwnProperty.call(raw, 'showWeakBreakoutBoxes') ? raw.showWeakBreakoutBoxes !== false : DARVAS_BOX_DEFAULTS.showWeakBreakoutBoxes,
+ showOnlyHighQuality: raw.showOnlyHighQuality === true,
+ activeLookback: Number(raw.lookback || 0) > 0 ? clampNumber(raw.lookback, defaultDarvasLookback(timeframe), 5, 160, 0) : defaultDarvasLookback(timeframe),
+ };
  }
 
  const CHART_REVIEW_TAB_LIMIT = 16;
@@ -813,6 +923,7 @@
  replayMode: null,
  chartTradingDraft: null,
  chartTradingMode: 'select',
+ chartTradingToolsOpen: false,
  orderContext: null,
  refreshNonce: 0,
  uiMode: 'default',
@@ -835,7 +946,9 @@
  showReadout: false,
  showIndicatorLegend: true,
  showGrid: false,
+ compareWithIndex: true,
  hideEventCandles: true,
+ darvasSettings: sanitizeDarvasBoxSettings({}, '15m'),
  chartReviewTabs: [],
  activeChartReviewTabId: '',
  chartReviewOverlayOpen: false,
@@ -875,6 +988,7 @@
  replayMode: normalizeReplayMode(raw.replayMode),
  chartTradingDraft: normalizeChartTradingDraft(raw.chartTradingDraft),
  chartTradingMode: normalizeChartTradingMode(raw.chartTradingMode || base.chartTradingMode),
+ chartTradingToolsOpen: Object.prototype.hasOwnProperty.call(raw, 'chartTradingToolsOpen') ? raw.chartTradingToolsOpen === true : base.chartTradingToolsOpen === true,
  orderContext: normalizeOrderContext(raw.orderContext),
  refreshNonce: clampNumber(raw.refreshNonce, 0, 0, Number.MAX_SAFE_INTEGER, 0),
  uiMode,
@@ -897,7 +1011,9 @@
  showReadout: Object.prototype.hasOwnProperty.call(raw, 'showReadout') ? raw.showReadout === true : base.showReadout === true,
  showIndicatorLegend: Object.prototype.hasOwnProperty.call(raw, 'showIndicatorLegend') ? raw.showIndicatorLegend !== false : base.showIndicatorLegend !== false,
  showGrid: Object.prototype.hasOwnProperty.call(raw, 'showGrid') ? raw.showGrid === true : base.showGrid === true,
+ compareWithIndex: Object.prototype.hasOwnProperty.call(raw, 'compareWithIndex') ? raw.compareWithIndex !== false : base.compareWithIndex !== false,
  hideEventCandles: Object.prototype.hasOwnProperty.call(raw, 'hideEventCandles') ? raw.hideEventCandles === true : base.hideEventCandles === true,
+ darvasSettings: sanitizeDarvasBoxSettings(raw.darvasSettings || base.darvasSettings, timeframe),
  chartReviewTabs: sanitizeChartReviewTabs(raw.chartReviewTabs || base.chartReviewTabs),
  activeChartReviewTabId: String(raw.activeChartReviewTabId || '').trim(),
  chartReviewOverlayOpen: raw.chartReviewOverlayOpen === true,

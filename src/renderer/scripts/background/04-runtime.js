@@ -1,6 +1,19 @@
-const STALE_SCAN_HEARTBEAT_MS = 180 * 1000;
-const SCAN_HARD_DEADLINE_MS = 300 * 1000; // 5 min - force-kill any hung scan
+const STALE_SCAN_HEARTBEAT_MS = 10 * 60 * 1000;
+const SCAN_HARD_DEADLINE_MS = 45 * 60 * 1000; // full Delta universe scans can be slow under weighted throttling
 let strategyLabAutoScanPromise = null;
+
+function hasFreshPartialScanContext() {
+ const context = globalThis.FWDTradeDeskScanContext?.getFresh?.();
+ return !!context?.partial;
+}
+
+async function markScanStoppedWithPartialFallback(defaultStatus = 'Scan stopped - restart scan') {
+ const hasPartial = hasFreshPartialScanContext();
+ await markScanStopped(hasPartial ? 'Scan stopped - using partial results; restart to finish' : defaultStatus, 0);
+ if (hasPartial) {
+  await runStrategyLabAutoScans().catch(error => dlog(`Partial Strategy Lab derive err: ${error?.message || error}`));
+ }
+}
 
 function runScanWithDeadline() {
  let settled = false;
@@ -8,7 +21,7 @@ function runScanWithDeadline() {
  const timer = setTimeout(() => {
  if (settled) return;
  settled = true;
- markScanStopped('Scan timed out - restarting next cycle', 0)
+ markScanStoppedWithPartialFallback('Scan timed out - restarting next cycle')
  .catch(() => {})
  .finally(() => reject(new Error('Scan exceeded hard deadline')));
  }, SCAN_HARD_DEADLINE_MS);
@@ -20,48 +33,67 @@ function runScanWithDeadline() {
 
 async function runStrategyLabAutoScans() {
  if (strategyLabAutoScanPromise) return strategyLabAutoScanPromise;
- const tasks = [
- ['wizard', () => globalThis.FWDTradeDeskWizardScanner?.runWizardScan?.()],
- ['stage', () => globalThis.FWDTradeDeskStageScanner?.runStageScan?.()],
- ['radar', () => globalThis.FWDTradeDeskRadarScanner?.runRadarScan?.()],
- ['reversal', () => globalThis.FWDTradeDeskReversalScanner?.runReversalScan?.()],
- ];
  strategyLabAutoScanPromise = (async () => {
- const summary = [];
+ try {
  await chrome.storage.local.set({
  strategyLabAutoScan: {
  active: true,
- status: 'Refreshing scanner-only Strategy Lab results after auto-scan',
+ status: 'Deriving Strategy Lab results from main scan',
  startedAt: Date.now(),
  },
  });
- for (const [id, runner] of tasks) {
- try {
- const fn = runner();
- if (typeof fn !== 'function') {
- summary.push({ id, ok: false, error: 'Scanner module unavailable' });
- continue;
- }
- const rows = await fn();
- summary.push({ id, ok: true, count: Array.isArray(rows) ? rows.length : 0 });
- } catch (error) {
- summary.push({ id, ok: false, error: error?.message || String(error) });
- dlog(`Strategy Lab auto-refresh ${id} err: ${error?.message || error}`);
- }
- }
+ const result = await globalThis.FWDTradeDeskScanContext?.deriveAll?.({ includeNative: true });
+ const summary = result?.derived || {};
  await chrome.storage.local.set({
  strategyLabAutoScan: {
  active: false,
- status: 'Strategy Lab scanner-only results refreshed',
+ status: result?.ok ? 'Strategy Lab results derived from main scan' : (result?.error || 'Strategy Lab derive failed'),
  summary,
  finishedAt: Date.now(),
  },
  });
- return summary;
+ return result;
+ } catch (error) {
+ const message = error?.message || String(error);
+ await chrome.storage.local.set({
+ strategyLabAutoScan: {
+ active: false,
+ status: `Strategy Lab derive failed: ${message}`,
+ summary: {},
+ finishedAt: Date.now(),
+ },
+ });
+ dlog(`Strategy Lab auto derive err: ${message}`);
+ return { ok: false, error: message, derived: {} };
+ }
  })().finally(() => {
  strategyLabAutoScanPromise = null;
  });
  return strategyLabAutoScanPromise;
+}
+
+async function runUnifiedStrategyLabScan() {
+ if (!scanRunPromise) {
+ scanRunPromise = runScanWithDeadline().finally(() => {
+ scanRunPromise = null;
+ });
+ }
+ const mainRows = await scanRunPromise;
+ const derived = await runStrategyLabAutoScans();
+ return {
+ ok: !!derived?.ok,
+ scanId: derived?.scanId || globalThis.FWDTradeDeskScanContext?.getLatest?.()?.scanId || '',
+ mainCount: Array.isArray(mainRows) ? mainRows.length : 0,
+ derived: derived?.derived || {},
+ error: derived?.error || '',
+ };
+}
+
+function kickStrategyLabDeriveAfterManualScan() {
+ runStrategyLabAutoScans()
+ .catch(error => {
+ dlog(`Manual scan Strategy Lab derive err: ${error?.message || error}`);
+ });
 }
 
 chrome.storage.local.get(['scanActive', 'scanHeartbeat'], async data => {
@@ -118,7 +150,7 @@ chrome.alarms.onAlarm.addListener(alarm => {
  scanRunPromise = runScanWithDeadline()
  .then(() => runStrategyLabAutoScans())
  .catch(async e => {
- await markScanStopped('Scan stopped - restart scan', 0);
+ await markScanStoppedWithPartialFallback();
  dlog('Auto-scan err (recovered): ' + e.message);
  })
  .finally(() => { scanRunPromise = null; });
@@ -131,7 +163,7 @@ chrome.alarms.onAlarm.addListener(alarm => {
  scanRunPromise = runScanWithDeadline()
  .then(() => runStrategyLabAutoScans())
  .catch(async e => {
- await markScanStopped('Scan stopped - restart scan', 0);
+ await markScanStoppedWithPartialFallback();
  dlog('Auto-scan err: ' + e.message);
  })
  .finally(() => {
@@ -289,14 +321,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
  // -- Scan ------------------------------------------------------
  if (msg.action === 'startScan') {
  if (!scanRunPromise) {
- scanRunPromise = runScan().finally(() => {
+ scanRunPromise = runScanWithDeadline().finally(() => {
  scanRunPromise = null;
  });
  }
  scanRunPromise
- .then(r => sendResponse({ ok: true, count: r.length }))
+ .then(r => {
+ kickStrategyLabDeriveAfterManualScan();
+ sendResponse({ ok: true, count: r.length, strategyLabDeriving: true });
+ })
  .catch(async e => {
- await markScanStopped('Scan stopped - restart scan', 0);
+ await markScanStoppedWithPartialFallback();
  sendResponse({ ok: false, error: e.message });
  });
  return true;
@@ -379,44 +414,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
  return true;
  }
 
- // -- Backtest --------------------------------------------------
- if (msg.action === 'runBacktest') {
- chrome.storage.local.get(['strategy', 'autoTradeSettings'], async d => {
- try {
- const shared = globalThis.FWDTradeDeskShared || {};
- const sanitizeAutoTradeSettingsFn = typeof shared.sanitizeAutoTradeSettings === 'function'
- ? shared.sanitizeAutoTradeSettings
- : (value => value || {});
- const sanitizeBacktestMinScoreFn = typeof shared.sanitizeBacktestMinScore === 'function'
- ? shared.sanitizeBacktestMinScore
- : ((value, fallback = 75) => Number.isFinite(Number(value)) ? Number(value) : fallback);
- const sanitizeBacktestLookbackDaysFn = typeof shared.sanitizeBacktestLookbackDays === 'function'
- ? shared.sanitizeBacktestLookbackDays
- : ((value, fallback = 500) => Number.isFinite(Number(value)) ? Number(value) : fallback);
- const autoTradeSettings = sanitizeAutoTradeSettingsFn(d.autoTradeSettings || {});
- const minScore = sanitizeBacktestMinScoreFn(
- msg.minScore,
- Number(autoTradeSettings.backtestSignalMinScore || autoTradeSettings.minScore || 75)
- );
- const lookbackDays = sanitizeBacktestLookbackDaysFn(
- msg.lookbackDays,
- Number(autoTradeSettings.backtestLookbackDays || 500)
- );
- const result = await runBacktest(msg.symbol, d.strategy || {}, {
- minScore,
- lookbackDays,
- includeStopSweep: msg.includeStopSweep === true,
- strategyPreset: msg.strategyPreset,
- direction: msg.direction,
- feePctPerSide: msg.feePctPerSide,
- slippagePctPerSide: msg.slippagePctPerSide,
+ // -- Strategy Lab ---------------------------------------------
+ if (msg.action === 'strategy-lab:runUnifiedScan') {
+ runUnifiedStrategyLabScan()
+ .then(result => sendResponse(result))
+ .catch(async e => {
+ await markScanStoppedWithPartialFallback('Unified scan stopped - restart scan');
+ sendResponse({ ok: false, error: e.message || String(e) });
  });
- chrome.storage.local.set({ [`bt_${msg.symbol}`]: result });
- sendResponse({ ok: true, result });
- } catch (e) {
- sendResponse({ ok: false, error: e?.message || 'Backtest failed' });
+ return true;
  }
- });
+
+ if (msg.action === 'strategy-lab:deriveFromLatestScan') {
+ globalThis.FWDTradeDeskScanContext?.deriveAll?.({ includeNative: msg.includeNative !== false })
+ .then(result => sendResponse(result || { ok: false, error: 'Shared scan context unavailable' }))
+ .catch(e => sendResponse({ ok: false, error: e.message || String(e) }));
  return true;
  }
 

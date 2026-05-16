@@ -1,4 +1,5 @@
 const { execFileSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 
 exports.default = async function afterPackBranding(context) {
@@ -9,6 +10,15 @@ exports.default = async function afterPackBranding(context) {
   const exePath = path.join(context.appOutDir, `${productName}.exe`);
   const iconPath = path.join(context.packager.projectDir, 'src', 'renderer', 'icons', 'fwd-tradedesk-pro.ico');
   const rceditPath = path.join(context.packager.projectDir, 'node_modules', 'electron-winstaller', 'vendor', 'rcedit.exe');
+  const localesDir = path.join(context.appOutDir, 'locales');
+
+  if (fs.existsSync(localesDir)) {
+    for (const name of fs.readdirSync(localesDir)) {
+      if (name.toLowerCase() !== 'en-us.pak') {
+        fs.rmSync(path.join(localesDir, name), { force: true });
+      }
+    }
+  }
 
   execFileSync(rceditPath, [
     exePath,

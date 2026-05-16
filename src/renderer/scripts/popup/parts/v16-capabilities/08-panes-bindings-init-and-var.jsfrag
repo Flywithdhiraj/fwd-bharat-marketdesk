@@ -32,7 +32,8 @@ async function renderV16PositionsPane(preloaded = null, forceRefresh = false) {
  v16RenderEquityChart(todayHistory, metrics.todayTrades);
  const liveEquityMetaEl = document.getElementById('liveEquityMeta');
  if (liveEquityMetaEl) {
- liveEquityMetaEl.textContent = `${todayHistory.length} points today | Hover to inspect P&L and trade events | ${v16MarketDataSourceLabel(snapshot?.feedSource || 'rest')} | updated ${v16FormatFeedAge(snapshot?.fetchedAt || 0)}.`;
+ const equityDisplay = typeof v16ResolveEquityChartDisplayHistory === 'function' ? v16ResolveEquityChartDisplayHistory(todayHistory) : { baselineAdjusted: false };
+ liveEquityMetaEl.textContent = `${todayHistory.length} points today | ${equityDisplay.baselineAdjusted ? 'Opening balance adjustment hidden | ' : ''}Hover to inspect P&L and trade events | ${v16MarketDataSourceLabel(snapshot?.feedSource || 'rest')} | updated ${v16FormatFeedAge(snapshot?.fetchedAt || 0)}.`;
  }
  await renderV16RiskManageBoard();
 }
@@ -559,6 +560,22 @@ function bindV16SettingsUi() {
  FWDTradeDeskUi.delegate('click', '[data-settings-target]', (_e, settingsButton) => {
  activateV16SettingsPanel(settingsButton.dataset.settingsTarget || 'profile');
  });
+ document.addEventListener('input', (e) => {
+ if (e.target?.id === 'settingsRailSearch') {
+ filterV16SettingsRail(e.target.value);
+ return;
+ }
+ if (e.target?.closest?.('#pane-strategy')) markV16SettingsDirty(e.target);
+ });
+ document.addEventListener('change', (e) => {
+ if (e.target?.closest?.('#pane-strategy')) markV16SettingsDirty(e.target);
+ });
+ FWDTradeDeskUi.delegate('click', '[data-settings-subfilter]', (_e, filterButton) => {
+ setV16SettingsSubfilter(filterButton.dataset.settingsSubfilter || 'all');
+ });
+ FWDTradeDeskUi.delegate('click', '#btnSave', () => {
+ setTimeout(clearV16SettingsDirty, 50);
+ });
  // Delegation: Generic V16 tab jumps
  FWDTradeDeskUi.delegate('click', '[data-v16-open-tab]', (_e, tabButton) => {
  if (typeof setActiveWorkspaceTab === 'function') setActiveWorkspaceTab(tabButton.dataset.v16OpenTab);
@@ -863,6 +880,13 @@ function bindV16SettingsUi() {
 }
 
 async function refreshV16SignalSurfaces() {
+ if (typeof globalThis.scheduleWorkspaceTabRender === 'function') {
+  await Promise.all([
+   globalThis.scheduleWorkspaceTabRender('scanner'),
+   globalThis.scheduleWorkspaceTabRender('watchlist'),
+  ]);
+  return;
+ }
  if (typeof renderScanner === 'function') await renderScanner();
  if (typeof renderWatchlist === 'function') await renderWatchlist();
 }
@@ -1262,10 +1286,13 @@ globalThis.v16IsLiveAnalyticsAutoRefreshEnabled = v16IsLiveAnalyticsAutoRefreshE
 globalThis.v16SyncLiveAccountSyncButtons = v16SyncLiveAccountSyncButtons;
 globalThis.v16SyncLiveAnalyticsAutoRefreshButtons = v16SyncLiveAnalyticsAutoRefreshButtons;
 globalThis.renderV16LiveAnalyticsPane = renderV16LiveAnalyticsPane;
+globalThis.renderV16TradeCheckPane = renderV16TradeCheckPane;
 globalThis.renderV16PositionsPane = renderV16PositionsPane;
 globalThis.renderV16FundsPane = renderV16FundsPane;
 globalThis.renderV16OrdersPane = renderV16OrdersPane;
 globalThis.openV16LiveTradeOrderPreview = openV16LiveTradeOrderPreview;
+globalThis.openV16OpenOrderEditor = openV16OpenOrderEditor;
+globalThis.openV16ProtectionOrderPreview = openV16ProtectionOrderPreview;
 globalThis.v16ComputeSessionMetrics = v16ComputeSessionMetrics;
 globalThis.v16ResolveOrderRealizedPnl = v16ResolveOrderRealizedPnl;
 globalThis.v16ResolveJournalCloseReason = v16ResolveJournalCloseReason;
@@ -1301,6 +1328,14 @@ function v16RiskAutoModeLabel({ autoTradeOn = false, settings = {} } = {}) {
  if (settings.paperTrackingEnabled) return 'Paper';
  if (settings.entryTriggerRequired || settings.riskQualityRequired) return 'Assist';
  return 'Off';
+}
+
+function v16RiskAutoModeDetail({ autoTradeOn = false, settings = {}, liveAutomationAllowed = false } = {}) {
+ if (liveAutomationAllowed) return 'Live orders may be sent after signal gates pass.';
+ if (autoTradeOn) return 'Live toggle is on, but one or more safety gates block orders.';
+ if (settings.paperTrackingEnabled) return 'Qualified signals are tracked in paper ledger only.';
+ if (settings.entryTriggerRequired || settings.riskQualityRequired) return 'Manual assist mode: rules guide decisions but do not place orders.';
+ return 'Automation is fully off.';
 }
 
 function v16RiskAutoMetricPositions(snapshot = null) {
@@ -1354,41 +1389,20 @@ async function renderV16RiskAutomationCockpit() {
  if (slotMax > 0 && slotUsed >= slotMax) blockers.push('all trade slots are in use');
  if (runtimeIssue) blockers.push('API is cooling down');
  if (!store.autoTrade) blockers.push('live automation is off');
- const decisionTitle = liveAutomationAllowed ? 'Live automation can place qualified orders' : `Trade blocked: ${blockers[0] || 'automation is not ready'}`;
+ const decisionTitle = liveAutomationAllowed ? 'Live Orders Allowed' : `Live Orders Blocked`;
  const decisionDetail = liveAutomationAllowed
- ? 'All core live gates are clear. Strategy checks still apply per signal.'
- : blockers.length ? blockers.join(', ') : 'Enable rules only after reviewing profile, API, and risk limits.';
+ ? 'Core live gates are clear. Strategy, trigger, liquidity, funding, and risk-quality checks still apply per signal.'
+ : blockers.length ? `Reason: ${blockers.join(', ')}` : 'Reason: enable rules only after reviewing profile, API, and risk limits.';
  const strip = document.getElementById('riskAutomationStrip');
  if (strip) {
  const stripRows = [
  ['Profile', capabilityMeta.label || 'Public', profileReady ? (tradeCapable ? 'Trade-enabled profile' : 'Read-only profile') : 'Research profile only', profileReady ? (tradeCapable ? 'good' : 'warn') : 'warn'],
  ['API', apiReady ? 'Ready' : 'Missing', apiReady ? (hasSecret ? 'Private session available' : 'Public data only') : 'Save/test credentials', apiReady ? 'good' : 'bad'],
  ['Risk', riskReady ? 'Clear' : 'Blocked', dailyLossLimit > 0 ? `$${dailyLossUsed.toFixed(0)} / $${dailyLossLimit.toFixed(0)} daily loss` : `${slotUsed}/${slotMax || '-'} slots used`, riskReady ? 'good' : 'bad'],
- ['Automation', automationMode, liveAutomationAllowed ? 'Live gates clear' : (store.autoTrade ? 'Live toggle on, gate blocked' : 'No live order automation'), liveAutomationAllowed ? 'good' : (store.autoTrade ? 'bad' : 'warn')],
+ ['Automation', automationMode, v16RiskAutoModeDetail({ autoTradeOn: !!store.autoTrade, settings, liveAutomationAllowed }), liveAutomationAllowed ? 'good' : (store.autoTrade ? 'bad' : 'warn')],
  ['Kill Switch', killSwitch.enabled ? 'On' : 'Off', killSwitch.reason || (killSwitch.enabled ? 'Execution locked' : 'No global execution block'), killSwitch.enabled ? 'bad' : 'good'],
  ];
  strip.innerHTML = stripRows.map(([label, value, detail, tone]) => `<div class="risk-auto-status is-${v16Esc(v16RiskAutoToneClass(tone))}"><span>${v16Esc(label)}</span><strong>${v16Esc(value)}</strong><small>${v16Esc(detail)}</small></div>`).join('');
- }
- const decision = document.getElementById('riskAutomationDecision');
- if (decision) {
- decision.className = `risk-auto-decision is-${liveAutomationAllowed ? 'good' : blockers.some(item => item.includes('kill') || item.includes('daily') || item.includes('slots') || item.includes('cooling')) ? 'bad' : 'warn'}`;
- const checks = [
- ['Profile allows live action', tradeCapable || !store.autoTrade, capabilityMeta.label || 'Public'],
- ['API/session ready', apiReady, hasSecret ? 'Private account calls can run' : 'No private credential session'],
- ['Kill switch off', !killSwitch.enabled, killSwitch.reason || 'Global guard is clear'],
- ['Daily loss under limit', !(dailyLossLimit > 0 && dailyLossUsed >= dailyLossLimit), dailyLossLimit > 0 ? `$${dailyLossUsed.toFixed(0)} / $${dailyLossLimit.toFixed(0)}` : 'No USD day-loss cap set'],
- ['Trade slots available', !(slotMax > 0 && slotUsed >= slotMax), slotMax > 0 ? `${slotUsed}/${slotMax} used` : 'No max concurrent cap set'],
- ['API cooldown clear', !runtimeIssue, runtimeIssue ? `Retry in ${v16FormatDurationShort(runtimeIssue.waitMs)}` : 'No cooldown recorded'],
- ];
- decision.innerHTML = `
- <div class="risk-auto-decision-main">
- <span>Decision Engine</span>
- <strong>${v16Esc(decisionTitle)}</strong>
- <small>${v16Esc(decisionDetail)}</small>
- </div>
- <div class="risk-auto-checks" id="riskAutomationChecks">
- ${checks.map(([label, passed, detail]) => v16RiskAutoCheckHtml(label, passed, detail)).join('')}
- </div>`;
  }
  const apiGrid = document.getElementById('riskApiSafetyGrid');
  if (apiGrid) {
@@ -1410,7 +1424,7 @@ async function renderV16RiskAutomationCockpit() {
  }
  const preview = document.getElementById('riskAutomationRulePreview');
  if (preview) {
- preview.innerHTML = `<span>Rule Preview</span><strong>${v16Esc(decisionTitle)}</strong><small>${v16Esc(decisionDetail)}</small>`;
+ preview.innerHTML = `<span>Rule Preview</span><strong>${v16Esc(decisionTitle)}</strong><small>${v16Esc(decisionDetail)}</small><small class="risk-auto-next">${v16Esc(v16RiskAutoModeDetail({ autoTradeOn: !!store.autoTrade, settings, liveAutomationAllowed }))}</small>`;
  }
  const rulesGrid = document.getElementById('riskAutomationRulesGrid');
  if (rulesGrid) {
@@ -1421,7 +1435,6 @@ async function renderV16RiskAutomationCockpit() {
  v16RiskAutoCardHtml('Max Per Day', String(settings.maxPerDay || 0), 'Daily automation entry cap.', Number(settings.maxPerDay || 0) > 0 ? 'good' : 'warn'),
  v16RiskAutoCardHtml('Max Concurrent', String(settings.maxConcurrent || 0), `${slotUsed}/${slotMax || '-'} slots used including reserved manual controls.`, slotMax > 0 && slotUsed >= slotMax ? 'bad' : 'good'),
  v16RiskAutoCardHtml('Risk Quality Gate', settings.riskQualityRequired ? 'Required' : 'Optional', settings.riskQualityRequired ? `R:R >= ${settings.riskQualityMinRewardRisk}, stop <= ${settings.riskQualityMaxStopDistancePct}%` : 'Signals may pass without quality gate.', settings.riskQualityRequired ? 'good' : 'warn'),
- v16RiskAutoCardHtml('Backtest Gate', `${settings.backtestMinTrades || 0} trades`, `PF >= ${settings.backtestMinProfitFactor || 0}, expectancy >= ${settings.backtestMinExpectancy || 0}.`, Number(settings.backtestMinTrades || 0) > 0 ? 'good' : 'warn'),
  v16RiskAutoCardHtml('Cooldown', `${settings.cooldownSec || 0}s`, 'Delay after automated action before next eligible entry.', Number(settings.cooldownSec || 0) > 0 ? 'good' : 'warn'),
  ].join('');
  }
@@ -1570,7 +1583,7 @@ function renderV16VarDashboard() {
 
  // --- Sector Exposure Grid ---
  if (el('varSectorGrid')) {
- const allSectors = typeof SECTORS !== 'undefined' ? Object.keys(SECTORS) : ['Layer 1', 'DeFi', 'Meme', 'AI / Data', 'Infra', 'Gaming', 'Layer 2', 'Exchange', 'Privacy', 'Commodity', 'Stock', 'New'];
+ const allSectors = typeof SECTORS !== 'undefined' ? Object.keys(SECTORS) : ['Layer 1', 'DeFi', 'Meme', 'AI / Data', 'Infra', 'Gaming', 'Layer 2', 'Exchange', 'Privacy', 'RWA', 'Commodity', 'Stock', 'New'];
  let sectorHTML = '';
  allSectors.forEach(sector => {
  const count = sectorCounts[sector] || 0;

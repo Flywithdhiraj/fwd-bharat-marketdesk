@@ -129,8 +129,10 @@ function buildV16SessionSummary(snapshot = {}) {
  const regimeMeta = getMarketRegimeMeta(marketIndex?.regime);
  const thresholds = getRegimeThresholds(marketIndex?.regime, marketIndex?.thresholds || {});
  const thresholdCopy = `Execute >= ${thresholds.alertScore} | Setup >= ${thresholds.setupScore} | Watch >= ${thresholds.watchScore}`;
+ const sentimentValue = Number(marketIndex?.sentiment?.value ?? marketIndex?.value ?? 0);
+ const indexMove = Number(marketIndex?.indexChangePct ?? 0);
  const regimeCopy = marketIndex?.value != null
- ? `${directionLabel} direction | ${regimeMeta.label} volatility structure | ${Number(marketIndex.value) >= 0 ? '+' : ''}${Number(marketIndex.value).toFixed(2)}% FWD-10`
+ ? `${directionLabel} sentiment | ${regimeMeta.label} volatility structure | Index ${indexMove >= 0 ? '+' : ''}${indexMove.toFixed(2)}% | Sent ${sentimentValue >= 0 ? '+' : ''}${sentimentValue.toFixed(2)}%`
  : `Breadth ${breadth >= 0 ? '+' : ''}${breadth} with ${scanResults.length} live signals`;
  return {
  profile,
@@ -290,7 +292,7 @@ async function renderV16DecisionEngineShell(preloaded = null) {
  <div class="regime-block">
  <span>Regime</span>
  <strong>${v16Esc(summary.regimeLabel)}</strong>
- <small>${marketValue >= 0 ? '+' : ''}${marketValue.toFixed(2)}% FWD-10</small>
+ <small>Sent ${marketValue >= 0 ? '+' : ''}${marketValue.toFixed(2)}% | Index ${Number(summary.marketIndex?.indexChangePct || 0) >= 0 ? '+' : ''}${Number(summary.marketIndex?.indexChangePct || 0).toFixed(2)}%</small>
  </div>
  <div class="regime-block">
  <span>Direction</span>
@@ -382,19 +384,6 @@ async function renderV16RiskManageBoard() {
  <div class="risk-manage-card"><span>Live Positions</span><strong>${livePositions}</strong><small>Interactive reductions and closes available in Positions</small></div>
  <div class="risk-manage-card"><span>30D Review</span><strong class="${model.realized >= 0 ? 'good' : 'bad'}">${v16FmtSigned(model.realized)}</strong><small>${model.closedTrades.length} closed trades | ${model.winRate.toFixed(1)}% win rate</small></div>
  </div>
- <div class="risk-manage-section-label">SETUP FAMILY PERFORMANCE (30D)</div>
- <div class="risk-manage-setup-header"><span>Setup</span><span>Trades</span><span>Win%</span><span>P&amp;L</span><span>Expectancy</span></div>
- <div class="risk-manage-setup-rows">${
- model.setupBreakdown.length
- ? model.setupBreakdown.map(s => `<div class="risk-manage-setup-row">
- <span class="rsf-name">${v16Esc(s.family)}</span>
- <span class="rsf-trades">${s.trades}T</span>
- <span class="rsf-wr" style="color:${s.winRate >= 50 ? '#00e5a0' : '#ff4560'}">${s.winRate}%</span>
- <span class="rsf-pnl" style="color:${s.pnl >= 0 ? '#00e5a0' : '#ff4560'}">${v16FmtSigned(s.pnl)}</span>
- <span class="rsf-exp" style="color:${s.expectancy >= 0 ? '#00e5a0' : '#ff4560'}">${s.expectancy >= 0 ? '+' : ''}${s.expectancy}</span>
- </div>`).join('')
- : '<div class="account-inline-note">No setup-tagged trades in range. Tag trades in journal to see breakdown.</div>'
- }</div>
  <div class="risk-manage-section-label">R-MULTIPLE DISTRIBUTION${model.rDistribution.avgR !== null ? ` &nbsp; | &nbsp; Avg R: <span style="color:${model.rDistribution.avgR >= 1 ? '#00e5a0' : '#ff4560'}">${model.rDistribution.avgR >= 0 ? '+' : ''}${model.rDistribution.avgR}R</span>` : ''}</div>
  <div class="risk-manage-r-rows">${
  model.rDistribution.count > 0
@@ -556,6 +545,57 @@ function syncV16SettingsPanelState() {
  activateV16SettingsPanel(document.querySelector('.settings-rail-item.active')?.dataset.settingsTarget || 'profile');
 }
 
+function filterV16SettingsRail(query = '') {
+ const needle = String(query || '').trim().toLowerCase();
+ const rail = document.querySelector('#pane-strategy .settings-left-rail');
+ if (!rail) return;
+ rail.querySelectorAll('.settings-rail-group, .settings-rail-more').forEach(group => {
+ let visibleCount = 0;
+ group.querySelectorAll('.settings-rail-item').forEach(button => {
+ const haystack = [
+ button.textContent || '',
+ button.dataset.settingsTarget || '',
+ button.dataset.settingsTab || '',
+ ].join(' ').toLowerCase();
+ const visible = !needle || haystack.includes(needle);
+ button.hidden = !visible;
+ if (visible) visibleCount += 1;
+ });
+ group.hidden = visibleCount === 0 && !!needle;
+ });
+}
+
+function markV16SettingsDirty(source = null) {
+ const layout = document.querySelector('#pane-strategy .account-profiles-layout');
+ if (!layout) return;
+ layout.classList.add('settings-dirty');
+ const label = document.getElementById('settingsSaveStateLabel');
+ if (label) {
+ const panel = source?.closest?.('[data-settings-panel]')?.dataset?.settingsPanel || layout.dataset.activeSettingsPanel || '';
+ const activeButton = panel ? document.querySelector(`#pane-strategy [data-settings-target="${CSS.escape(panel)}"] span`) : null;
+ label.textContent = activeButton?.textContent ? `${activeButton.textContent} changed` : 'Unsaved settings';
+ }
+}
+
+function clearV16SettingsDirty() {
+ document.querySelector('#pane-strategy .account-profiles-layout')?.classList.remove('settings-dirty');
+ const label = document.getElementById('settingsSaveStateLabel');
+ if (label) label.textContent = 'No visible changes';
+}
+
+function setV16SettingsSubfilter(filter = 'all') {
+ const safeFilter = String(filter || 'all').trim().toLowerCase() || 'all';
+ const library = document.querySelector('#pane-strategy .settings-library');
+ if (!library) return;
+ library.querySelectorAll('[data-settings-panel-tabs="scanner-rules"] button').forEach(button => {
+ button.classList.toggle('active', String(button.dataset.settingsSubfilter || 'all') === safeFilter);
+ });
+ library.querySelectorAll('[data-settings-panel="scanner-rules"][data-settings-subsection]').forEach(section => {
+ const tags = String(section.dataset.settingsSubsection || '').toLowerCase().split(/\s+/).filter(Boolean);
+ section.classList.toggle('settings-subsection-hidden', safeFilter !== 'all' && !tags.includes(safeFilter));
+ });
+}
+
 function activateV16SettingsPanel(panel = 'profile') {
  const target = String(panel || 'profile').trim() || 'profile';
  const layout = document.querySelector('.account-profiles-layout');
@@ -596,7 +636,7 @@ function activateV16SettingsPanel(panel = 'profile') {
  recovery: ['DEVELOPER / DEBUG', 'Recovery Center', 'Common blocked states and recovery actions for scanner, account sync, and execution readiness.'],
  'scanner-rules': ['SCANNER RULES', 'Scanner & Market Data', 'Signal filters, timeframes, scan limits, market-data mode, and FWD-10 basket settings.'],
  'strategy-profiles': ['SCANNER RULES', 'Strategy Profiles', 'Presets that update scanner, paper, chart, and risk-template fields before saving.'],
- 'futures-auto': ['AUTOMATION', 'Futures Auto-Trade', 'Live futures execution gates, size limits, funding exits, backtest checks, and notifications.'],
+ 'futures-auto': ['AUTOMATION', 'Futures Auto-Trade', 'Live futures execution gates, size limits, funding exits, and notifications.'],
  'options-auto': ['AUTOMATION', 'Options Auto-Trade', 'Defined-risk options automation rules for the theta desk.'],
  'straddle-auto': ['AUTOMATION', 'Short Straddle', 'Short straddle entry, re-entry, expiry, premium, skew, and auto-sizing controls.'],
  charts: ['SYSTEM', 'Charts & Levels', 'Chart presets, key levels, and risk-template defaults used by scanner context.'],
@@ -605,6 +645,9 @@ function activateV16SettingsPanel(panel = 'profile') {
  const meta = libraryMeta[target];
  if (library) {
  library.classList.toggle('active', !!meta);
+ library.querySelectorAll('[data-settings-panel-tabs]').forEach(tabRow => {
+ tabRow.classList.toggle('active', tabRow.dataset.settingsPanelTabs === target);
+ });
  const kicker = library.querySelector('.settings-stage-kicker');
  const title = library.querySelector('.settings-stage-title');
  const copy = library.querySelector('.settings-stage-copy');
@@ -625,6 +668,7 @@ function activateV16SettingsPanel(panel = 'profile') {
  });
  if (target === 'paper-mode') void v16RenderPaperModeSettingsPanel();
  if (target === 'recovery') void v16RenderSettingsRecoveryCenter();
+ if (target === 'scanner-rules') setV16SettingsSubfilter('all');
 }
 
 function v16StatusToneClass(tone = '') {

@@ -6,12 +6,10 @@ const {
  hasCompleteBracketProtection,
  normalizeOrderSide,
  normalizePositionSide,
- sanitizeBacktestMinScore: v16SanitizeBacktestMinScore,
- sanitizeAutoTradeSettings,
+  sanitizeAutoTradeSettings,
  sanitizeDcaBotSettings,
  sanitizeBlockedSymbolList,
- resolveAutoTradeSetupFamilyBacktestThresholds,
- resolveBracketProtectionLevels,
+  resolveBracketProtectionLevels,
  resolveDecisionAction,
  resolveEntryTrigger,
  resolveRiskQualityGate,
@@ -39,11 +37,10 @@ const SINGLE_ACCOUNT_PROFILE_ID = 'primary';
 const SINGLE_CREDENTIAL_ALIAS = 'FWD TradeDesk Pro/primary';
 const V16_AUTO_TRADE_MANUAL_CONTROLS_KEY = 'v16AutoTradeManualControlsV17';
 const V16_NOTIFICATION_FEED_KEY = 'v16NotificationFeedV17';
-const V16_PUBLIC_CANDLE_RESOLUTIONS = new Set(['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d']);
+const V16_PUBLIC_CANDLE_RESOLUTIONS = new Set(['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']);
 const V16_AUTO_TRADE_MIN_LIQUIDITY_USD_DEFAULT = 750000;
 const V16_AUTO_TRADE_KEY_LEVEL_ATR_BUFFER = 0.6;
 const V16_AUTO_TRADE_PROBATION_ALLOWED_FAMILIES = new Set(['continuation', 'pullback', 'breakout_retest', 'tight_continuation', 'compression_breakout']);
-const V16_AUTO_TRADE_BACKTEST_KEY_PREFIX = 'bt_';
 const V16_SHADOW_TRADE_LEDGER_KEY = 'v16ShadowTradeLedgerV1';
 const V16_SETUP_PERFORMANCE_KEY = 'v16SetupPerformanceV1';
 const V16_SHADOW_MAX_OPEN = 80;
@@ -183,12 +180,17 @@ function v16CountReservedSlots(state = {}, activeSymbolMap = new Map(), now = Da
 }
 
 function v16BuildNotificationFeedEntry(entry = {}) {
+ const sourceScannerId = String(entry.sourceScannerId || entry.scannerId || entry.strategyId || entry.sourceType || '').trim().toLowerCase();
+ const sourceScannerName = String(entry.sourceScannerName || entry.scannerName || entry.sourceLabel || '').trim();
  return {
  id: String(entry.id || `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
  ts: Number(entry.ts || Date.now()),
  tone: String(entry.tone || 'info').trim().toLowerCase(),
  title: String(entry.title || '').trim().slice(0, 80),
  symbol: v16NormalizeSymbol(entry.symbol || ''),
+ sourceScannerId,
+ sourceScannerName: sourceScannerName.slice(0, 60),
+ sourceType: String(entry.sourceType || (sourceScannerId ? 'scanner' : '')).trim().toLowerCase().slice(0, 40),
  what: String(entry.what || '').trim().slice(0, 180),
  why: String(entry.why || '').trim().slice(0, 220),
  next: String(entry.next || '').trim().slice(0, 220),
@@ -1329,7 +1331,29 @@ async function runV16PublicCandles(payload = {}) {
  const endMs = v16ToEpochMs(payload.endTime || payload.endTs || 0);
  const startSec = startMs > 0 ? Math.floor(startMs / 1000) : 0;
  const endSec = endMs > 0 ? Math.floor(endMs / 1000) : 0;
- const candles = startSec > 0 && endSec > startSec && typeof fetchCandlesRange === 'function'
+ const aggregateWeeklyCandles = rows => {
+  const weeks = new Map();
+  (Array.isArray(rows) ? rows : []).forEach(candle => {
+   const ts = Number(candle?.time || 0);
+   if (!(ts > 0)) return;
+   const date = new Date(ts * 1000);
+   const day = date.getUTCDay();
+   const monday = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() - ((day + 6) % 7)) / 1000;
+   const current = weeks.get(monday) || { time: monday, open: 0, high: 0, low: 0, close: 0, volume: 0 };
+   if (!current.open) current.open = Number(candle.open || candle.close || 0);
+   current.high = Math.max(Number(current.high || 0), Number(candle.high || candle.close || 0));
+   current.low = current.low ? Math.min(Number(current.low || 0), Number(candle.low || candle.close || 0)) : Number(candle.low || candle.close || 0);
+   current.close = Number(candle.close || current.close || 0);
+   current.volume += Number(candle.volume || 0);
+   weeks.set(monday, current);
+  });
+  return Array.from(weeks.values()).filter(candle => candle.open > 0 && candle.high > 0 && candle.low > 0 && candle.close > 0).sort((a, b) => a.time - b.time);
+ };
+ const candles = resolution === '1w'
+ ? aggregateWeeklyCandles(startSec > 0 && endSec > startSec && typeof fetchCandlesRange === 'function'
+ ? await fetchCandlesRange(symbol, '1d', startSec, endSec)
+ : await fetchCandles(symbol, '1d', Math.min(20000, (limit * 7) + 20), { closedOnly: true })).slice(-limit)
+ : startSec > 0 && endSec > startSec && typeof fetchCandlesRange === 'function'
  ? await fetchCandlesRange(symbol, resolution, startSec, endSec)
  : await fetchCandles(symbol, resolution, limit);
  if (!Array.isArray(candles) || !candles.length) {
@@ -1726,6 +1750,7 @@ async function runV16TradeOrderPreview(payload = {}) {
  const displaySize = size * contractMultiplier;
  const displayUnit = contractMultiplier > 1 && underlyingAssetSymbol ? underlyingAssetSymbol : 'contracts';
  const estimatedNotional = valuationPrice > 0 ? valuationPrice * size * contractMultiplier : 0;
+ const requestedNotional = payload.sizeMode === 'usd' ? Number(payload.sizeInput || 0) : 0;
  const estimatedRisk = stopLoss > 0 && entryReference > 0 ? Math.abs(entryReference - stopLoss) * size * contractMultiplier : 0;
  const estimatedReward = takeProfit > 0 && entryReference > 0 ? Math.abs(takeProfit - entryReference) * size * contractMultiplier : 0;
  const riskRewardRatio = estimatedRisk > 0 && estimatedReward > 0 ? (estimatedReward / estimatedRisk) : 0;
@@ -1751,7 +1776,8 @@ async function runV16TradeOrderPreview(payload = {}) {
  contractMultiplier,
  displaySize,
  displayUnit,
- estimatedNotional,
+ requestedNotional,
+  estimatedNotional,
  estimatedRisk,
  estimatedReward,
  riskRewardRatio,
@@ -2341,9 +2367,8 @@ async function runV16PlaceTradeOrder(payload = {}) {
  const requestedCapUSD = Number(payload.maxNotionalUSD || (payload.sizeMode === 'usd' ? payload.sizeInput : 0) || 0);
  const maxOrderUSD = requestedCapUSD > 0 ? Math.min(profileCapUSD, requestedCapUSD) : profileCapUSD;
  const effectiveNotionalUSD = Number(preview.estimatedNotional || 0);
- // Allow 5% rounding buffer so contract-size rounding never hard-blocks an order
- if (!manualOverride && !preview.reduceOnly && effectiveNotionalUSD > maxOrderUSD * 1.05) {
- throw new Error(`Actual order notional $${effectiveNotionalUSD.toFixed(2)} exceeds allowed cap $${maxOrderUSD.toFixed(2)} after contract rounding`);
+ if (!preview.reduceOnly && effectiveNotionalUSD > maxOrderUSD * 1.05) {
+ throw new Error(`Actual order notional $${effectiveNotionalUSD.toFixed(2)} exceeds allowed cap $${maxOrderUSD.toFixed(2)}. Exchange minimum contract size rounded this order above your limit.`);
  }
  const requestBody = {
  product_id: preview.productId,
@@ -2936,6 +2961,9 @@ async function v16ProcessShadowTrades(scanResults = [], cfg = {}, stored = {}) {
  await v16PushNotificationFeed({
  tone: 'info',
  title: 'Paper trade opened',
+ sourceScannerId: 'paper',
+ sourceScannerName: 'Paper Ledger',
+ sourceType: 'paper',
  what: `${opened} qualified paper trade${opened === 1 ? '' : 's'} opened from the latest scan.`,
  why: 'Signal passed trade quality, setup gate, entry trigger, and risk quality checks.',
  next: 'Open Analytics to review the paper ledger and setup performance.',
@@ -2946,6 +2974,9 @@ async function v16ProcessShadowTrades(scanResults = [], cfg = {}, stored = {}) {
  await v16PushNotificationFeed({
  tone: closedBatch.some(trade => String(trade?.outcome || '') === 'loss') ? 'warn' : 'good',
  title: 'Paper trade closed',
+ sourceScannerId: 'paper',
+ sourceScannerName: 'Paper Ledger',
+ sourceType: 'paper',
  what: `${closedBatch.length} paper trade${closedBatch.length === 1 ? '' : 's'} closed by stop or target.`,
  why: closedBatch.slice(0, 3).map(trade => `${trade.symbol} ${String(trade.outcome || '').toUpperCase()} ${trade.rMultiple != null ? `${trade.rMultiple}R` : ''}`.trim()).join(' | '),
  next: 'Setup performance has been refreshed from the closed paper ledger.',
@@ -2953,111 +2984,6 @@ async function v16ProcessShadowTrades(scanResults = [], cfg = {}, stored = {}) {
  }).catch(() => null);
  }
  return { ledger, setupPerformance, opened };
-}
-
-function v16BuildAutoTradeBacktestStorageKey(symbol = '') {
- const normalized = v16NormalizeSymbol(symbol);
- return normalized ? `${V16_AUTO_TRADE_BACKTEST_KEY_PREFIX}${normalized}` : '';
-}
-
-function v16EvaluateAutoTradeBacktestGate(backtestResult = {}, cfg = {}, signal = {}) {
- const thresholds = resolveAutoTradeSetupFamilyBacktestThresholds(cfg || {}, signal?.setupFamily || '');
- const familyKey = String(thresholds?.family || '').trim().toLowerCase();
- const familySummary = familyKey && backtestResult?.audit?.bySetupFamily?.[familyKey]?.summary
- ? backtestResult.audit.bySetupFamily[familyKey].summary
- : null;
- const summary = familySummary && Number(familySummary.totalTrades || 0) > 0
- ? familySummary
- : (backtestResult?.summary && typeof backtestResult.summary === 'object' ? backtestResult.summary : {});
- const reasons = [];
- if (backtestResult?.error) reasons.push(String(backtestResult.error || 'backtest unavailable').trim());
- const totalTrades = Math.max(0, Number(summary.totalTrades || 0));
- const profitFactor = Number(summary.profitFactor || 0);
- const expectancy = Number(summary.expectancy || 0);
- const maxDrawdownPct = Math.max(0, Number(summary.maxDD || 0));
- if (!reasons.length) {
- if (totalTrades < Number(thresholds.minTrades || 0)) reasons.push(`backtest trades ${totalTrades} < ${Number(thresholds.minTrades || 0)}`);
- if (profitFactor < Number(thresholds.minProfitFactor || 0)) reasons.push(`backtest PF ${profitFactor.toFixed(2)} < ${Number(thresholds.minProfitFactor || 0).toFixed(2)}`);
- if (expectancy < Number(thresholds.minExpectancy || 0)) reasons.push(`backtest expectancy ${expectancy.toFixed(2)} < ${Number(thresholds.minExpectancy || 0).toFixed(2)}`);
- if (maxDrawdownPct > Number(thresholds.maxDrawdownPct || 0)) reasons.push(`backtest maxDD ${maxDrawdownPct.toFixed(2)}% > ${Number(thresholds.maxDrawdownPct || 0).toFixed(2)}%`);
- }
- return {
- passed: reasons.length === 0,
- reasons,
- summary: {
- totalTrades,
- profitFactor,
- expectancy,
- maxDrawdownPct,
- ts: Number(backtestResult?.ts || 0),
- minScore: Number(backtestResult?.config?.minScore || 0),
- source: familySummary ? 'setup_family' : 'global',
- family: familyKey || '',
- thresholds,
- },
- };
-}
-
-function v16IsFreshAutoTradeBacktestResult(backtestResult = {}, cfg = {}, now = Date.now()) {
- if (!backtestResult || typeof backtestResult !== 'object') return false;
- const ts = Number(backtestResult.ts || 0);
- if (!(ts > 0)) return false;
- const ttlMs = Math.max(1, Number(cfg.backtestCacheHours || 0)) * 60 * 60 * 1000;
- if ((now - ts) > ttlMs) return false;
- const expectedMinScore = v16SanitizeBacktestMinScore(cfg.backtestSignalMinScore, cfg.minScore || 75);
- const resultMinScore = v16SanitizeBacktestMinScore(backtestResult?.config?.minScore, expectedMinScore);
- if (resultMinScore !== expectedMinScore) return false;
- const expectedLookbackDays = Math.max(100, Number(cfg.backtestLookbackDays || 500));
- const resultLookbackDays = Math.max(100, Number(backtestResult?.config?.lookbackDays || expectedLookbackDays));
- return resultLookbackDays === expectedLookbackDays;
-}
-
-async function v16ResolveAutoTradeBacktestResult(signal = {}, cfg = {}, strategy = {}, cachedResult = null, now = Date.now()) {
- const symbol = v16NormalizeSymbol(signal?.symbol || '');
- const storageKey = v16BuildAutoTradeBacktestStorageKey(symbol);
- if (!symbol || !storageKey) return {
- symbol,
- storageKey,
- result: {
- error: 'Backtest symbol missing',
- symbol,
- ts: now,
- config: {
- minScore: v16SanitizeBacktestMinScore(cfg.backtestSignalMinScore, cfg.minScore || 75),
- lookbackDays: Math.max(100, Number(cfg.backtestLookbackDays || 500)),
- },
- },
- fromCache: false,
- };
- if (v16IsFreshAutoTradeBacktestResult(cachedResult, cfg, now)) {
- return { symbol, storageKey, result: cachedResult, fromCache: true };
- }
- let result;
- try {
- result = await runBacktest(symbol, strategy || {}, {
- minScore: cfg.backtestSignalMinScore,
- lookbackDays: cfg.backtestLookbackDays,
- });
- } catch (error) {
- result = {
- error: String(error?.message || 'Backtest failed').trim() || 'Backtest failed',
- symbol,
- ts: now,
- config: {
- minScore: v16SanitizeBacktestMinScore(cfg.backtestSignalMinScore, cfg.minScore || 75),
- lookbackDays: Math.max(100, Number(cfg.backtestLookbackDays || 500)),
- },
- };
- }
- if (!result?.ts) result.ts = now;
- if (!result?.config || typeof result.config !== 'object') {
- result.config = {
- minScore: v16SanitizeBacktestMinScore(cfg.backtestSignalMinScore, cfg.minScore || 75),
- lookbackDays: Math.max(100, Number(cfg.backtestLookbackDays || 500)),
- };
- }
- await storeLocalSet({ [storageKey]: result });
- return { symbol, storageKey, result, fromCache: false };
 }
 
 function v16ResolveAutoTradeRequestedSize(signal = {}, cfg = {}) {
@@ -3316,8 +3242,14 @@ function v16BuildAutoTradeEventText(eventName = '', entry = {}, extra = {}) {
 function v16BuildAutoTradeFeedPayload(eventName = '', entry = {}, extra = {}) {
  const symbol = v16NormalizeSymbol(entry.symbol || extra.symbol || '');
  const side = String(v16ResolveAutoTradePositionSide(entry)).toUpperCase() || 'LONG';
+ const sourceMeta = {
+ sourceScannerId: 'auto_trade',
+ sourceScannerName: 'Auto-Trade',
+ sourceType: 'auto_trade',
+ };
  if (eventName === 'placed') {
  return {
+ ...sourceMeta,
  tone: 'success',
  title: `Auto-trade placed ${symbol}`,
  symbol,
@@ -3329,6 +3261,7 @@ function v16BuildAutoTradeFeedPayload(eventName = '', entry = {}, extra = {}) {
  }
  if (eventName === 'signal_flip') {
  return {
+ ...sourceMeta,
  tone: 'warn',
  title: `Signal flip closed ${symbol}`,
  symbol,
@@ -3340,6 +3273,7 @@ function v16BuildAutoTradeFeedPayload(eventName = '', entry = {}, extra = {}) {
  }
  if (eventName === 'unprotected') {
  return {
+ ...sourceMeta,
  tone: 'error',
  title: `Protection missing on ${symbol}`,
  symbol,
@@ -3354,6 +3288,7 @@ function v16BuildAutoTradeFeedPayload(eventName = '', entry = {}, extra = {}) {
  ? v16FormatAutoTradePrice(extra.stopPrice || entry.sl || 0)
  : v16FormatAutoTradePrice(extra.targetPrice || entry.tp || 0);
  return {
+ ...sourceMeta,
  tone: 'info',
  title: `${eventName === 'stop_armed' ? 'Stop' : 'Target'} armed ${symbol}`,
  symbol,
@@ -3372,6 +3307,7 @@ function v16BuildAutoTradeFeedPayload(eventName = '', entry = {}, extra = {}) {
  const toLabel = String(extra.toTargetLabel || extra.toStageLabel || 'T?').trim();
  const shiftedAt = Number(extra.shiftedAt || Date.now());
  return {
+ ...sourceMeta,
  tone: 'info',
  title: `Target shifted ${symbol}`,
  symbol,
@@ -3384,6 +3320,7 @@ function v16BuildAutoTradeFeedPayload(eventName = '', entry = {}, extra = {}) {
  }
  if (eventName === 'cancelled' || eventName === 'closed') {
  return {
+ ...sourceMeta,
  tone: eventName === 'closed' ? 'info' : 'warn',
  title: `${eventName === 'closed' ? 'Position closed' : 'Order cancelled'} ${symbol}`,
  symbol,
@@ -3394,6 +3331,7 @@ function v16BuildAutoTradeFeedPayload(eventName = '', entry = {}, extra = {}) {
  };
  }
  return {
+ ...sourceMeta,
  tone: 'info',
  title: `Auto-trade update ${symbol}`,
  symbol,
@@ -4557,7 +4495,6 @@ async function runAutoTradeEngine(scanResults = []) {
  .slice(0, Math.max(0, maxNew))
  .map(signal => {
  const executionSignal = v16BuildExecutionSignal(signal, cfg);
- executionSignal.autoTradeBacktest = null;
  return executionSignal;
  });
 
@@ -4626,7 +4563,6 @@ async function runAutoTradeEngine(scanResults = []) {
  remainingDayBudget,
  maxNew,
  fundingBlocked: fundingBlockedReasons.length,
- backtestBlocked: 0,
  topSignals: auditSignals,
  });
  await v16PushNotificationFeed({
@@ -4782,7 +4718,6 @@ async function runAutoTradeEngine(scanResults = []) {
  reverseSignals: !!signal?.autoTradeReverseApplied,
  signalDirection: String(signal?.autoTradeExecutionDirection || signal?.direction || '').trim(),
  originalSignalDirection: String(signal?.autoTradeOriginalDirection || signal?.direction || '').trim(),
- autoTradeBacktest: signal?.autoTradeBacktest || null,
  source: 'auto',
  profileId: access.profileId || '',
  baseUrl: access.baseUrl || '',

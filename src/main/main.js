@@ -1,4 +1,4 @@
-const { app, dialog, ipcMain, safeStorage } = require('electron');
+const { app, dialog, ipcMain, Menu, safeStorage } = require('electron');
 const fs = require('fs/promises');
 const path = require('path');
 const { createAuth } = require('./auth');
@@ -14,12 +14,61 @@ const { createMigrationRunner } = require('./migrations');
 const { createWindowManager } = require('./windows');
 
 const MAIN_PROCESS_STARTED_AT = Date.now();
+const MAX_CHROMIUM_CACHE_BYTES = 48 * 1024 * 1024;
 
 app.setName('FWD TradeDesk Pro');
 if (process.platform === 'win32') app.setAppUserModelId('com.fwd.tradedeskpro');
+Menu.setApplicationMenu(null);
 
 const RUNTIME_CACHE_DIR = path.join(app.getPath('userData'), 'runtime-cache');
 app.commandLine.appendSwitch('disk-cache-dir', RUNTIME_CACHE_DIR);
+app.commandLine.appendSwitch('disk-cache-size', String(32 * 1024 * 1024));
+app.commandLine.appendSwitch('media-cache-size', String(8 * 1024 * 1024));
+app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
+
+async function directorySize(dir) {
+ let total = 0;
+ let entries = [];
+ try {
+  entries = await fs.readdir(dir, { withFileTypes: true });
+ } catch (_) {
+  return 0;
+ }
+ for (const entry of entries) {
+  const entryPath = path.join(dir, entry.name);
+  try {
+   if (entry.isDirectory()) total += await directorySize(entryPath);
+   else if (entry.isFile()) total += (await fs.stat(entryPath)).size;
+  } catch (_) {
+   // Cache files can disappear while Chromium owns them; ignore transient misses.
+  }
+ }
+ return total;
+}
+
+async function pruneChromiumCaches() {
+ const userData = app.getPath('userData');
+ const cacheDirs = [
+  RUNTIME_CACHE_DIR,
+  path.join(userData, 'Cache'),
+  path.join(userData, 'Code Cache'),
+  path.join(userData, 'GPUCache'),
+  path.join(userData, 'DawnWebGPUCache'),
+  path.join(userData, 'DawnGraphiteCache'),
+ ];
+ const totalBytes = (await Promise.all(cacheDirs.map(directorySize))).reduce((sum, bytes) => sum + bytes, 0);
+ if (totalBytes <= MAX_CHROMIUM_CACHE_BYTES) return { ok: true, skipped: true, totalBytes };
+ const removed = [];
+ for (const dir of cacheDirs) {
+  try {
+   await fs.rm(dir, { recursive: true, force: true });
+   removed.push(dir);
+  } catch (error) {
+   errorJournal?.append?.('main:cache-prune', error, { dir });
+  }
+ }
+ return { ok: true, skipped: false, totalBytes, removed };
+}
 
 async function ensureRuntimeCacheDirs() {
  const dirs = [
@@ -73,6 +122,7 @@ createIpcHandlers({
 });
 
 app.whenReady().then(async () => {
+ await pruneChromiumCaches();
  await ensureRuntimeCacheDirs();
  await migrations.run();
  await candleCache.enforceLimits();

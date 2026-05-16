@@ -485,6 +485,70 @@
   return output;
  }
 
+ async function runReversalScanFromContext(context) {
+  if (!global.FWDTradeDeskStrategies?.normalizeStrategyResult) throw new Error('Strategy registry not loaded');
+  if (!context?.scanId) throw new Error('Fresh main scan context is required');
+  await reversalSetStatus('Deriving Reversal rows from main scan...', { active: true, progress: 5, scanId: context.scanId });
+  await chrome.storage.local.set({ 'strategyResults.reversal': [] });
+  const settings = await reversalLoadSettings();
+  const tickerMap = context.tickerMap || {};
+  const products = Array.isArray(context.products) ? context.products : [];
+  const universe = reversalBuildUniverse(tickerMap, products, settings);
+  const diagnostics = { tickerRows: Object.keys(tickerMap || {}).length, productRows: products.length, universeRows: universe.length };
+  const skipped = { insufficientHistory: 0, fetchErrors: 0, reviewOnly: 0, noContextCandles: 0 };
+  const getContextCandles = globalThis.FWDTradeDeskScanContext?.getCandles;
+  const results = [];
+  for (let i = 0; i < universe.length; i += 1) {
+   const item = universe[i];
+   if (i % 10 === 0 || i === universe.length - 1) {
+    await reversalSetStatus(`Deriving ${item.symbol} (${i + 1}/${universe.length})`, {
+     active: true,
+     progress: Math.round(5 + (i / Math.max(1, universe.length)) * 90),
+     scanned: i + 1,
+     total: universe.length,
+     scanId: context.scanId,
+    });
+   }
+   try {
+    const safeIntraday = getContextCandles?.(context, item.symbol, '15m', settings.preferredIntradayCandles) || [];
+    if (safeIntraday.length < Number(settings.minIntradayCandles || 72)) {
+     skipped.insufficientHistory += 1;
+     if (!safeIntraday.length) skipped.noContextCandles += 1;
+     continue;
+    }
+    const daily = getContextCandles?.(context, item.symbol, '1d', settings.preferredDailyCandles) || [];
+    const result = reversalAnalyzeSymbol(item.symbol, safeIntraday, daily, item.ticker, { settings });
+    if (result.eventType === 'review') skipped.reviewOnly += 1;
+    results.push(result);
+   } catch (error) {
+    skipped.fetchErrors += 1;
+    reversalLog(`${item.symbol} derive skipped: ${error?.message || error}`);
+   }
+  }
+  const output = reversalSortRows(results).slice(0, Math.max(20, Number(settings.outputLimit || REVERSAL_DEFAULT_SETTINGS.outputLimit)));
+  const counts = reversalSignalCounts(output);
+  await chrome.storage.local.set({
+   'strategyResults.reversal': output,
+   'strategyStatus.reversal': {
+    strategyId: 'reversal',
+    status: `Derived - ${output.length} Reversal rows from main scan | Fade ${counts.fade_extreme || 0}, Liq ${counts.liquidation_reversal || 0}, Mean ${counts.mean_reversion || 0}`,
+    active: false,
+    progress: 100,
+    scanned: results.length,
+    total: universe.length,
+    eventCounts: counts,
+    skipped,
+    diagnostics,
+    source: 'main_scan_context',
+    scanId: context.scanId,
+    lastScanTs: reversalNow(),
+    ts: reversalNow(),
+   },
+   reversalLastScanTs: reversalNow(),
+  });
+  return output;
+ }
+
  function getReversalSnapshot(callback) {
   chrome.storage.local.get([
    'strategyResults.reversal',
@@ -508,7 +572,14 @@
    return false;
   }
   if (msg?.action === 'reversal:startScan') {
-   runReversalScan()
+   const context = globalThis.FWDTradeDeskScanContext?.getFresh?.();
+   const runner = context ? () => runReversalScanFromContext(context) : (msg?.forceIndependent === true ? runReversalScan : null);
+   if (!runner) {
+    reversalSetStatus('Run main scan first - Reversal will derive from shared scan data', { active: false, progress: 0 })
+    .finally(() => sendResponse({ ok: false, error: 'Run main scan first' }));
+    return true;
+   }
+   runner()
    .then(results => sendResponse({ ok: true, count: results.length }))
    .catch(async error => {
     await reversalSetStatus(`Reversal scan failed - ${error?.message || error}`, { active: false, progress: 0 });
@@ -538,5 +609,6 @@
   reversalBuildScoreParts,
   reversalEventLabel,
   runReversalScan,
+  runReversalScanFromContext,
  });
 })(globalThis);

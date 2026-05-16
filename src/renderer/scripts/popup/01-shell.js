@@ -6,12 +6,12 @@ const POLL_INTERVALS = {
  watchlist: 3000, // watchlist - medium
  chart: 3000, // decision chart - medium
  liveanalytics: 2000, // live analytics - medium
+ tradecheck: 10000, // manual trade check - avoid rerender while typing
  positions: 2000, // live P&L - medium
  riskcalc: 5000, // user is typing - slow
  var: 3000, // VAR dashboard - medium
  funding: 8000, // rates change every 8h - slow
  corr: 10000, // correlation - slow
- backtest: 10000, // user-triggered - slow
  strategy: 10000, // settings - slow
  webhooks: 10000, // settings - slow
  debug: 5000, // diagnostics - slow
@@ -37,6 +37,8 @@ const POLL_TAB_EXTRA_KEYS = {
  watchlist: ['autoWatchlist', 'decisionShortlist'],
 };
 const _dirtyTabs = new Set(['home', 'scanner']);
+const _workspaceRenderFrames = new Map();
+const _workspaceRenderPayloads = new Map();
 let _workspaceInsightsRenderKey = '';
 
 function markWorkspaceTabsDirty(tabs = []) {
@@ -53,6 +55,42 @@ function clearWorkspaceTabDirty(tab = '') {
 function isWorkspaceTabDirty(tab = '') {
  return _dirtyTabs.has(String(tab || '').trim());
 }
+
+function isWorkspaceTabActive(tab = '') {
+ return String(tab || '').trim() === String(activeWorkspaceTab || '').trim();
+}
+
+function scheduleWorkspaceTabRender(tab = activeWorkspaceTab, options = {}) {
+ const safeTab = String(tab || activeWorkspaceTab || 'home').trim();
+ if (!safeTab) return Promise.resolve(false);
+ if (!isWorkspaceTabActive(safeTab) && options.force !== true) {
+  markWorkspaceTabsDirty(safeTab);
+  return Promise.resolve(false);
+ }
+ if (options.preloaded) _workspaceRenderPayloads.set(safeTab, options.preloaded);
+ if (_workspaceRenderFrames.has(safeTab)) return _workspaceRenderFrames.get(safeTab).promise;
+ let resolveFrame;
+ const promise = new Promise(resolve => { resolveFrame = resolve; });
+ const raf = requestAnimationFrame(() => {
+  _workspaceRenderFrames.delete(safeTab);
+  const preloaded = _workspaceRenderPayloads.get(safeTab) || null;
+  _workspaceRenderPayloads.delete(safeTab);
+  try {
+   renderActiveWorkspaceTab(safeTab, preloaded);
+   resolveFrame(true);
+  } catch (error) {
+   reportUiError?.('Workspace render failed', error, { timeoutMs: 7000 });
+   resolveFrame(false);
+  }
+ });
+ _workspaceRenderFrames.set(safeTab, { raf, promise });
+ return promise;
+}
+
+globalThis.markWorkspaceTabsDirty = markWorkspaceTabsDirty;
+globalThis.clearWorkspaceTabDirty = clearWorkspaceTabDirty;
+globalThis.isWorkspaceTabDirty = isWorkspaceTabDirty;
+globalThis.scheduleWorkspaceTabRender = scheduleWorkspaceTabRender;
 
 function buildPollRenderKey(parts = {}) {
  try {
@@ -180,7 +218,6 @@ function startPolling() {
  _pollLastAt = _now;
  _pollLastTab = activeWorkspaceTab;
  const d = await getPollingSnapshot();
- globalThis.FWDAppLock?.touchActivity?.();
  globalThis.updateSecureStorageWarningBanner?.();
  updateApiUsageMeter();
  updateStatusBar(d.scanStatus, d.scanProgress, d.lastScan, d.scanActive, d.scanHeartbeat, d);
@@ -227,19 +264,19 @@ function startPolling() {
  && document.getElementById('pane-liveanalytics')?.classList.contains('active')
  ) {
 
- globalThis.renderV16LiveAnalyticsPane?.({ scanResults: d.scanResults, lastScan: d.lastScan, alerts: d.alerts });
+ scheduleWorkspaceTabRender('liveanalytics', { preloaded: { scanResults: d.scanResults, lastScan: d.lastScan, alerts: d.alerts } });
 
  }
 
  if ((globalThis.v16IsLiveAccountSyncEnabled?.() ?? true) && document.getElementById('pane-positions')?.classList.contains('active')) {
 
- globalThis.renderV16PositionsPane?.({ scanResults: d.scanResults, lastScan: d.lastScan, alerts: d.alerts });
+ scheduleWorkspaceTabRender('positions', { preloaded: { scanResults: d.scanResults, lastScan: d.lastScan, alerts: d.alerts } });
 
  }
 
  if ((globalThis.v16IsLiveAccountSyncEnabled?.() ?? true) && document.getElementById('pane-orders')?.classList.contains('active')) {
 
- globalThis.renderV16OrdersPane?.({ scanResults: d.scanResults, lastScan: d.lastScan, alerts: d.alerts });
+ scheduleWorkspaceTabRender('orders', { preloaded: { scanResults: d.scanResults, lastScan: d.lastScan, alerts: d.alerts } });
 
  }
 
@@ -291,6 +328,128 @@ function renderApiUsageMeter(response = null) {
  ].filter(Boolean).join('\n');
 }
 
+function normalizeFwd100DisplayValue(value = 0, sentiment = 0) {
+ const numeric = Number(value);
+ if (Number.isFinite(numeric) && numeric > 0) return numeric;
+ return 10000 * (1 + (Number(sentiment || 0) / 100));
+}
+
+function getFwd100PointMove(marketIndex = null, composite = null) {
+ const current = Number.isFinite(Number(composite))
+ ? Number(composite)
+ : normalizeFwd100DisplayValue(marketIndex?.composite, marketIndex?.sentiment?.value ?? marketIndex?.value ?? 0);
+ const explicitPoints = Number(marketIndex?.indexChangePoints);
+ if (Number.isFinite(explicitPoints)) return explicitPoints;
+ const previousComposite = Number(marketIndex?.previousComposite);
+ if (Number.isFinite(previousComposite) && previousComposite > 0) return current - previousComposite;
+ const pct = Number(marketIndex?.indexChangePct);
+ if (!Number.isFinite(pct) || pct === -100) return 0;
+ const derivedPrevious = current / (1 + (pct / 100));
+ return Number.isFinite(derivedPrevious) && derivedPrevious > 0 ? current - derivedPrevious : 0;
+}
+
+function formatFwd100Points(value = 0, digits = 2) {
+ const numeric = Number(value);
+ const safe = Number.isFinite(numeric) ? numeric : 0;
+ return `${safe >= 0 ? '+' : ''}${safe.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
+}
+
+function getFwd100MoveLabel(marketIndex = null) {
+ const basis = String(marketIndex?.indexChangeBasis || '').trim().toLowerCase();
+ if (basis === 'rolling_24h') return '24h';
+ if (basis === 'since_available_history') return 'history';
+ return 'scan';
+}
+
+function describeFwd100MoveWindow(marketIndex = null) {
+ const label = getFwd100MoveLabel(marketIndex);
+ const baselineTs = Number(marketIndex?.indexChangeBaselineTs || 0);
+ const baseline = Number(marketIndex?.indexChangeBaselineComposite || marketIndex?.previousComposite || 0);
+ if (label === '24h') {
+ return `Rolling 24h move from ${baselineTs ? new Date(baselineTs).toLocaleString() : 'the stored 24h baseline'} (${baseline > 0 ? baseline.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'baseline unavailable'}). This is a rolling 24-hour window, not calendar midnight.`;
+ }
+ if (label === 'history') {
+ return `Move from the closest available stored history point${baselineTs ? ` at ${new Date(baselineTs).toLocaleString()}` : ''}. A precise rolling 24h value will appear after enough stored scans.`;
+ }
+ return `Move from the previous scan (${baseline > 0 ? baseline.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'baseline unavailable'}). Run scans over 24 hours to show the rolling 24h move.`;
+}
+
+function formatFwd100AuditNumber(value = 0, digits = 2) {
+ const numeric = Number(value);
+ if (!Number.isFinite(numeric)) return '-';
+ return numeric.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+function formatFwd100AuditTime(value = 0) {
+ const ts = Number(value || 0);
+ if (!Number.isFinite(ts) || ts <= 0) return 'Unavailable';
+ return new Date(ts).toLocaleString();
+}
+
+function buildFwd100AuditHtml(marketIndex = null, currentComposite = 0) {
+ const label = getFwd100MoveLabel(marketIndex);
+ const isTrue24h = label === '24h';
+ const current = Number(currentComposite || marketIndex?.composite || 0);
+ const baseline = Number(marketIndex?.indexChangeBaselineComposite || marketIndex?.previousComposite || 0);
+ const baselineTs = Number(marketIndex?.indexChangeBaselineTs || 0);
+ const points = getFwd100PointMove(marketIndex, current);
+ const pct = Number(marketIndex?.indexChangePct || 0);
+ const scanPoints = Number(marketIndex?.scanChangePoints ?? marketIndex?.indexChangePoints ?? 0);
+ const scanPct = Number(marketIndex?.scanChangePct ?? marketIndex?.indexChangePct ?? 0);
+ const basketCount = Array.isArray(marketIndex?.topCoins) ? marketIndex.topCoins.length : Number(marketIndex?.topCount || 0);
+ const rows = [
+ ['Current FWD-100', formatFwd100AuditNumber(current), 'Live composite saved by latest scan'],
+ [`${label.toUpperCase()} baseline`, baseline > 0 ? formatFwd100AuditNumber(baseline) : '-', formatFwd100AuditTime(baselineTs)],
+ [`${label.toUpperCase()} points`, formatFwd100Points(points), `${pct >= 0 ? '+' : ''}${formatFwd100AuditNumber(pct)}%`],
+ ['Last scan move', formatFwd100Points(scanPoints), `${scanPct >= 0 ? '+' : ''}${formatFwd100AuditNumber(scanPct)}% since previous scan`],
+ ['Basket', `${basketCount || '-'} coins`, `Rebalance: ${marketIndex?.rebalanceReason || 'carry'}`],
+ ];
+ const warning = isTrue24h
+ ? ''
+ : `<div style="margin-top:8px;padding:8px 10px;border:1px solid rgba(255,200,64,.26);background:rgba(255,200,64,.08);color:#ffd277;border-radius:6px;font-size:9.5px;line-height:1.55">True rolling 24h baseline is not available yet. This audit is showing ${label === 'history' ? 'the closest stored history point' : 'the previous scan'} until the app has enough stored scan history.</div>`;
+ return `
+ <div class="d10-benchmark-modal-grid">
+ ${rows.map(([labelText, valueText, detailText]) => `
+ <div class="d10-benchmark-modal-card">
+ <span>${escapeHtml(labelText)}</span>
+ <strong>${escapeHtml(valueText)}</strong>
+ <small>${escapeHtml(detailText)}</small>
+ </div>`).join('')}
+ </div>
+ ${warning}`;
+}
+
+function renderPriceChangeDistribution(results = []) {
+ const root = document.getElementById('priceChangeDistribution');
+ if (!root) return;
+ const rows = (Array.isArray(results) ? results : [])
+ .map(row => Number(row?.change24h ?? row?.ticker?.change24h ?? row?.priceChange24h ?? 0))
+ .filter(value => Number.isFinite(value));
+ if (!rows.length) {
+ root.hidden = true;
+ return;
+ }
+ const advancers = rows.filter(value => value > 0.05).length;
+ const decliners = rows.filter(value => value < -0.05).length;
+ const flat = Math.max(0, rows.length - advancers - decliners);
+ const total = Math.max(1, rows.length);
+ const declinePct = Math.max(4, (decliners / total) * 100);
+ const flatPct = flat > 0 ? Math.max(4, (flat / total) * 100) : 0;
+ const advancePct = Math.max(4, 100 - declinePct - flatPct);
+ const declineBar = document.getElementById('pcdDeclineBar');
+ const flatBar = document.getElementById('pcdFlatBar');
+ const advanceBar = document.getElementById('pcdAdvanceBar');
+ if (declineBar) declineBar.style.width = `${Math.max(0, Math.min(100, declinePct)).toFixed(1)}%`;
+ if (flatBar) flatBar.style.width = `${Math.max(0, Math.min(100, flatPct)).toFixed(1)}%`;
+ if (advanceBar) advanceBar.style.width = `${Math.max(0, Math.min(100, advancePct)).toFixed(1)}%`;
+ const dEl = document.getElementById('pcdDecliners');
+ const aEl = document.getElementById('pcdAdvancers');
+ if (dEl) dEl.textContent = `D ${decliners}`;
+ if (aEl) aEl.textContent = `A ${advancers}`;
+ root.title = `Price Change Distribution\nDecliners: ${decliners}\nFlat: ${flat}\nAdvancers: ${advancers}`;
+ root.hidden = false;
+}
+
 function updateApiUsageMeter(force = false) {
  const el = document.getElementById('apiUsageMeter');
  if (!el) return;
@@ -328,6 +487,7 @@ function updateStatusBar(status, pct, lastScan, scanActive = false, scanHeartbea
  const btnS = document.getElementById('btnScan');
  const progress = Number.isFinite(+pct) ? Math.max(0, Math.min(100, +pct)) : 0;
  const statusText = String(status || '').trim();
+ const completedScanWithPartialWarning = !!lastScan && !scanActive && /using partial results/i.test(statusText);
  const scanLikeStatus = !!statusText && /loading|scanning/i.test(statusText);
  const heartbeatFresh = Number.isFinite(+scanHeartbeat) && (Date.now() - Number(scanHeartbeat)) < SCAN_HEARTBEAT_STALE_MS;
  const scanRunning = !!scanActive && heartbeatFresh && scanLikeStatus && progress < 100;
@@ -343,6 +503,16 @@ function updateStatusBar(status, pct, lastScan, scanActive = false, scanHeartbea
  btnS.disabled = true;
  scanning = true;
  } else {
+ if (completedScanWithPartialWarning && (Date.now() - lastScanRecoveryAt > 10000)) {
+ lastScanRecoveryAt = Date.now();
+ chrome.storage.local.set({
+ scanActive: false,
+ scanHeartbeat: Date.now(),
+ scanStatus: `Ready - last scan ${lastScan}`,
+ scanProgress: 100,
+ scanPartialAvailable: false,
+ });
+ }
  if (staleScanState && (Date.now() - lastScanRecoveryAt > 10000)) {
  lastScanRecoveryAt = Date.now();
  chrome.storage.local.set({
@@ -355,7 +525,7 @@ function updateStatusBar(status, pct, lastScan, scanActive = false, scanHeartbea
  dot.className = progress === 100 ? 'sdot green' : 'sdot';
  stxt.textContent = staleScanState
  ? 'Scan stopped - ready to restart'
- : (statusText || 'Ready - click Scan Now');
+ : (completedScanWithPartialWarning ? `Ready - last scan ${lastScan}` : (statusText || 'Ready - click Scan Now'));
  progw.style.display = 'none';
  btnS.disabled = false;
  if (scanning) {
@@ -363,12 +533,7 @@ function updateStatusBar(status, pct, lastScan, scanActive = false, scanHeartbea
  markWorkspaceTabsDirty(['scanner', 'watchlist', 'chart', 'corr']);
  if (globalThis.v16IsLiveAnalyticsAutoRefreshEnabled?.() ?? false) markWorkspaceTabsDirty('liveanalytics');
  if (isWorkspaceTabDirty(activeWorkspaceTab)) {
- clearWorkspaceTabDirty(activeWorkspaceTab);
- if (activeWorkspaceTab === 'scanner') renderScanner(preloaded);
- if (activeWorkspaceTab === 'watchlist') renderWatchlist(preloaded);
- if (activeWorkspaceTab === 'chart') globalThis.renderChartWorkspacePane?.();
- if (activeWorkspaceTab === 'liveanalytics' && (globalThis.v16IsLiveAnalyticsAutoRefreshEnabled?.() ?? false)) renderAnalytics(preloaded);
- if (activeWorkspaceTab === 'corr') renderCorrelationMatrix();
+ scheduleWorkspaceTabRender(activeWorkspaceTab, { preloaded });
  }
  }
  }
@@ -404,6 +569,7 @@ async function refreshStats() {
  updateHeaderStats(d.scanResults, liveAlerts, d.scannedCoins, d.totalCoins);
  updateApiUsageMeter(true);
  updateStatusBar(d.scanStatus, d.scanProgress, d.lastScan, d.scanActive, d.scanHeartbeat);
+ renderPriceChangeDistribution(d.scanResults);
  updateMarketIndex(d.marketIndex);
  updateSectorBar(d.sectorSummary);
  updateWorkspaceInsights(d);
@@ -414,24 +580,31 @@ async function refreshStats() {
 
 
 // ==================================================================
-// FWD-10 INDEX - Volume-weighted composite
+// FWD-100 INDEX - cumulative equal-weight benchmark plus sentiment tape
 // ==================================================================
 function updateMarketIndex(mi) {
  const bar = document.getElementById('d10bar');
  if (!mi) { bar.style.display = 'none'; return; }
  bar.style.display = 'flex';
 
- const v = mi.value;
- const comp = mi.composite || (10000 * (1 + v / 100));
+ const v = Number(mi.sentiment?.value ?? mi.value ?? 0);
+ const indexMove = Number(mi.indexChangePct ?? 0);
+ const comp = normalizeFwd100DisplayValue(mi.composite, v);
+ const pointMove = getFwd100PointMove(mi, comp);
+ const moveLabel = getFwd100MoveLabel(mi);
+ const moveTone = pointMove > 0.01 || indexMove > 0.005 ? 'up' : pointMove < -0.01 || indexMove < -0.005 ? 'dn' : 'flat';
 
  const compEl = document.getElementById('d10composite');
- compEl.textContent = comp.toLocaleString(undefined, { maximumFractionDigits: 0 });
- compEl.style.color = v > 0 ? '#00e5a0' : v < 0 ? '#ff4560' : '#ffc840';
+ compEl.textContent = comp.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+ compEl.style.color = moveTone === 'up' ? '#1de9b6' : moveTone === 'dn' ? '#ff5d7a' : '#ffd277';
 
  const chgEl = document.getElementById('d10change');
- chgEl.textContent = `${v >= 0 ? 'UP' : 'DOWN'} ${v >= 0 ? '+' : ''}${v}%`;
- chgEl.style.color = v > 0 ? '#00e5a0' : v < 0 ? '#ff4560' : '#ffc840';
- chgEl.style.background = v > 0 ? 'rgba(0,229,160,.08)' : v < 0 ? 'rgba(255,69,96,.08)' : 'rgba(255,200,64,.06)';
+ if (chgEl) {
+ chgEl.textContent = `${formatFwd100Points(pointMove)} pts ${moveLabel} (${indexMove >= 0 ? '+' : ''}${indexMove.toFixed(2)}%)`;
+ chgEl.className = `d10-change ${moveTone}`;
+ chgEl.title = describeFwd100MoveWindow(mi);
+ chgEl.style.display = 'inline-flex';
+ }
 
  bar.style.borderBottomColor = v > 2 ? 'rgba(0,229,160,.25)' : v < -2 ? 'rgba(255,69,96,.25)' : 'rgba(255,200,64,.15)';
 
@@ -443,13 +616,15 @@ function updateMarketIndex(mi) {
  crash: { text: 'RISK-OFF', color: '#ff1a40' },
  };
  const cond = condMap[mi.condition] || condMap.neutral;
- document.getElementById('d10cond').textContent = cond.text;
- document.getElementById('d10cond').style.color = cond.color;
+ const condEl = document.getElementById('d10cond');
+ if (condEl) {
+ condEl.textContent = '';
+ condEl.style.display = 'none';
+ }
  const subEl = document.getElementById('d10sub');
  if (subEl) {
- const method = String(mi.method || 'Equal-weight composite').trim();
- const selectionLabel = String(mi.selectionLabel || `Top ${(mi.topCoins || []).length || 10} coins`).trim();
- subEl.textContent = `${method} | ${selectionLabel}`;
+ subEl.textContent = '';
+ subEl.style.display = 'none';
  }
  updateMarketBenchmarks(mi, cond);
 
@@ -457,7 +632,7 @@ function updateMarketIndex(mi) {
  if (coinsEl) coinsEl.innerHTML = '';
 }
 
-// -- FWD-10 Detail Modal --------------------------------------
+// -- FWD-100 Detail Modal --------------------------------------
 function updateMarketBenchmarks(mi, cond = {}) {
  const houseCard = document.getElementById('d10houseBenchmark');
  const cfCard = document.getElementById('d10cfBenchmark');
@@ -465,12 +640,15 @@ function updateMarketBenchmarks(mi, cond = {}) {
  const cf = mi?.benchmarks?.cf || null;
  const sp = mi?.benchmarks?.sp || null;
  if (houseCard) {
- const value = Number(mi?.value || 0);
- const tone = value > 2 ? 'good' : value < -2 ? 'bad' : 'warn';
+ const value = Number(mi?.indexChangePct || 0);
+ const points = getFwd100PointMove(mi);
+ const moveLabel = getFwd100MoveLabel(mi);
+ const sentiment = Number(mi?.sentiment?.value ?? mi?.value ?? 0);
+ const tone = sentiment > 2 ? 'good' : sentiment < -2 ? 'bad' : 'warn';
  houseCard.className = `d10-benchmark-card ${tone}`;
- houseCard.querySelector('.d10-benchmark-value').textContent = String(mi?.condition || 'neutral').toUpperCase();
- houseCard.querySelector('.d10-benchmark-copy').textContent = `${value >= 0 ? '+' : ''}${value.toFixed(2)}% today`;
- houseCard.title = `FWD-10 is the live house tape. ${cond.text || 'NEUTRAL'} regime with composite ${Number(mi?.composite || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}.`;
+ houseCard.querySelector('.d10-benchmark-value').textContent = `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+ houseCard.querySelector('.d10-benchmark-copy').textContent = `${formatFwd100Points(points)} pts ${moveLabel} | Sentiment ${sentiment >= 0 ? '+' : ''}${sentiment.toFixed(2)}%`;
+ houseCard.title = `FWD-100 is the cumulative equal-weight benchmark. Sentiment tape is separate: ${cond.text || 'NEUTRAL'}. Composite ${normalizeFwd100DisplayValue(mi?.composite, sentiment).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.`;
  }
  if (cfCard) {
  if (cf) {
@@ -493,7 +671,7 @@ function updateMarketBenchmarks(mi, cond = {}) {
  const tone = value > 2 ? 'good' : value < -2 ? 'bad' : 'warn';
  spCard.className = `d10-benchmark-card ${tone}`;
  spCard.querySelector('.d10-benchmark-value').textContent = `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
- spCard.querySelector('.d10-benchmark-copy').textContent = `${sp.method || 'Top 10'} | ${Number((sp.constituents || []).length || 0)} names`;
+ spCard.querySelector('.d10-benchmark-copy').textContent = `${sp.method || 'Top set'} | ${Number((sp.constituents || []).length || 0)} names`;
  spCard.title = `${sp.label || 'S&P-style'} internal benchmark. ${sp.selectionLabel || ''}. ${sp.notes || ''}`;
  } else {
  spCard.className = 'd10-benchmark-card pending';
@@ -577,8 +755,11 @@ function buildD10HistoryModel(history = [], marketIndex = null) {
  const points = (Array.isArray(history) ? history : [])
  .map(item => ({
  ts: d10Finite(item?.ts, 0),
- composite: d10Finite(item?.composite, 0),
- value: d10Finite(item?.value, 0),
+ composite: normalizeFwd100DisplayValue(item?.composite, item?.sentimentValue ?? item?.value ?? 0),
+ value: d10Finite(item?.indexChangePct, d10Finite(item?.value, 0)),
+ sentimentValue: d10Finite(item?.sentimentValue, d10Finite(item?.value, 0)),
+ sentimentScore: d10Finite(item?.sentimentScore, 0),
+ sentimentLabel: String(item?.sentimentLabel || ''),
  advancing: d10Finite(item?.advancing, 0),
  declining: d10Finite(item?.declining, 0),
  topCount: d10Finite(item?.topCount, 0),
@@ -598,8 +779,11 @@ function buildD10HistoryModel(history = [], marketIndex = null) {
  if (!last || Math.abs(d10Finite(last.ts, 0) - d10Finite(marketIndex.ts, 0)) > 1000) {
  points.push({
  ts: d10Finite(marketIndex.ts, Date.now()),
- composite: d10Finite(marketIndex.composite, 0),
- value: d10Finite(marketIndex.value, 0),
+ composite: normalizeFwd100DisplayValue(marketIndex.composite, marketIndex.sentiment?.value ?? marketIndex.value ?? 0),
+ value: d10Finite(marketIndex.indexChangePct, 0),
+ sentimentValue: d10Finite(marketIndex.sentiment?.value, d10Finite(marketIndex.value, 0)),
+ sentimentScore: d10Finite(marketIndex.sentiment?.score, 0),
+ sentimentLabel: String(marketIndex.sentiment?.label || ''),
  advancing: Array.isArray(marketIndex.topCoins) ? marketIndex.topCoins.filter(coin => Number(coin?.change || 0) > 0).length : 0,
  declining: Array.isArray(marketIndex.topCoins) ? marketIndex.topCoins.filter(coin => Number(coin?.change || 0) < 0).length : 0,
  topCount: Array.isArray(marketIndex.topCoins) ? marketIndex.topCoins.length : 0,
@@ -618,7 +802,7 @@ function buildD10HistoryModel(history = [], marketIndex = null) {
  const fiveBack = recent[Math.max(0, recent.length - 6)] || previous || last;
  const high = composites.length ? Math.max(...composites) : 0;
  const low = composites.length ? Math.min(...composites) : 0;
- const lastComposite = d10Finite(last?.composite, d10Finite(marketIndex?.composite, 0));
+ const lastComposite = d10Finite(last?.composite, normalizeFwd100DisplayValue(marketIndex?.composite, marketIndex?.sentiment?.value ?? marketIndex?.value ?? 0));
  const lastSma7 = d10Finite(sma7[sma7.length - 1], null);
  const lastEma20 = d10Finite(ema20[ema20.length - 1], null);
  const momentum5 = fiveBack?.composite ? ((lastComposite - fiveBack.composite) / fiveBack.composite) * 100 : 0;
@@ -650,6 +834,8 @@ function buildD10HistoryModel(history = [], marketIndex = null) {
  count: recent.length,
  latest: lastComposite,
  today: d10Finite(last?.value, d10Finite(marketIndex?.value, 0)),
+ sentimentValue: d10Finite(last?.sentimentValue, d10Finite(marketIndex?.sentiment?.value, d10Finite(marketIndex?.value, 0))),
+ sentimentScore: d10Finite(last?.sentimentScore, d10Finite(marketIndex?.sentiment?.score, 0)),
  momentum5,
  drawdown,
  rangePct,
@@ -679,7 +865,7 @@ function ensureD10LightweightCharts() {
  script.dataset.loaded = 'true';
  resolve();
  };
- const fail = () => reject(new Error('FWD-10 chart library failed to load'));
+ const fail = () => reject(new Error('FWD-100 chart library failed to load'));
  script.addEventListener('load', finish, { once: true });
  script.addEventListener('error', fail, { once: true });
  if (!existing) {
@@ -701,7 +887,7 @@ async function renderD10IndexChart(model = null) {
  }
  d10IndexChartHandle = null;
  if (!model.line.length || model.line.length < 2) {
- host.innerHTML = '<div class="d10-chart-empty">Run a few scans to build enough FWD-10 history for the chart.</div>';
+ host.innerHTML = '<div class="d10-chart-empty">Run a few scans to build enough FWD-100 history for the chart.</div>';
  return;
  }
  await ensureD10LightweightCharts();
@@ -732,7 +918,7 @@ async function renderD10IndexChart(model = null) {
  lineWidth: 2,
  priceLineVisible: false,
  lastValueVisible: true,
- title: 'FWD-10',
+ title: 'FWD-100',
  });
  area?.setData(model.line);
  const sma = d10SeriesApi(chart, globalThis.LightweightCharts.LineSeries, {
@@ -778,12 +964,14 @@ document.getElementById('d10chart')?.addEventListener('click', async () => {
  await globalThis.ensurePopupFeatureModulesForTab('chart');
  }
  await globalThis.FWDTradeDeskChartWorkspace?.setChartState?.({
- symbol: 'FWD10',
+ symbol: 'FWD100',
  chartViewMode: 'tab',
- preset: 'trend',
- timeframe: '15m',
- primaryTimeframe: '15m',
- executionTimeframe: '15m',
+ preset: 'ema_obv',
+ chartType: 'candles',
+ timeframe: '1d',
+ primaryTimeframe: '1d',
+ executionTimeframe: '1d',
+ visibleCandleCount: 520,
  showOrders: false,
  showVwap: false,
  rightPanelOpen: false,
@@ -794,23 +982,35 @@ document.getElementById('d10chart')?.addEventListener('click', async () => {
  });
  await globalThis.FWDTradeDeskChartWorkspace?.requestChartTabRender?.(true);
  } catch (error) {
- globalThis.showSystemToast?.('FWD-10 chart unavailable', error?.message || 'Open Chart and search FWD10.', 'warn', 3200);
+ globalThis.showSystemToast?.('FWD-100 chart unavailable', error?.message || 'Open Chart and search FWD100.', 'warn', 3200);
  }
 });
 
 document.getElementById('d10detail')?.addEventListener('click', async () => {
- const d = await storeGet(['marketIndex']);
+ const d = await storeGet(['marketIndex', 'marketIndexHistoryMigration']);
  const mi = d.marketIndex;
  if (!mi) return;
 
- const v = mi.value;
- const comp = mi.composite || (10000 * (1 + v / 100));
+ const v = Number(mi.sentiment?.value ?? mi.value ?? 0);
+ const indexMove = Number(mi.indexChangePct || 0);
+ const indexPoints = getFwd100PointMove(mi);
+ const indexMoveLabel = getFwd100MoveLabel(mi);
+ const indexMoveDetail = describeFwd100MoveWindow(mi);
+ const sentimentScore = Number(mi.sentiment?.score || 0);
+ const sentimentLabel = String(mi.sentiment?.label || mi.condition || 'Neutral');
+ const comp = normalizeFwd100DisplayValue(mi.composite, v);
  const totalVol = mi.totalVolumeUSD ? '$' + fmtLarge(mi.totalVolumeUSD) : '-';
  const coins = mi.topCoins || [];
- const method = String(mi.method || 'Equal-weight composite').trim();
+ const method = String(mi.method || 'Cumulative equal-weight index').trim();
  const selectionLabel = String(mi.selectionLabel || `Top ${coins.length || 10} coins`).trim();
  const excludedSymbols = Array.isArray(mi.excludedSymbols) ? mi.excludedSymbols : [];
  const excludedLabel = excludedSymbols.length ? excludedSymbols.join(', ') : 'None';
+ const lastRebalance = mi.lastRebalancedAt ? new Date(mi.lastRebalancedAt).toLocaleString() : 'Pending';
+ const nextRebalance = mi.nextRebalanceAt ? new Date(mi.nextRebalanceAt).toLocaleString() : 'Pending';
+ const migration = d.marketIndexHistoryMigration || null;
+ const migrationNote = migration?.migratedAt
+ ? `<div style="font-size:9px;color:#ffc840;line-height:1.7;margin:0 4px 10px">History reset: v2 cumulative FWD-100 history started ${new Date(migration.migratedAt).toLocaleString()} after ${Number(migration.legacyCount || 0)} legacy snapshot points.</div>`
+ : '';
 
  const coinRows = coins.map((c, i) => {
  const barW = Math.max(2, c.weight);
@@ -851,34 +1051,58 @@ document.getElementById('d10detail')?.addEventListener('click', async () => {
  <strong>Pending</strong>
  <small>Benchmark data will populate after the next live scan.</small>
  </div>`;
+ const sentimentDrivers = Array.isArray(mi.sentiment?.drivers) && mi.sentiment.drivers.length
+ ? mi.sentiment.drivers
+ : [
+ `${Number(mi.sentiment?.breadthPct || 0).toFixed(1)}% breadth`,
+ `${Number(mi.sentiment?.advancingVolumePct || 0).toFixed(1)}% advancing volume`,
+ `BTC ${Number(mi.sentiment?.btcChange || 0).toFixed(2)}% / ETH ${Number(mi.sentiment?.ethChange || 0).toFixed(2)}%`,
+ ];
+ const sentimentDriverHtml = sentimentDrivers
+ .map(driver => `<span class="d10-sec-pill">${escapeHtml(String(driver || ''))}</span>`)
+ .join('');
+ const auditHtml = buildFwd100AuditHtml(mi, comp);
 
  document.getElementById('d10body').innerHTML = `
  <div class="d10-modal-hero">
- <div class="d10-modal-logo">Delta10</div>
- <div class="d10-modal-val">${comp.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
- <div class="d10-modal-change" style="color:${v >= 0 ? '#00e5a0' : '#ff4560'}">
- ${v >= 0 ? 'UP' : 'DOWN'} ${v >= 0 ? '+' : ''}${v}% today
+ <div class="d10-modal-logo">FWD-100</div>
+ <div class="d10-modal-val">${comp.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+ <div class="d10-modal-change" style="color:${indexMove >= 0 ? '#00e5a0' : '#ff4560'}">
+ INDEX ${indexMoveLabel.toUpperCase()} ${formatFwd100Points(indexPoints)} pts (${indexMove >= 0 ? '+' : ''}${indexMove.toFixed(2)}%) | SENTIMENT ${v >= 0 ? '+' : ''}${v.toFixed(2)}%
  </div>
- <div class="d10-modal-meta">Total Volume: ${totalVol} | ${coins.length} constituents</div>
+ <div class="d10-modal-meta">Total Volume: ${totalVol} | ${coins.length} constituents | ${sentimentLabel}</div>
  </div>
  <div style="font-size:9px;color:#8a9ab8;line-height:1.8;margin:0 4px 10px">
- Basket: <b>${selectionLabel}</b> | Method: <b>${method}</b> | Excluded: <b>${excludedLabel}</b>
+ Basket: <b>${selectionLabel}</b> | Method: <b>${method}</b> | Excluded: <b>${excludedLabel}</b><br/>
+ Last rebalance: <b>${lastRebalance}</b> | Next: <b>${nextRebalance}</b> | Reason: <b>${mi.rebalanceReason || 'carry'}</b><br/>
+ Move basis: <b>${escapeHtml(indexMoveDetail)}</b>
  </div>
- <div class="mo-section">HOW FWD-10 WORKS</div>
+ ${migrationNote}
+ <div class="mo-section">CALCULATION AUDIT</div>
+ ${auditHtml}
+ <div class="mo-section">HOW FWD-100 WORKS</div>
  <div style="font-size:9.5px;color:#8a9ab8;line-height:1.8;margin-bottom:10px;padding:0 4px">
- Like India's <b style="color:#ffc840">NIFTY 50</b> or the <b style="color:#ffc840">S&P 500</b> - the FWD-10 is a
+ Like India's <b style="color:#ffc840">NIFTY 50 Equal Weight</b>, FWD-100 is a
  <b>${method.toLowerCase()}</b> built from ${selectionLabel.toLowerCase()} on Delta Exchange.
- Base value: <b style="color:#00e5c0">10,000</b>. Each selected coin carries the same weight. Excluded symbols: <b>${excludedLabel}</b>.
+ Base value: <b style="color:#00e5c0">10,000</b>. Each selected coin is reset to equal weight at rebalance. The displayed index move uses a rolling 24-hour baseline from stored scans when available; it does not reset at midnight. The sentiment tape is separate and uses 24h breadth, BTC/ETH leadership, funding stress, OI expansion, and volume participation.
  </div>
+ <div class="mo-section">SENTIMENT TAPE</div>
+ <div style="font-size:9.5px;color:#8a9ab8;line-height:1.8;margin-bottom:10px;padding:0 4px">
+ Score: <b style="color:${sentimentScore >= 0 ? '#00e5a0' : '#ff4560'}">${sentimentScore >= 0 ? '+' : ''}${sentimentScore}</b> |
+ Breadth: <b>${Number(mi.sentiment?.breadthPct || 0).toFixed(1)}%</b> |
+ Advancing volume: <b>${Number(mi.sentiment?.advancingVolumePct || 0).toFixed(1)}%</b> |
+ Funding stress: <b>${Number(mi.sentiment?.fundingStressPct || 0).toFixed(1)}%</b>
+ </div>
+ <div class="d10-sec-row">${sentimentDriverHtml}</div>
  <div class="mo-section">CONSTITUENTS (equal-weight basket)</div>
  <div class="d10-sec-row">${sectorPills}</div>
  <div class="d10-constituents-list">${coinRows}</div>
  <div class="mo-section" style="margin-top:12px">BENCHMARK STACK</div>
  <div class="d10-benchmark-modal-grid">
  <div class="d10-benchmark-modal-card active">
- <span>House Tape</span>
- <strong>${v >= 0 ? '+' : ''}${v.toFixed(2)}%</strong>
- <small>FWD-10 | ${selectionLabel} | equal weight regime tape.</small>
+ <span>FWD-100 Index</span>
+ <strong>${indexMove >= 0 ? '+' : ''}${indexMove.toFixed(2)}%</strong>
+ <small>${formatFwd100Points(indexPoints)} pts ${indexMoveLabel} | ${selectionLabel} | cumulative equal weight.</small>
  </div>
  ${benchmarkCardHtml(cf)}
  ${benchmarkCardHtml(sp)}
@@ -889,10 +1113,10 @@ document.getElementById('d10detail')?.addEventListener('click', async () => {
  </div>
  <div class="mo-section" style="margin-top:12px">TRADING GUIDE</div>
  <div style="font-size:9px;color:#8a9ab8;line-height:1.8;padding:0 4px">
- Green Index > +2% - <b style="color:#00e5a0">Favour LONG signals</b>, skip marginal SHORTs<br/>
- Yellow Index -2% to +2% - <b style="color:#ffc840">Trade selectively</b>, wait for clarity<br/>
- Red Index < -2% - <b style="color:#ff4560">Favour SHORT signals</b>, skip marginal LONGs<br/>
- Alert Index < -5% - <b style="color:#ff1a40">Risk-off</b>, avoid new positions entirely
+ Sentiment > +2% - <b style="color:#00e5a0">Favour LONG signals</b>, skip marginal SHORTs<br/>
+ Sentiment -2% to +2% - <b style="color:#ffc840">Trade selectively</b>, wait for clarity<br/>
+ Sentiment < -2% - <b style="color:#ff4560">Favour SHORT signals</b>, skip marginal LONGs<br/>
+ Sentiment < -5% - <b style="color:#ff1a40">Risk-off</b>, avoid new positions entirely
  </div>`;
 
  document.getElementById('d10overlay').style.display = 'flex';

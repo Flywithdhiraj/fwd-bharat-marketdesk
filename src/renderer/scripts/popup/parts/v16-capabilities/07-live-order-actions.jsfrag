@@ -23,6 +23,9 @@ function v16SyncLiveOrderDeltaButton(symbol = '') {
 
 function v16RenderTradeOrderPreviewCard(preview = {}) {
  const computedContracts = Math.max(1, Math.round(Number(preview.size || 0)));
+ const requestedNotional = Number(preview.requestedNotional || 0);
+ const estimatedNotional = Number(preview.estimatedNotional || 0);
+ const roundedAboveRequest = requestedNotional > 0 && estimatedNotional > requestedNotional * 1.05;
  return `
  <div class="live-order-preview-metrics">
  <div><span>Computed Contracts</span><strong>${v16FmtNumber(computedContracts, 0)}</strong></div>
@@ -30,9 +33,10 @@ function v16RenderTradeOrderPreviewCard(preview = {}) {
  <div><span>Side</span><strong>${String(preview.side || '').toUpperCase()}</strong></div>
  <div><span>Entered Size</span><strong>${v16Esc(v16LiveOrderModeLabel(v16LiveAccountView.orderSignalMeta?.sizeMode || 'usd', v16LiveAccountView.orderSignalMeta?.definition || null))}</strong></div>
  <div><span>Mark</span><strong>${Number(preview.markPrice || 0) > 0 ? `$${v16FmtPrice(preview.markPrice)}` : '-'}</strong></div>
- <div><span>Notional</span><strong>${Number(preview.estimatedNotional || 0) > 0 ? `$${v16FmtNumber(preview.estimatedNotional, 2)}` : '-'}</strong></div>
+ <div><span>Notional</span><strong>${estimatedNotional > 0 ? `$${v16FmtNumber(estimatedNotional, 2)}` : '-'}</strong></div>
  <div><span>Risk / Reward</span><strong>${Number(preview.riskRewardRatio || 0) > 0 ? `1:${v16FmtNumber(preview.riskRewardRatio, 2)}` : '-'}</strong></div>
  </div>
+ ${roundedAboveRequest ? `<div class="account-inline-note bad">${v16Esc(`Requested $${v16FmtNumber(requestedNotional, 2)}, but Delta minimum tradable size is ${computedContracts} contract here, making actual notional $${v16FmtNumber(estimatedNotional, 2)}.`)}</div>` : ''}
  <div class="account-inline-note ${Number(preview.estimatedRisk || 0) > 0 ? 'warn' : 'good'}">
  ${v16Esc([
  Number(preview.limitPrice || 0) > 0 ? `Limit $${v16FmtPrice(preview.limitPrice)}` : 'Market execution',
@@ -556,7 +560,6 @@ async function openV16OpenOrderEditor(order = null, draftOverrides = {}) {
 }
 
 async function refreshV16PrivateAccountData(force = false) {
- globalThis.FWDAppLock?.touchActivity?.();
  const profile = getV16ActiveAccountProfile();
  const statusEl = document.getElementById('liveAccountStatus');
  const secret = getV16Secrets()?.[profile.id] || {};
@@ -783,7 +786,7 @@ async function v16LoadLiveAccountPaneContext(preloaded = null, forceRefresh = fa
  const atMatch = v16ResolveAutoTradeJournalMatch(trade, autoTradeLog);
  // Match to straddle log
  const stMatch = straddleLog.find(sl => {
- const slSym = v16NormalizeSymbol(sl?.straddleLeg?.symbol || sl?.callLeg?.symbol || '');
+ const slSym = v16NormalizeSymbol(sl?.straddleLeg?.symbol || '');
  return slSym === sym;
  });
  const matched = atMatch || stMatch;

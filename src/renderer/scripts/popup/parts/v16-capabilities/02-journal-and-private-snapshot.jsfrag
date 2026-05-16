@@ -17,7 +17,10 @@ async function openV16JournalDetail(trade = {}) {
  const lessonPlaceholder = v16BuildJournalLessonsPlaceholder(trade, review);
  const holdMinutes = Number(trade.holdMinutes || 0);
  const shiftCount = Array.isArray(trade.targetShiftEvents) ? trade.targetShiftEvents.length : 0;
- const tradeTypeLabel = String(review.type || 'unknown').replace(/-/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+ const normalizedReviewType = String(review.type || 'unknown').trim();
+ const tradeTypeLabel = normalizedReviewType && normalizedReviewType !== 'unknown'
+ ? normalizedReviewType.replace(/-/g, ' ').replace(/\b\w/g, char => char.toUpperCase())
+ : `${tradeMode} ${String(trade.side || '').toUpperCase()}`.trim();
  v16LiveAccountView.activeJournalId = String(trade.id || '');
  body.innerHTML = `
  <div class="live-journal-summary-band">
@@ -47,7 +50,6 @@ async function openV16JournalDetail(trade = {}) {
  <div class="live-journal-detail-main">
  <div class="live-order-preview-card">
  <div class="v16-section-title"><div class="mo-section">Trade Summary</div>${v16BuildInlineHelpHtml('Trade summary', 'This section compresses the trade into the shortest readable story: trade type, hold time, planned risk path, and lesson status.')}</div>
- <div class="live-order-preview-copy">This is the short version of the trade: what happened, how long it ran, and how the system managed it.</div>
  <div class="live-journal-detail-grid">
  <div><span>Trade Type</span><strong>${v16Esc(tradeTypeLabel)}</strong><small>${v16Esc(tradeMode)} ${v16Esc(String(trade.side || '').toUpperCase())}${reverseMeta.enabled ? ` | ${v16Esc(reverseMeta.detail)}` : ''}</small></div>
  <div><span>Held</span><strong>${holdMinutes > 0 ? `${v16Esc(String(holdMinutes))}m` : '-'}</strong><small>${trade.rMultiple != null && Number.isFinite(Number(trade.rMultiple)) ? v16Esc(`${Number(trade.rMultiple).toFixed(2)}R realized`) : 'R multiple unavailable'}</small></div>
@@ -68,14 +70,6 @@ async function openV16JournalDetail(trade = {}) {
  </div>
  <div class="live-journal-detail-form">
  <div class="v16-section-title"><div class="mo-section">Lessons</div>${v16BuildInlineHelpHtml('Journal checklist', 'Use the checklist to mark whether you followed plan, respected risk, and executed cleanly before writing your lesson note.')}</div>
- <div class="live-order-preview-copy">Separate what the system did from what you learned, then capture what went well and what to improve next time.</div>
- ${v16BuildFirstUseHintHtml({
- key: 'journal_checklist',
- title: 'Journal notes now split system behavior from trader learning',
- body: 'Fill What Went Well, What To Improve Next Time, and the checklist first. Then use the main note box to compare what FWD TradeDesk Pro did with what you learned from the trade.',
- dismissals: uxHintDismissals,
- tone: 'info',
- })}
  <div class="live-order-preview-grid live-journal-detail-form-grid">
  <label class="account-field"><span>Trade Type</span>
  <select class="si" id="liveJournalType">
@@ -106,14 +100,6 @@ async function openV16JournalDetail(trade = {}) {
  <div class="live-journal-detail-side">
  <div class="live-order-preview-card live-journal-chart-review-card">
  <div class="v16-section-title"><div class="mo-section">Replay</div>${v16BuildInlineHelpHtml('Replay controls', 'Use Back and Forward to step through the trade, Reset to restart the story, and Open Full Chart when you need more space.')}</div>
- <div class="live-order-preview-copy">This replay keeps the trade story front and center: entry, stop, targets, target shifts, and final exit. The journal view hides extra workspace controls so review stays fast.</div>
- ${v16BuildFirstUseHintHtml({
- key: 'journal_replay',
- title: 'Replay is now chart-story first',
- body: 'The journal replay keeps entry, stop, target ladder, shifts, and exit visible by default. Extra workspace controls stay hidden until you open the full chart.',
- dismissals: uxHintDismissals,
- tone: 'info',
- })}
  ${v16BuildJournalReplayLegendHtml(trade)}
  <div id="liveJournalChartPreview"></div>
  </div>

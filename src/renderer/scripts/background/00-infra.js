@@ -88,7 +88,21 @@ function dlog(msg) {
 function saveLog() { chrome.storage.local.set({ debugLog: _log.slice(-DEBUG_LOG_PERSIST_LIMIT) }); }
 
 // -- Rate Limiter ------------------------------------------------
-const RL = { active: 0, max: 8, gap: 40, lastReq: 0, queue: [] };
+const DELTA_REST_WEIGHT_WINDOW_MS = 5 * 60 * 1000;
+const DELTA_REST_DEFAULT_WEIGHT_LIMIT = 10000;
+const DELTA_REST_WEIGHT_LIMIT_BUFFER = 300;
+const DELTA_REST_WEIGHTED_GAP_MS = 95;
+const RL = {
+ active: 0,
+ max: 10,
+ gap: DELTA_REST_WEIGHTED_GAP_MS,
+ lastReq: 0,
+ queue: [],
+ weightWindowStartedAt: Date.now(),
+ weightUsed: 0,
+ weightLimit: DELTA_REST_DEFAULT_WEIGHT_LIMIT - DELTA_REST_WEIGHT_LIMIT_BUFFER,
+ weightWindowMs: DELTA_REST_WEIGHT_WINDOW_MS,
+};
 const RL_NOTIFY = { active: 0, max: 2, gap: 350, lastReq: 0, queue: [] };
 function createApiQuotaState() {
  return {
@@ -118,7 +132,6 @@ const performanceMetrics = {
  startup: {},
  api: { total: 0, ok: 0, failed: 0, avgMs: 0, maxMs: 0, lastMs: 0, lastStatus: 0, samples: [] },
  scan: { total: 0, avgMs: 0, maxMs: 0, lastMs: 0, lastCount: 0, lastStartedAt: 0, lastEndedAt: 0, samples: [] },
- backtest: { total: 0, avgMs: 0, maxMs: 0, lastMs: 0, lastSymbol: '', samples: [] },
  chart: { total: 0, avgMs: 0, maxMs: 0, lastMs: 0, lastSurface: '', samples: [] },
  websocket: { reconnects: 0, opens: 0, closes: 0, errors: 0, messages: 0, lastHeartbeatAt: 0, lastUrl: '', lastError: '' },
  runtime: { lastSampleAt: 0, memory: null, cpu: null, cache: null },
@@ -206,6 +219,16 @@ function buildPerformanceMetricsSnapshot() {
  return JSON.parse(JSON.stringify({
  ...performanceMetrics,
  apiQuota: v17GetApiQuotaState(V17_API_QUOTA_STATE),
+ apiWeight: {
+ limit: Number(RL.weightLimit || 0),
+ used: Number(RL.weightUsed || 0),
+ windowStartedAt: Number(RL.weightWindowStartedAt || 0),
+ windowMs: Number(RL.weightWindowMs || 0),
+ queue: Array.isArray(RL.queue) ? RL.queue.length : 0,
+ active: Number(RL.active || 0),
+ max: Number(RL.max || 0),
+ gap: Number(RL.gap || 0),
+ },
  notifyQuota: v17GetApiQuotaState(V17_NOTIFY_QUOTA_STATE),
  savedAt: Date.now(),
  }));
@@ -239,6 +262,11 @@ function rateLimitedNotifyFetch(url, opts = {}) {
 
 function v17ResolveRetryAfterMs(response) {
  try {
+ const deltaReset = response?.headers?.get?.('x-rate-limit-reset');
+ if (deltaReset) {
+  const numericMs = Number(deltaReset);
+  if (Number.isFinite(numericMs) && numericMs >= 0) return numericMs;
+ }
  const raw = response?.headers?.get?.('retry-after');
  if (!raw) return 0;
  const numericSeconds = Number(raw);
@@ -247,6 +275,63 @@ function v17ResolveRetryAfterMs(response) {
  if (Number.isFinite(absoluteTs) && absoluteTs > Date.now()) return absoluteTs - Date.now();
  } catch (_) {}
  return 0;
+}
+
+async function fetchDeltaRateLimitQuota() {
+ try {
+ const r = await fetch(`${BASE}/rate_limits/quota`, {
+  headers: { Accept: 'application/json' },
+  signal: AbortSignal.timeout(8000),
+ });
+ if (!r.ok) return null;
+ const d = await r.json();
+ return {
+  currentQuota: Number(d?.current_quota || d?.currentQuota || 0),
+  remainingMs: Number(d?.remaining_time_in_milliseconds || d?.remainingMs || 0),
+  checkedAt: Date.now(),
+  region: detectedRegion,
+ };
+ } catch (_) {
+ return null;
+ }
+}
+
+function v17EstimateDeltaRequestWeight(url = '', method = 'GET') {
+ try {
+ const parsed = new URL(String(url || ''));
+ const path = parsed.pathname.toLowerCase();
+ const safeMethod = String(method || 'GET').toLowerCase();
+ if (path.includes('/orders/batch')) return 25;
+ if (path.includes('/orders') && ['post', 'put', 'delete'].includes(safeMethod)) return 5;
+ if (
+ path.includes('/orders/history')
+ || path.includes('/fills')
+ || path.includes('/transactions')
+ ) return 10;
+ if (
+ path.includes('/products')
+ || path.includes('/orderbook')
+ || path.includes('/tickers')
+ || path.includes('/orders')
+ || path.includes('/positions')
+ || path.includes('/wallet/balances')
+ || path.includes('/history/candles')
+ ) return 3;
+ } catch (_) {}
+ return 1;
+}
+
+function v17ResolveDeltaWeightWaitMs(bucket = RL, weight = 1) {
+ if (!bucket.weightLimit || !bucket.weightWindowMs) return 0;
+ const now = Date.now();
+ const windowAge = now - Number(bucket.weightWindowStartedAt || 0);
+ if (windowAge >= bucket.weightWindowMs || windowAge < 0) {
+ bucket.weightWindowStartedAt = now;
+ bucket.weightUsed = 0;
+ return 0;
+ }
+ if ((Number(bucket.weightUsed || 0) + weight) <= Number(bucket.weightLimit || 0)) return 0;
+ return Math.max(250, Number(bucket.weightWindowMs || DELTA_REST_WEIGHT_WINDOW_MS) - windowAge + 250);
 }
 
 function v17UpdateApiQuotaSeverity(quota = V17_API_QUOTA_STATE) {
@@ -318,10 +403,28 @@ function drainQueue(bucket) {
  setTimeout(() => drainQueue(bucket), Math.min(quotaState.backoffRemainingMs, 30000));
  return;
  }
+ const next = bucket.queue[0];
+ const method = String(next?.opts?.method || 'GET').toLowerCase();
+ const weight = v17EstimateDeltaRequestWeight(next?.url || '', method);
+ const weightWaitMs = v17ResolveDeltaWeightWaitMs(bucket, weight);
+ if (weightWaitMs > 0) {
+ setTimeout(() => drainQueue(bucket), Math.min(weightWaitMs, 30000));
+ return;
+ }
  const wait = Math.max(0, bucket.lastReq + bucket.gap - Date.now());
  setTimeout(() => {
  if (!bucket.queue.length || bucket.active >= bucket.max) return;
  const { url, opts, resolve, reject } = bucket.queue.shift();
+ const requestWeight = v17EstimateDeltaRequestWeight(url, String(opts?.method || 'GET').toLowerCase());
+ const requestWeightWaitMs = v17ResolveDeltaWeightWaitMs(bucket, requestWeight);
+ if (requestWeightWaitMs > 0) {
+  bucket.queue.unshift({ url, opts, resolve, reject });
+  setTimeout(() => drainQueue(bucket), Math.min(requestWeightWaitMs, 30000));
+  return;
+ }
+ if (bucket.weightLimit && bucket.weightWindowMs) {
+  bucket.weightUsed = Number(bucket.weightUsed || 0) + requestWeight;
+ }
  bucket.active++;
  bucket.lastReq = Date.now();
  const startedAt = performanceNow();
@@ -350,7 +453,7 @@ const V17_CANDLE_CACHE_DB_NAME = 'FWDTradeDeskCandleCacheV1';
 const V17_CANDLE_CACHE_DB_VERSION = 1;
 const V17_CANDLE_CACHE_STORE = 'candles';
 const V17_NATIVE_CANDLE_RESOLUTIONS = new Set(['1d', '15m']);
-const { sanitizeAutoScanInterval, sanitizeAlertTone, sanitizeBacktestMinScore, sanitizeBacktestLookbackDays } = globalThis.FWDTradeDeskShared;
+const { sanitizeAutoScanInterval, sanitizeAlertTone } = globalThis.FWDTradeDeskShared;
 const FUNDING_INTERVAL_SEC = 8 * 60 * 60;
 const WEBHOOK_FAILURE_THRESHOLD = 3;
 const WEBHOOK_COOLDOWN_MS = 15 * 60 * 1000;
@@ -358,9 +461,6 @@ const BROKERAGE_PCT_PER_SIDE = 0.05;
 const GST_ON_BROKERAGE = 0.18;
 const EFFECTIVE_FEE_PCT_PER_SIDE = BROKERAGE_PCT_PER_SIDE * (1 + GST_ON_BROKERAGE);
 const SLIPPAGE_PCT_PER_SIDE = 0.10;
-const BACKTEST_BREAKEVEN_R = 1;
-const BACKTEST_STOP_COOLDOWN_BARS = 5;
-const BACKTEST_STAKE = 100;
 
 const symbolRefreshInFlight = new Map();
 let correlationBuildInFlight = null;
@@ -438,6 +538,7 @@ async function v17ReadPersistentCandleCache(symbol = '', resolution = '') {
  if (!key) return null;
  const nativeRecord = await v17ReadNativeCandleCache(symbol, resolution);
  if (nativeRecord && Array.isArray(nativeRecord.rows)) return nativeRecord;
+ if (!V17_NATIVE_CANDLE_RESOLUTIONS.has(String(resolution || '').trim().toLowerCase())) return null;
  const db = await v17OpenCandleCacheDb();
  if (!db) return null;
  return new Promise(resolve => {
@@ -458,6 +559,7 @@ async function v17WritePersistentCandleCache(symbol = '', resolution = '', paylo
  if (!key) return false;
  const nativeWrite = await v17WriteNativeCandleCache(symbol, resolution, payload);
  if (nativeWrite?.ok) return true;
+ if (!V17_NATIVE_CANDLE_RESOLUTIONS.has(String(resolution || '').trim().toLowerCase())) return false;
  const db = await v17OpenCandleCacheDb();
  if (!db) return !!nativeWrite?.ok;
  const safePayload = payload && typeof payload === 'object' ? payload : {};
@@ -537,11 +639,35 @@ async function v17ClearPersistentCandleCache() {
  });
 }
 
+async function v17DeleteLegacyIndexedDbCandleCache() {
+ if (!v17CanUseIndexedDb()) return false;
+ try {
+  const db = v17CandleCacheDbPromise ? await v17CandleCacheDbPromise : null;
+  if (db && typeof db.close === 'function') db.close();
+ } catch (_) {
+  // The delete request below is still safe if the cached handle is already gone.
+ }
+ v17CandleCacheDbPromise = null;
+ return new Promise(resolve => {
+  try {
+   const req = indexedDB.deleteDatabase(V17_CANDLE_CACHE_DB_NAME);
+   req.onsuccess = () => resolve(true);
+   req.onerror = () => resolve(false);
+   req.onblocked = () => resolve(false);
+  } catch (_) {
+   resolve(false);
+  }
+ });
+}
+
 async function v17MigrateIndexedDbCandlesToNative() {
  if (!globalThis.fwdDesktopNative?.sendNativeMessage) return false;
  const markerKey = 'v17IndexedDbCandlesMigratedToNativeV1';
  const marker = await storeLocalGet([markerKey]).catch(() => ({}));
- if (marker?.[markerKey] === true) return true;
+ if (marker?.[markerKey] === true) {
+ await v17DeleteLegacyIndexedDbCandleCache();
+ return true;
+ }
  const db = await v17OpenCandleCacheDb();
  if (!db) return false;
  const records = [];
@@ -574,6 +700,7 @@ async function v17MigrateIndexedDbCandlesToNative() {
  if (write?.ok) migrated += 1;
  }
  await storeLocalSet({ [markerKey]: true, v17IndexedDbCandlesMigratedToNativeAt: Date.now(), v17IndexedDbCandlesMigratedToNativeCount: migrated });
+ await v17DeleteLegacyIndexedDbCandleCache();
  dlog(`IndexedDB candle migration to native complete: ${migrated} records`);
  return true;
 }
@@ -1210,7 +1337,7 @@ function syncOptionsStraddleMonitorAlarm(done = () => {}) {
  && Number(entry?.ts || 0) > Date.now() - (3 * 24 * 60 * 60 * 1000);
  })
  : [];
- const shouldRun = !!cfg.straddleEnabled || activeEntries.length > 0;
+ const shouldRun = activeEntries.length > 0;
  chrome.alarms.clear(OPTIONS_STRADDLE_MONITOR_ALARM, () => {
  if (shouldRun) {
  chrome.alarms.create(OPTIONS_STRADDLE_MONITOR_ALARM, { periodInMinutes: OPTIONS_STRADDLE_MONITOR_INTERVAL_MINUTES });

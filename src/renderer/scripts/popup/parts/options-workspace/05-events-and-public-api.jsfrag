@@ -1,316 +1,97 @@
-// Root render, event handlers and public options workspace API
- function render() {
+// Native Straddle-only events and public API
+function render() {
  const root = pane();
  if (!root) return;
  if (!root.dataset.optionsBound) {
- const ui = globalThis.FWDTradeDeskUiEvents;
- if (ui?.bindOnce) {
-  ui.bindOnce(root, 'click', 'options-click', onClick);
-  ui.bindOnce(root, 'change', 'options-change', onChange);
-  ui.bindOnce(root, 'input', 'options-input', onInput);
-  ui.bindOnce(root, 'mousemove', 'options-payoff-move', onPayoffMove);
-  ui.bindOnce(root, 'mouseover', 'options-hover', onHover);
-  ui.bindOnce(root, 'mouseout', 'options-hover-out', onHoverOut);
- } else {
-  root.addEventListener('click', onClick);
-  root.addEventListener('change', onChange);
-  root.addEventListener('input', onInput);
-  root.addEventListener('mousemove', onPayoffMove);
-  root.addEventListener('mouseover', onHover);
-  root.addEventListener('mouseout', onHoverOut);
+  const ui = globalThis.FWDTradeDeskUiEvents;
+  if (ui?.bindOnce) {
+   ui.bindOnce(root, 'click', 'options-click', onClick);
+   ui.bindOnce(root, 'change', 'options-change', onChange);
+  } else {
+   root.addEventListener('click', onClick);
+   root.addEventListener('change', onChange);
+  }
+  root.dataset.optionsBound = '1';
  }
- root.dataset.optionsBound = '1';
- }
- let body = '';
- if (state.workspaceMode === 'builder') body = renderBuilderMode();
- else if (state.workspaceMode === 'analyzer') body = renderAnalyzerMode();
- else if (state.workspaceMode === 'compare') body = renderCompareMode();
- else if (state.workspaceMode === 'execute') body = renderExecuteMode();
- else if (state.workspaceMode === 'volatility') body = renderSkewMode();
- else body = renderChainMode();
-
- root.innerHTML = `<section class="od-shell">
+ root.innerHTML = `<section class="od-shell od-shell-native-only">
  ${renderTopBar()}
  ${renderExecutionHealthStrip()}
  ${renderModeNav()}
  ${state.error ? `<div class="od-top-error">${esc(state.error)}</div>` : ''}
- ${body}
+ ${renderStraddleModeV3()}
  </section>`;
  if (!state.initialized) void ensureBooted();
- }
+}
 
- /* ===================================================================
- EVENT HANDLERS
- =================================================================== */
- function onClick(event) {
- const el = event.target.closest('[data-options-action]'); if (!el) return;
+function onClick(event) {
+ const el = event.target.closest('[data-options-action]');
+ if (!el) return;
  const action = el.dataset.optionsAction;
- if (action === 'set-workspace-mode') {
- const mode = normalizeWorkspaceMode(el.dataset.mode || 'market');
- setState({ workspaceMode: mode });
- if (mode === 'execute') {
- if (!state.straddleChain && !state.straddleLoading) void refreshStraddleChain();
- else void Promise.all([refreshStraddleDashboard(), refreshStraddlePreview()]);
- }
- if (mode === 'analyzer' && (state.straddleChain || state.straddleSelectedSymbol)) {
- if (!state.straddleChain && !state.straddleLoading) void refreshStraddleChain();
- else void Promise.all([refreshStraddleDashboard(), refreshStraddlePreview()]);
- }
- if (mode === 'volatility' && !state.skewData && !state.skewLoading) void refreshVolatilitySkew();
- return;
- }
- if (action === 'refresh-health') return void refreshExecutionHealth();
+ if (action === 'set-workspace-mode') return setState({ workspaceMode: 'straddle', error: '' }, { persist: true });
  if (action === 'set-underlying') {
- if (el.dataset.underlying === state.underlying) return;
- setState({ underlying: el.dataset.underlying, expiryKey: '', targetPrice: 0, chainHoverStrike: 0, selectedContract: '', legs: [], chain: null, analysis: null, straddleChain: null, straddleSelectedSymbol: '', skewData: null, skewHoveredStrike: 0 }, { persist: true });
- if (state.workspaceMode === 'execute') return void refreshStraddleChain();
- return void refreshUniverse();
+  const underlying = String(el.dataset.underlying || 'BTC').toUpperCase();
+  if (underlying === state.underlying) return;
+  setState({
+   underlying,
+   expiryKey: '',
+   straddleChain: null,
+   straddleSelectedSymbol: '',
+   nativeScannerRows: [],
+   nativeScannerStatus: null,
+   error: '',
+  }, { persist: true });
+  return void refreshStraddleChain();
  }
- if (action === 'set-expiry') {
- if (state.workspaceMode === 'execute') return void refreshStraddleChain(el.dataset.expiryKey);
- if (el.dataset.expiryKey === state.expiryKey) return null;
- setState({ expiryKey: el.dataset.expiryKey, chainHoverStrike: 0, selectedContract: '', chain: null, analysis: null, skewData: null, skewHoveredStrike: 0 }, { persist: true });
- return state.workspaceMode === 'volatility' ? void refreshVolatilitySkew(true) : void refreshChain();
- }
- if (action === 'refresh-chain') return state.workspaceMode === 'execute' ? void refreshStraddleChain() : state.workspaceMode === 'volatility' ? void refreshVolatilitySkew(true) : void refreshUniverse(true);
- if (action === 'set-preset-family') return setState({ presetFamily: el.dataset.family || 'neutral' });
- if (action === 'toggle-preset-filter') return togglePresetFilter(el.dataset.filter || '');
- if (action === 'toggle-extended') return setState({ showExtendedPresets: !state.showExtendedPresets });
- if (action === 'toggle-builder-help') return setState({ showBuilderHelp: !state.showBuilderHelp }, { persist: true });
- if (action === 'toggle-booked-pnl') return setState({ showBookedPnl: !state.showBookedPnl }, { persist: true });
- if (action === 'open-options-settings') {
- setState({ workspaceMode: 'execute' }, { persist: true });
- globalThis.showSystemToast?.('Options settings', 'Native straddle risk and execution controls are available in the Execute tab.', 'info', 3200);
- return void Promise.all([refreshStraddleDashboard(), refreshStraddlePreview()]);
- }
- if (action === 'set-builder-left-tab') return setState({ builderLeftTab: el.dataset.tab === 'positions' ? 'positions' : DEFAULT.builderLeftTab });
- if (action === 'toggle-builder-panel') {
- const panel = el.dataset.panel || '';
- if (!BUILDER_PANELS.includes(panel)) return;
- const current = Array.isArray(state.builderOpenPanels) ? state.builderOpenPanels : DEFAULT.builderOpenPanels;
- const next = current.includes(panel) ? current.filter(item => item !== panel) : [...current, panel];
- return setState({ builderOpenPanels: next.length ? next : [panel] });
- }
- if (action === 'pick-preset') return setState({ presetId: el.dataset.presetId || DEFAULT.presetId }, { render: false }), loadPreset();
- if (action === 'select-contract' || action === 'star-contract') return setState({ selectedContract: el.dataset.symbol || '' });
- if (action === 'quick-add') return addLeg(el.dataset.symbol || '', el.dataset.side || 'sell');
- if (action === 'add-hedge') return addHedge(el.dataset.symbol || '');
- if (action === 'remove-leg') return setState({ legs: state.legs.filter((_, i) => i !== n(el.dataset.legIndex, -1)), presetId: 'custom' });
- if (action === 'clear-legs') return setState({ legs: [], analysis: null, presetId: 'custom', selectedContract: '' });
- if (action === 'set-view') return setState({ activeView: el.dataset.view || DEFAULT.activeView });
- if (action === 'shift-legs') return shiftLegs(n(el.dataset.shift) >= 0 ? 1 : -1);
- if (action === 'adjust-wings') return widenWings(n(el.dataset.direction) >= 0 ? 1 : -1);
- if (action === 'roll-next-expiry') return void rollNext();
- if (action === 'equalize-credit') return equalize();
- if (action === 'convert-defined-risk') return defineRisk();
- if (action === 'place-strategy') return void placeStrategy();
- if (action === 'toggle-quick-filter') {
- const f = el.dataset.filter || '';
- if (!QUICK_FILTERS.includes(f)) return;
- return setState({ chainQuickFilters: state.chainQuickFilters.includes(f) ? state.chainQuickFilters.filter(x => x !== f) : [...state.chainQuickFilters, f] });
- }
- if (action === 'set-payoff-line-mode') return setState({ payoffLineMode: el.dataset.mode || 'both' });
- if (action === 'payoff-zoom-in') return setState({ payoffZoom: Math.max(0.08, n(state.payoffZoom) - 0.04) });
- if (action === 'payoff-zoom-out') return setState({ payoffZoom: Math.min(0.60, n(state.payoffZoom) + 0.04) });
- if (action === 'quick-straddle') return addStraddle(n(el.dataset.strike));
  if (action === 'refresh-straddle-chain') return void refreshStraddleChain();
- if (action === 'set-straddle-view') {
- const mode = el.dataset.viewMode === 'advanced' ? 'advanced' : 'simple';
- return setState({ straddleViewMode: mode }, { persist: true });
- }
- if (action === 'set-straddle-desk-tab') {
- const tab = STRADDLE_DESK_TABS.includes(el.dataset.tab) ? el.dataset.tab : DEFAULT.straddleDeskTab;
- return setState({ straddleDeskTab: tab }, { persist: true });
- }
- if (action === 'toggle-straddle-payoff-size') {
- return setState({ straddlePayoffExpanded: !state.straddlePayoffExpanded }, { persist: true });
+ if (action === 'run-native-straddle-scan') return void runNativeStraddleScan(true);
+ if (action === 'open-native-straddle-lab') {
+  if (typeof setActiveWorkspaceTab === 'function') setActiveWorkspaceTab('strategies', true, true);
+  return;
  }
  if (action === 'select-straddle-contract') {
- setState({ straddleSelectedSymbol: el.dataset.symbol || '' }, { persist: false });
- return void refreshStraddlePreview();
+  return setState({ straddleSelectedSymbol: el.dataset.symbol || '' }, { persist: true });
  }
- if (action === 'open-straddle-analyzer') {
- setState({ workspaceMode: 'analyzer', activeView: 'payoff' }, { persist: true });
- return void Promise.all([refreshStraddleDashboard(), refreshStraddlePreview()]);
+ if (action === 'open-native-straddle-chart') {
+  const symbol = String(el.dataset.symbol || state.straddleSelectedSymbol || '').toUpperCase();
+  const contract = scoredStraddleContracts().find(item => item.symbol === symbol) || getSelectedStraddleContract();
+  if (!contract) return;
+  setState({ straddleSelectedSymbol: contract.symbol || symbol, straddleDeskTab: 'chart' }, { persist: true });
+  return void globalThis.openSignalInChartWorkspace?.(buildStraddleChartSignal(contract), {
+   reviewTab: true,
+   returnTab: 'options',
+   returnSymbol: contract.symbol || symbol,
+   timeframe: '15m',
+  });
  }
- if (action === 'focus-straddle-desk') {
- setState({ workspaceMode: 'execute' }, { persist: true });
- return void Promise.all([refreshStraddleDashboard(), refreshStraddlePreview()]);
- }
- if (action === 'sell-native-straddle') {
- setState({ straddleSelectedSymbol: el.dataset.symbol || '' }, { persist: false });
- return void refreshStraddlePreview();
- }
- if (action === 'open-straddle-manage') {
- if (typeof setActiveWorkspaceTab === 'function') setActiveWorkspaceTab('positions', true, true);
- return;
- }
- if (action === 'open-skew-straddle') {
- setState({ workspaceMode: 'execute' }, { persist: true });
- return void refreshStraddleChain(state.skewData?.expiryKey || state.expiryKey || '');
- }
- if (action === 'set-skew-view') {
- const view = SKEW_VIEWS.includes(el.dataset.view) ? el.dataset.view : 'snapshot';
- return setState({ skewView: view }, { persist: true });
- }
- if (action === 'set-skew-axis') {
- const axis = SKEW_AXES.includes(el.dataset.axis) ? el.dataset.axis : 'moneyness';
- return setState({ skewAxis: axis }, { persist: true });
- }
- if (action === 'use-skew-expiry') {
- const expiryKey = el.dataset.expiryKey || state.skewData?.expiryKey || state.expiryKey || '';
- setState({ workspaceMode: 'market', expiryKey, chain: null, analysis: null, skewData: null, skewHoveredStrike: 0 }, { persist: true });
- return void refreshChain();
- }
- if (action === 'open-skew-builder') {
- const expiryKey = state.skewData?.expiryKey || state.expiryKey || '';
- setState({ workspaceMode: 'builder', expiryKey }, { persist: true });
- return void refreshChain();
- }
- if (action === 'place-straddle-order') {
- const symbol = el.dataset.symbol || '';
- const qty = Math.max(1, Math.round(n(el.dataset.qty, 1)));
- const mark = n(el.dataset.mark);
- const side = String(el.dataset.side || 'sell').toLowerCase() === 'buy' ? 'buy' : 'sell';
- const preview = state.straddlePreview && state.straddlePreview.symbol === symbol ? state.straddlePreview : null;
- const ticket = {
- premiumUSD: n(preview?.premiumUSD, n(el.dataset.premiumUsd)),
- premiumPerContract: n(preview?.premiumPerContract, n(el.dataset.premiumPerContract)),
- stopPrice: n(preview?.stopPrice, n(el.dataset.stopPrice)),
- stopLossUSD: n(preview?.stopLossUSD, n(el.dataset.stopRisk)),
- estimatedFeesUSD: n(preview?.estimatedFeesUSD, n(el.dataset.fees)),
- estimatedMarginUSD: n(preview?.estimatedMarginUSD, n(el.dataset.margin)),
- breakEvenLow: n(preview?.breakEvenLow, n(el.dataset.beLow)),
- breakEvenHigh: n(preview?.breakEvenHigh, n(el.dataset.beHigh)),
- };
- if (!symbol) return;
- if (preview?.canPlace === false) {
- return setState({ error: preview.reason || 'This straddle is blocked by the current hard risk checks.' }, { persist: false });
- }
- if (preview?.warningRequired && !confirm(`Score ${n(preview.score)} is below the soft gate ${n(preview.softGateThreshold)}.\n\nProceed to the final order confirmation?`)) return;
- const actionText = side === 'buy' ? 'BUY' : 'SELL';
- const valueLabel = side === 'buy' ? 'Premium / Contract' : 'Credit / Contract';
- const totalLabel = side === 'buy' ? 'Premium Paid' : 'Net Credit';
- if (!confirm(`${actionText} ${qty}x ${symbol}\n\nEntry: $${mark.toFixed(2)}\n${valueLabel}: ${money(ticket.premiumPerContract)}\n${totalLabel}: ${money(ticket.premiumUSD)}\nStop Price: ${money(ticket.stopPrice)}\nStop-Loss Risk: ${money(ticket.stopLossUSD)}\nEstimated Margin: ${money(ticket.estimatedMarginUSD)}\nEstimated Fees: ${money(ticket.estimatedFeesUSD)}\nBreak-Evens: $${ticket.breakEvenLow.toFixed(0)} / $${ticket.breakEvenHigh.toFixed(0)}\n\nProceed?`)) return;
- void (async () => {
- setState({ placing: true });
- const result = await send('v17:placeNativeStraddleOrder', {
- symbol,
- qty,
- side,
- markPrice: mark,
- productId: n(el.dataset.productId),
- strike: n(el.dataset.strike),
- expiryTs: n(el.dataset.expiryTs),
- expiryKey: el.dataset.expiryKey || '',
- contractMultiplier: n(el.dataset.cm, 1),
- score: n(el.dataset.score),
- underlying: el.dataset.underlying || state.underlying,
- spotPrice: n(el.dataset.spot),
- });
- setState({ placing: false });
- if (result?.ok) {
- setState({ error: '' }, { persist: false });
- await Promise.all([refreshStraddleDashboard(), refreshStraddlePreview(), refreshExecutionHealth()]);
- globalThis.showSystemToast?.('Native straddle placed', `${qty}x ${symbol} | Credit ${money(ticket.premiumUSD)} | Stop ${money(ticket.stopPrice)} | BE $${ticket.breakEvenLow.toFixed(0)} / $${ticket.breakEvenHigh.toFixed(0)}`, 'success', 4200);
- }
- else setState({ error: result?.error || 'Failed to place straddle order' });
- })();
- return;
- }
- }
+}
 
- function onChange(event) {
- const input = event.target; if (!input) return;
- if (input.id === 'odEntryMode') return setState({ entryMode: api.sanitizeOptionEntryMode?.(input.value) || DEFAULT_ENTRY });
- if (input.id === 'odAllowUndefinedRisk') return setState({ allowUndefinedRisk: !!input.checked });
- if (input.id === 'odStrikeWindow') return setState({ strikeWindow: clamp(input.value, state.strikeWindow, 6, 28, 0) });
- if (input.id === 'odPnlRange') return setState({ pnlRangePct: n(input.value, 0.05) });
- if (input.id === 'odPnlStep') return setState({ pnlStepPct: n(input.value, 0.01) });
- if (input.dataset.straddleAction === 'set-target' || input.id === 'odStraddleTarget') {
- setState({ straddleTargetUSD: clamp(input.value, 100, 1, 1000000, 0) }, { persist: false });
- return void refreshStraddlePreview();
- }
+function onChange(event) {
+ const input = event.target;
+ if (!input) return;
  if (input.dataset.straddleAction === 'set-expiry') {
- void refreshStraddleChain(input.value);
- return;
+  void refreshStraddleChain(input.value);
  }
- if (input.id === 'odScenarioDecayMode') return setState({ scenarioDecayMode: input.value || 'base' });
- if (input.dataset.optionsInput === 'leg-side') return setState({ legs: state.legs.map((leg, i) => i === n(input.dataset.legIndex, -1) ? (api.sanitizeOptionLeg?.({ ...leg, side: input.value }) || leg) : leg), presetId: 'custom' });
- if (input.dataset.optionsInput === 'leg-qty') return setState({ legs: state.legs.map((leg, i) => i === n(input.dataset.legIndex, -1) ? (api.sanitizeOptionLeg?.({ ...leg, qty: input.value, quantity: input.value }) || leg) : leg), presetId: 'custom' });
- if (input.dataset.optionsInput === 'leg-entry') return setState({ legs: state.legs.map((leg, i) => i === n(input.dataset.legIndex, -1) ? (api.sanitizeOptionLeg?.({ ...leg, premium: input.value, entryPrice: input.value }) || leg) : leg), presetId: 'custom' });
- }
+}
 
- function onInput(event) {
- const input = event.target; if (!input) return;
- if (input.id === 'odSearchInput') return setState({ search: input.value || '' });
- if (input.id === 'odTargetPrice' || input.id === 'odTargetPriceScenario') return setState({ targetPrice: Math.max(0, n(input.value)) });
- if (input.id === 'odTargetDays' || input.id === 'odTargetDaysScenario') return setState({ targetDays: clamp(input.value, state.targetDays, 0, 365, 0) });
- if (input.id === 'odScenarioIvShift') return setState({ scenarioIvShiftPct: clamp(input.value, state.scenarioIvShiftPct, -50, 50, 0) });
- }
-
- function onPayoffMove(event) {
- const hit = event.target.closest?.('.od-straddle-payoff-hit');
- if (!hit) return;
- const chart = hit.closest('.od-straddle-payoff-chart');
- const tooltip = chart?.querySelector('[data-payoff-tooltip]');
- if (!chart || !tooltip) return;
- const rect = hit.getBoundingClientRect();
- const pctX = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
- const price = n(hit.dataset.xMin) + (n(hit.dataset.xMax) - n(hit.dataset.xMin)) * pctX;
- const strike = n(hit.dataset.strike);
- const qty = Math.max(1, n(hit.dataset.qty, 1));
- const cm = Math.max(0.000001, n(hit.dataset.cm, 1));
- const premium = n(hit.dataset.premium);
- const pnl = premium - (Math.abs(price - strike) * qty * cm);
- tooltip.classList.add('active', pnl >= 0 ? 'profit' : 'loss');
- tooltip.classList.toggle('profit', pnl >= 0);
- tooltip.classList.toggle('loss', pnl < 0);
- tooltip.style.left = `${Math.max(10, Math.min(chart.clientWidth - 170, event.clientX - chart.getBoundingClientRect().left + 12))}px`;
- tooltip.style.top = `${Math.max(10, event.clientY - chart.getBoundingClientRect().top - 44)}px`;
- tooltip.innerHTML = `<strong>$${price.toFixed(0)}</strong><span>${pnl >= 0 ? 'Profit' : 'Loss'} ${money(pnl)}</span>`;
- }
-
- function onHover(event) {
- const el = event.target.closest('[data-hover-strike]');
- if (el) {
- const strike = Math.max(0, n(el.dataset.hoverStrike));
- if (strike && strike !== state.chainHoverStrike) setState({ chainHoverStrike: strike }, { persist: false });
- }
- const skew = event.target.closest('[data-skew-strike]');
- if (skew) {
- const strikeValue = Math.max(0, n(skew.dataset.skewStrike));
- if (strikeValue && strikeValue !== state.skewHoveredStrike) setState({ skewHoveredStrike: strikeValue }, { persist: false });
- }
- }
- function onHoverOut(event) {
- const payoffChart = event.target.closest?.('.od-straddle-payoff-chart');
- if (payoffChart && (!event.relatedTarget || !payoffChart.contains(event.relatedTarget))) {
- const tooltip = payoffChart.querySelector('[data-payoff-tooltip]');
- if (tooltip) tooltip.classList.remove('active', 'profit', 'loss');
- }
- const root = pane(), related = event.relatedTarget;
- if (root && related && root.contains(related)) return;
- if (state.chainHoverStrike) setState({ chainHoverStrike: 0 }, { persist: false });
- const fallbackStrike = n(state.skewData?.atmStrike);
- if (state.skewHoveredStrike !== fallbackStrike) setState({ skewHoveredStrike: fallbackStrike }, { persist: false });
- }
-
- async function openNativeStraddleDesk(options = {}) {
+async function openNativeStraddleDesk(options = {}) {
  const nextUnderlying = String(options?.underlying || state.underlying || 'BTC').trim().toUpperCase() || state.underlying;
  const nextExpiryKey = String(options?.expiryKey || '').trim();
  const nextSymbol = String(options?.symbol || '').trim().toUpperCase();
  setState({
- workspaceMode: 'execute',
- underlying: nextUnderlying,
- straddleSelectedSymbol: nextSymbol,
- straddleChain: null,
- straddlePreview: null,
+  workspaceMode: 'straddle',
+  underlying: nextUnderlying,
+  straddleSelectedSymbol: nextSymbol,
+  straddleChain: null,
+  error: '',
  }, { persist: true });
  await refreshStraddleChain(nextExpiryKey);
- if (nextSymbol) await refreshStraddlePreview();
- }
+}
 
- globalThis.renderOptionsWorkspace = render;
- globalThis.FWDTradeDeskOptionsWorkspace = Object.freeze({ renderOptionsWorkspace: render, refreshUniverse, refreshChain, openNativeStraddleDesk, getState: () => ({ ...state }) });
+globalThis.renderOptionsWorkspace = render;
+globalThis.FWDTradeDeskOptionsWorkspace = Object.freeze({
+ renderOptionsWorkspace: render,
+ refreshStraddleChain,
+ openNativeStraddleDesk,
+ getState: () => ({ ...state }),
+});
 })();

@@ -199,7 +199,7 @@ function renderV16SecurityStatus(result = null) {
  if (!statusEl) return;
  const status = result || globalThis.FWDAppLock?.getStatus?.() || {};
  statusEl.textContent = status.configured
- ? `App password is enabled. Microsoft Authenticator is ${status.totpEnabled ? 'enabled' : 'off'}. Auto-lock ${Number(status.autoLockMinutes || 15)} min.`
+ ? `App password is enabled. Microsoft Authenticator is ${status.totpEnabled ? 'enabled' : 'off'}. Manual logout stays available from the header.`
  : 'App password is not configured yet. The setup screen appears on first launch.';
  statusEl.className = `account-inline-note ${status.totpEnabled ? 'good' : 'warn'}`;
 }
@@ -633,6 +633,9 @@ function v16BuildNotificationCenterEntries(metrics = {}) {
  ts: Number(alert.ts || Date.now()),
  tone: String(alert.alertTier || '').toLowerCase() === 'execute' ? 'success' : 'info',
  title: `${String(alert.alertTier || 'signal').toUpperCase()} ${String(alert.symbol || '').toUpperCase()}`,
+ sourceScannerId: 'current',
+ sourceScannerName: 'Current Live',
+ sourceType: 'scanner',
  what: `${String(alert.direction || '').toUpperCase()} score ${Number(alert.score || 0)} | entry $${v16FmtPrice(Number(alert.entry || alert.price || 0))}`,
  why: Array.isArray(alert.reasons) && alert.reasons.length ? alert.reasons.slice(0, 2).join(' | ') : 'Signal entered the alert stack.',
  next: 'The engine will re-check live filters and auto-trade rules on the next decision pass.',
@@ -643,8 +646,52 @@ function v16BuildNotificationCenterEntries(metrics = {}) {
  .slice(0, 14);
 }
 
+function v16ResolveNotificationSource(item = {}) {
+ const id = String(item?.sourceScannerId || item?.scannerId || item?.strategyId || item?.sourceType || '').trim().toLowerCase();
+ const name = String(item?.sourceScannerName || item?.scannerName || item?.sourceLabel || '').trim();
+ const known = {
+ current: 'Current Live',
+ wizard: 'Wizard',
+ stage: 'Stage',
+radar: 'Radar',
+reversal: 'Reversal',
+darvas: 'Darvas',
+pullback: 'Pullback',
+native_straddle: 'Native Straddle',
+ paper: 'Paper Ledger',
+ auto_trade: 'Auto-Trade',
+ manual_check: 'Manual Check',
+ };
+ if (id && known[id]) return { id, label: known[id] };
+ if (name) return { id: id || name.toLowerCase().replace(/[^a-z0-9]+/g, '_'), label: name };
+ const title = String(item?.title || '').toLowerCase();
+ if (title.includes('[radar]')) return { id: 'radar', label: 'Radar' };
+ if (title.includes('[native straddle]')) return { id: 'native_straddle', label: 'Native Straddle' };
+ if (title.includes('[current]')) return { id: 'current', label: 'Current Live' };
+ if (title.includes('paper')) return { id: 'paper', label: 'Paper Ledger' };
+ if (title.includes('auto-trade')) return { id: 'auto_trade', label: 'Auto-Trade' };
+ return { id: 'system', label: 'System' };
+}
+
+function v16NotificationSourceFilters() {
+ return [
+ ['all', 'All'],
+ ['current', 'Current'],
+ ['wizard', 'Wizard'],
+['radar', 'Radar'],
+['reversal', 'Reversal'],
+['darvas', 'Darvas'],
+['pullback', 'Pullback'],
+['native_straddle', 'Native Straddle'],
+ ['paper', 'Paper'],
+ ['auto_trade', 'Auto-Trade'],
+ ];
+}
+
 function v16ResolveNotificationCategory(item = {}) {
  const text = `${item?.title || ''} ${item?.what || ''} ${item?.why || ''} ${item?.action || ''}`.toLowerCase();
+ const source = v16ResolveNotificationSource(item);
+if (['current', 'wizard', 'stage', 'radar', 'reversal', 'darvas', 'pullback', 'native_straddle'].includes(source.id)) return 'Scanner Alerts';
  if (
  text.includes('target shifted')
  || text.includes('target armed')
@@ -697,12 +744,16 @@ function v16BuildNotificationExplanation(item = {}) {
 }
 
 function v16BuildGroupedNotificationCenterEntries(metrics = {}) {
- const groups = ['Trade Events', 'Risk Events', 'System Events', 'Warnings'];
+ const groups = ['Scanner Alerts', 'Trade Events', 'Risk Events', 'System Events', 'Warnings'];
  const grouped = new Map(groups.map(group => [group, []]));
  v16BuildNotificationCenterEntries(metrics).forEach(item => {
+ const source = v16ResolveNotificationSource(item);
+ const activeSource = String(v16LiveAccountView.notificationSourceFilter || 'all');
+ if (activeSource !== 'all' && source.id !== activeSource) return;
  const category = v16ResolveNotificationCategory(item);
  grouped.get(category)?.push({
  ...item,
+ source,
  category,
  severity: v16ResolveNotificationSeverity(item),
  explanation: v16BuildNotificationExplanation(item),
@@ -721,7 +772,16 @@ function v16RenderNotificationCenter(metrics = {}) {
  const groups = v16BuildGroupedNotificationCenterEntries(metrics);
  const dismissals = v16NormalizeUxHintDismissals(metrics.uxHintDismissals || v16LiveAccountView.uxHintDismissals || {});
  const totalItems = groups.reduce((sum, group) => sum + group.items.length, 0);
- meta.textContent = `${totalItems} recent update${totalItems === 1 ? '' : 's'} grouped by trade, risk, system, and warning events`;
+ const activeSource = String(v16LiveAccountView.notificationSourceFilter || 'all');
+ const activeFilter = v16NotificationSourceFilters().find(([key]) => key === activeSource)?.[1] || 'All';
+ meta.innerHTML = `<span>${totalItems} recent update${totalItems === 1 ? '' : 's'} | ${v16Esc(activeFilter)}</span>
+ <div class="live-notification-filters">${v16NotificationSourceFilters().map(([key, label]) => `<button class="live-notification-filter ${key === activeSource ? 'active' : ''}" type="button" data-live-notification-source="${v16Esc(key)}">${v16Esc(label)}</button>`).join('')}</div>`;
+ meta.querySelectorAll('[data-live-notification-source]').forEach(button => {
+ button.addEventListener('click', () => {
+ v16LiveAccountView.notificationSourceFilter = button.dataset.liveNotificationSource || 'all';
+ v16RenderNotificationCenter(metrics);
+ });
+ });
  if (!totalItems) {
  wrap.innerHTML = `<div class="empty"><div class="ei">+</div><div class="eh">No notifications yet</div><div class="es">Scanner alerts and auto-trade lifecycle updates will appear here with cause and next-step context.</div></div>`;
  return;
@@ -745,6 +805,7 @@ function v16RenderNotificationCenter(metrics = {}) {
  <div class="live-notification-head">
  <strong>${v16Esc(item.title || 'System update')}</strong>
  <div class="live-notification-head-side">
+ <span class="live-notification-source">${v16Esc(item.source?.label || v16ResolveNotificationSource(item).label)}</span>
  <span class="live-notification-severity live-notification-severity--${v16Esc(String(item.severity?.className || 'info').toLowerCase())}">${v16Esc(item.severity?.label || 'Info')}</span>
  <span>${v16Esc(v16FormatTs(item.ts || 0))}</span>
  </div>
@@ -961,7 +1022,7 @@ function v16BuildStraddleManageSection(dashboard = null, canTrade = false) {
  if (!filtered.length) {
  return `<div class="live-straddle-section">
  <div class="live-straddle-header"><div><div class="mo-section">Straddles</div><div class="live-journal-meta">${v16Esc(meta)}</div></div><div class="live-straddle-filters">${statusPills}${underlyingPills}<button class="bsm danger ${closeAllArmed ? 'armed' : ''}" data-straddle-action="close-all" ${canTrade && filteredActiveCount ? '' : 'disabled'}>${v16Esc(closeAllLabel)}</button></div></div>
- <div class="empty"><div class="ei">+</div><div class="eh">No straddles in this view</div><div class="es">Change the filters or place a native straddle from the Options Desk.</div></div>
+ <div class="empty"><div class="ei">+</div><div class="eh">No straddles in this view</div><div class="es">Change filters or review Native Straddle Scanner ideas.</div></div>
  </div>`;
  }
  const rows = filtered.map(entry => {
@@ -1086,7 +1147,7 @@ function v16BuildCombinedPositionsEmpty(filter = 'all', query = '', hasOpenStrad
  const detail = hasQuery
  ? 'Change the search text or clear the filter.'
  : filter === 'straddles' && !hasOpenStraddles
- ? 'Active native straddles from the Options Desk will appear here.'
+ ? 'Active native straddles will appear here.'
  : 'Delta returned no active exposure for the current profile.';
  return `<div class="empty"><div class="ei">+</div><div class="eh">${v16Esc(heading)}</div><div class="es">${v16Esc(detail)}</div></div>`;
 }
@@ -1254,6 +1315,9 @@ async function v16OpenPositionTradeChart(position = {}, metrics = {}) {
  rightPanelOpen: true,
  intelligenceOverlays: true,
  deskLayoutMode: 'single',
+ uiMode: 'default',
+ replaySeed: null,
+ replayMode: null,
  chartTradingDraft: null,
  orderContext: globalThis.FWDTradeDeskChartWorkspace?.buildOrderContextFromPosition?.(position, position.linkedOrders),
  refreshNonce: Date.now(),
@@ -1368,7 +1432,7 @@ function v16RenderPositions(metrics) {
  const netPct = v16FormatWalletPct(metrics.netPnl, walletBalance, 1);
  if (netPct) chips.push(`<div class="pos-risk-pill ${Number(metrics.netPnl || 0) >= 0 ? 'good' : 'bad'}">Net ${v16FmtSigned(Number(metrics.netPnl || 0))} <span>${v16Esc(netPct)} wallet</span></div>`);
  if (drawdownPct >= 10) chips.push(`<div class="pos-risk-pill bad">Drawdown alert <span>${v16FmtNumber(drawdownPct, 1)}% of wallet</span></div>`);
- if (largestExposure?.pct >= 50) chips.push(`<div class="pos-risk-pill ${largestExposure.tone || 'warn'}">${v16Esc(largestExposure.symbol || 'Exposure')} <span>${v16FmtNumber(largestExposure.pct, 1)}% of wallet</span></div>`);
+ if (largestExposure?.pct >= 50) chips.push(`<div class="pos-risk-pill ${largestExposure.tone || 'warn'}"><strong>${v16Esc(largestExposure.pct >= 100 ? 'Overexposed' : 'Exposure')}</strong> ${v16Esc(largestExposure.symbol || 'Exposure')} <span>${v16FmtNumber(largestExposure.pct, 1)}% of wallet</span></div>`);
  riskContext.innerHTML = chips.join('');
  riskContext.hidden = !chips.length;
  }
@@ -1453,7 +1517,7 @@ function v16RenderPositions(metrics) {
  <div><span>Max Profit</span><strong class="${position.exposurePlan?.hasTarget && position.exposurePlan.maxProfit > 0 ? 'good' : ''}">${position.exposurePlan?.hasTarget && position.exposurePlan.maxProfit > 0 ? v16FmtSigned(position.exposurePlan.maxProfit) : '-'}</strong></div>
  <div><span>Margin</span><strong>$${v16FmtNumber(position.margin, 2)}</strong></div>
  <div title="${v16Esc(fundingTitle)}"><span>Funding ${fundingHorizon}</span><strong class="${fundingHorizonValue >= 0 ? 'good' : 'bad'}">${position.fundingEstimate?.fundingRate ? v16FmtSigned(fundingHorizonValue) : '-'}</strong><small>${position.fundingEstimate?.fundingRate ? v16Esc(fundingRateLabel) : 'No live rate'}</small></div>
- <div><span>Notional</span><strong>${position.notionalValue > 0 ? `$${v16FmtNumber(position.notionalValue, position.notionalValue >= 1000 ? 0 : 2)}` : '-'}</strong>${exposureLabel ? `<small class="${exposureTone.tone || 'dim'}">${v16Esc(exposureLabel)}</small>` : ''}</div>
+ <div><span>Notional</span><strong>${position.notionalValue > 0 ? `$${v16FmtNumber(position.notionalValue, position.notionalValue >= 1000 ? 0 : 2)}` : '-'}</strong>${exposureLabel ? `<small class="pos-exposure-badge ${exposureTone.tone || 'dim'}">${v16Esc(exposureLabel)}</small>` : ''}</div>
  </div>
  ${autoTradeSizingSummary ? `<div class="live-journal-meta"><strong>Auto Size</strong> ${v16Esc(autoTradeSizingSummary)}</div>` : ''}
  <div class="live-position-actions">
@@ -1728,7 +1792,7 @@ function v16BuildPositionsTable(positions, canTrade, straddles = []) {
  <td>${v16Esc(sizeLabel)}</td>
  <td>$${v16FmtPrice(position.entry)}</td>
  <td>$${v16FmtPrice(position.markPrice)}</td>
- <td>${v16Esc(notionalLabel)}${exposureLabel ? `<br/><small class="${exposureTone.tone || 'dim'}">${v16Esc(exposureLabel)}</small>` : ''}${autoTradeSizingSummary ? `<br/><small>${v16Esc(autoTradeSizingSummary)}</small>` : ''}</td>
+ <td>${v16Esc(notionalLabel)}${exposureLabel ? `<br/><span class="pos-exposure-badge ${exposureTone.tone || 'dim'}">${v16Esc(exposureLabel)}</span>` : ''}${autoTradeSizingSummary ? `<br/><small>${v16Esc(autoTradeSizingSummary)}</small>` : ''}</td>
  <td class="${upnlClass}">${v16FmtSigned(position.unrealized)}</td>
  <td>$${v16FmtNumber(position.margin, 2)}</td>
  <td class="${fundClass}">${fundLabel}</td>

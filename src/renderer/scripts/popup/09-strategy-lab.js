@@ -12,6 +12,7 @@
  let strategyLabAlerts = [];
  let strategyLabAlertMessage = '';
  let strategyLabRadarNotificationsEnabled = false;
+ let strategyLabNativeStraddleNotificationsEnabled = true;
  let strategyLabResearchWatchlist = [];
  let strategyLabMinScore = 0;
  let strategyLabHideAvoid = false;
@@ -105,6 +106,30 @@
    avoid: common.avoid,
    avoid_chase: 'Move is too late or risky. Better to skip. Risk: bad entry after big move.',
   },
+  darvas: {
+   breakout: 'Price moved above the Darvas box top. Check close and volume. Risk: false breakout.',
+   near: 'Price is close to the box top. Wait for breakout proof. Risk: early entry can fail.',
+   near_top: 'Price is close to the box top. Wait for breakout proof. Risk: early entry can fail.',
+   near_breakout: 'Price is close to the box top. Wait for breakout proof. Risk: early entry can fail.',
+   base: 'Price is holding inside a box. Wait for a clean break. Risk: box can break down.',
+   failed: 'Price broke the box and fell back inside. Better to skip. Risk: trapped breakout.',
+   failed_breakout: 'Price broke the box and fell back inside. Better to skip. Risk: trapped breakout.',
+   avoid: common.avoid,
+   avoid_box: 'The box is too weak, wide, or thin. Better to skip. Risk: poor structure.',
+   volume: 'Volume must expand on breakout. Risk: low volume breakouts often fail.',
+  },
+ pullback: {
+   ema_reclaim: 'Price touched or undercut the 9 EMA and reclaimed it. Check stop below pullback low. Risk: reclaim can fail.',
+   ema_pullback: 'Price is near the 9 EMA in an uptrend. Wait for a clean reclaim candle. Risk: early entry can slide lower.',
+   round_support: 'Pullback also respected a round/support area. Check reward before entry. Risk: support can break.',
+   trend_watch: 'Trend is up but price has not pulled back enough. Wait for the next 9 EMA touch. Risk: chasing gives poor reward.',
+   ema_reject_short: 'Price rallied into the 9 EMA in a downtrend and rejected it. Check stop above pullback high. Risk: short squeeze.',
+   ema_pullback_short: 'Price is rallying toward the 9 EMA while trend remains down. Wait for a clean rejection candle. Risk: early short can squeeze.',
+   round_resistance_short: 'The short rally also rejected a round/resistance area. Check reward before entry. Risk: resistance can break.',
+   trend_watch_short: 'Trend is down but price has not rallied enough. Wait for the next 9 EMA short pullback. Risk: chasing gives poor reward.',
+   avoid_chase: 'Price is too far above the 9 EMA. Better to wait. Risk: late entries often pull back.',
+   reclaim: 'Price moved back above the 9 EMA after weakness. Check it holds.',
+  },
  };
  return byStrategy[strategy]?.[raw] || common[raw] || '';
  }
@@ -162,6 +187,35 @@
   if (eventType === 'reclaim') return 'It appeared because price moved back above a level it had lost.';
   if (eventType === 'avoid_chase') return 'It appeared because the move looks late or risky to chase.';
   return 'It appeared because stretch or reversal data needs review.';
+ }
+ if (strategy === 'darvas') {
+  if (eventType === 'breakout') return 'It appeared because price moved above the Darvas box top with volume confirmation.';
+  if (eventType === 'near_breakout') return 'It appeared because price is close to the box top but still needs breakout proof.';
+  if (eventType === 'base') return 'It appeared because price is respecting a defined Darvas box.';
+  if (eventType === 'failed_breakout') return 'It appeared because price broke the box top and closed back inside.';
+  if (eventType === 'avoid_box') return 'It appeared because the box is too wide, thin, or weak for action.';
+  return 'It appeared because Darvas box data needs review.';
+ }
+if (strategy === 'pullback') {
+  const isShort = labDirection(row) === 'short';
+  if (eventType === 'ema_reject_short') return 'It appeared because price rallied into the 9 EMA in a downtrend and then rejected it.';
+  if (eventType === 'ema_pullback_short') return 'It appeared because price is pulling back upward toward the 9 EMA while the trend remains down.';
+  if (eventType === 'round_resistance_short') return 'It appeared because the 9 EMA short pullback also rejected a round or resistance area.';
+  if (eventType === 'trend_watch_short') return 'It appeared because trend is down, but the better short is still the next rally into the 9 EMA.';
+  if (eventType === 'ema_reclaim') return 'It appeared because price touched or undercut the 9 EMA and then reclaimed it in an uptrend.';
+  if (eventType === 'ema_pullback') return 'It appeared because price is pulling back toward the 9 EMA while the trend remains up.';
+  if (eventType === 'round_support') return 'It appeared because the 9 EMA pullback also respected a round or support area.';
+  if (eventType === 'trend_watch') return 'It appeared because trend is up, but the better buy is still the next pullback.';
+  if (eventType === 'avoid_chase') return 'It appeared because price is extended above the 9 EMA and the reward is weaker from here.';
+  return isShort ? 'It appeared because short-side trend-pullback data needs review.' : 'It appeared because trend-pullback data needs review.';
+}
+ if (strategy === 'native_straddle') {
+  const market = raw.marketContext || {};
+  const premium = raw.premiumRead || {};
+  if (eventType === 'sell_straddle') return `Sell premium only: ${market.underlying || 'BTC'} is calm enough and MV premium is not expanding.`;
+  if (eventType === 'buy_straddle') return `Buy-vol watch only: ${market.underlying || 'BTC'} or the MV premium chart is expanding. Confirm the 15m chart before action.`;
+  if (premium.trendState) return `No trade because MV premium is ${premium.trendState}.`;
+  return 'No trade until BTC regime, MV premium trend, spread, and liquidity all line up.';
  }
  if (row.signal === 'BUY') return 'It appeared because trend, strength, and risk checks are better than most rows.';
  if (row.signal === 'SELL') return 'It appeared because weakness is stronger than buying strength.';
@@ -299,6 +353,8 @@
   if (activeStrategyLabId === 'early' || row.strategyId === 'early') return ['breakout', 'vwap', 'reclaim', 'volume'];
   if (activeStrategyLabId === 'radar' || row.strategyId === 'radar') return ['breakout', 'ema_obv', 'vwap', 'pressure', 'new_coin'];
   if (activeStrategyLabId === 'reversal' || row.strategyId === 'reversal') return ['fade', 'vwap', 'reclaim', 'climax'];
+ if (activeStrategyLabId === 'darvas' || row.strategyId === 'darvas') return ['breakout', 'volume'];
+  if (activeStrategyLabId === 'pullback' || row.strategyId === 'pullback') return ['ema9', 'reclaim', 'obv', 'reward'];
   if (activeStrategyLabId === 'stage' || row.strategyId === 'stage') return ['breakout', 'ma30', 'volume'];
   return ['breakout', 'volume'];
  }
@@ -412,6 +468,9 @@
  if (id === 'stage') return 'Stage';
  if (id === 'radar') return 'Radar';
  if (id === 'reversal') return 'Reversal';
+ if (id === 'darvas') return 'Darvas';
+ if (id === 'pullback') return 'Pullback';
+ if (id === 'native_straddle') return 'Native Straddle';
  return String(id || 'Scanner');
  }
 
@@ -419,7 +478,7 @@
  return Number(row.entry || row.triggerPrice || row.raw?.latestPrice || row.raw?.stageMetrics?.close || row.raw?.resistance || row.raw?.vwap || 0);
  }
 
- function labEarlyOpportunityRows(snapshot = strategyLabSnapshot) {
+function labEarlyOpportunityRows(snapshot = strategyLabSnapshot) {
  const scannerRows = scannerRegistryList()
  .flatMap(strategy => (Array.isArray(snapshot?.[strategy.id]?.results) ? snapshot[strategy.id].results : [])
  .map(row => ({ ...row, strategyId: row.strategyId || strategy.id, strategyName: strategy.shortName || strategy.displayName || strategy.id })));
@@ -435,6 +494,7 @@
  const wizard = sourceRows.find(row => row.strategyId === 'wizard') || {};
  const stage = sourceRows.find(row => row.strategyId === 'stage') || {};
  const reversal = sourceRows.find(row => row.strategyId === 'reversal') || {};
+ const darvas = sourceRows.find(row => row.strategyId === 'darvas') || {};
  const events = sourceRows.map(row => String(row.eventType || row.raw?.eventType || row.stage || row.signal || '').toLowerCase()).filter(Boolean);
  const scoreParts = [];
  const reasons = [];
@@ -452,12 +512,13 @@
  const wizardRaw = wizard.raw || {};
  const stageRaw = stage.raw || {};
  const reversalRaw = reversal.raw || {};
+ const darvasRaw = darvas.raw || {};
  const isFresh = !!(radarRaw.isFirstSeenNew || radarRaw.isShortHistory || events.includes('new_coin'));
- const volumeRatio = Math.max(Number(radarRaw.volumeRatio || 0), Number(wizardRaw.breakoutVolumeRatio || 0), Number(reversalRaw.volumeRatio || 0), Number(stageRaw.stageMetrics?.volumeRatio10w || 0));
+ const volumeRatio = Math.max(Number(radarRaw.volumeRatio || 0), Number(wizardRaw.breakoutVolumeRatio || 0), Number(reversalRaw.volumeRatio || 0), Number(darvasRaw.volumeRatio || 0), Number(stageRaw.stageMetrics?.volumeRatio10w || 0));
  const emaObv = events.includes('ema_obv') || !!(radar.checks?.emaBull && radar.checks?.obvUp);
  const vwapReclaim = events.includes('vwap') || !!radar.checks?.vwapReclaim;
- const breakoutNear = events.includes('breakout') || !!wizard.checks?.breakoutReady || Number(wizardRaw.pivotPrice || 0) > 0;
- const baseForming = stage.stage === 'STAGE_I' || wizard.signal === 'WATCHLIST' || !!wizardRaw.vcp?.detected || Array.isArray(wizardRaw.contractions);
+ const breakoutNear = events.includes('breakout') || events.includes('near_breakout') || !!wizard.checks?.breakoutReady || !!darvas.checks?.breakout || !!darvas.checks?.nearBreakout || Number(wizardRaw.pivotPrice || darvasRaw.boxTop || 0) > 0;
+ const baseForming = stage.stage === 'STAGE_I' || wizard.signal === 'WATCHLIST' || darvas.eventType === 'base' || !!wizardRaw.vcp?.detected || Array.isArray(wizardRaw.contractions);
  const earlyStage2 = stage.stage === 'STAGE_II' && Number(stage.confidence || stage.score || 0) < 82;
  const reclaim = events.includes('reclaim') || events.includes('mean_reversion') || !!reversal.checks?.closeBackInsideHigh || !!reversal.checks?.closeBackInsideLow;
  const sourceCount = sourceRows.length;
@@ -499,9 +560,9 @@
  ? 'avoid_late'
  : 'compression';
  const bestSource = sourceRows.slice().sort((a, b) => Number(b.score || b.confidence || 0) - Number(a.score || a.confidence || 0))[0] || {};
- const entry = labRowLevel(bestSource) || labRowLevel(radar) || labRowLevel(wizard) || labRowLevel(stage) || labRowLevel(reversal);
- const stop = Number(bestSource.stop || bestSource.protectLevel || radar.stop || wizard.stop || stage.protectLevel || reversal.stop || 0);
- const trigger = Number(wizard.triggerPrice || wizardRaw.pivotPrice || radarRaw.resistance || radarRaw.vwap || stage.triggerPrice || reversal.entry || entry || 0);
+ const entry = labRowLevel(bestSource) || labRowLevel(radar) || labRowLevel(wizard) || labRowLevel(stage) || labRowLevel(reversal) || labRowLevel(darvas);
+ const stop = Number(bestSource.stop || bestSource.protectLevel || radar.stop || wizard.stop || stage.protectLevel || reversal.stop || darvas.stop || 0);
+ const trigger = Number(wizard.triggerPrice || wizardRaw.pivotPrice || darvas.triggerPrice || darvasRaw.boxTop || radarRaw.resistance || radarRaw.vwap || stage.triggerPrice || reversal.entry || entry || 0);
  const boundedScore = Math.max(0, Math.min(100, Math.round(score)));
  const signal = boundedScore >= 72 && !extended ? 'BUY' : boundedScore >= 45 ? 'WATCHLIST' : 'IGNORE';
  return {
@@ -573,6 +634,32 @@
  }).sort((a, b) => Number(b.score || 0) - Number(a.score || 0) || Number(b.raw?.sourceCount || 0) - Number(a.raw?.sourceCount || 0) || String(a.symbol || '').localeCompare(String(b.symbol || '')));
  }
 
+ function labEarlyOpportunityStatus(snapshot = strategyLabSnapshot) {
+ const rows = labEarlyOpportunityRows(snapshot || {});
+ const scannerIds = scannerRegistryList().map(strategy => strategy.id).filter(id => id && id !== 'early' && id !== 'current');
+ const sourceStatuses = scannerIds.map(id => snapshot?.[id]?.status || {}).filter(status => Object.keys(status).length);
+ const sourceTimes = sourceStatuses.map(status => Number(status.lastScanTs || status.ts || status.finishedAt || 0)).filter(Boolean);
+ const rowTimes = rows.map(row => Number(row.ts || row.raw?.ts || 0)).filter(Boolean);
+ const metaTimes = [
+  Number(snapshot?.current?.lastScanTs || 0),
+  Number(snapshot?.current?.scanContextMeta?.finishedAt || 0),
+  Number(snapshot?.current?.unifiedStatus?.finishedAt || 0),
+  Number(snapshot?.current?.unifiedStatus?.startedAt || 0),
+ ].filter(Boolean);
+ const lastScanTs = Math.max(...sourceTimes, ...rowTimes, ...metaTimes, 0);
+ const active = sourceStatuses.some(status => status.active === true);
+ return {
+  status: rows.length ? `Derived - ${rows.length} Early Opportunity rows` : 'Run all scanners to build Early Opportunity',
+  active,
+  scanned: rows.length,
+  total: rows.length,
+  progress: active ? Math.min(98, Number(snapshot?.current?.unifiedStatus?.progress || 50)) : 100,
+  lastScanTs,
+  ts: lastScanTs,
+  derived: true,
+ };
+ }
+
  function labIsAvoidRow(row = {}) {
  const eventType = String(row.eventType || row.raw?.eventType || '').toLowerCase();
  return row.signal === 'IGNORE' || eventType.includes('avoid') || (Array.isArray(row.riskFlags) && row.riskFlags.length > 0 && Number(row.score || 0) < 55);
@@ -614,6 +701,25 @@
    if (strategyLabViewMode === 'avoid') return applyStrategyQualityFilters(rows.filter(row => row.eventType === 'avoid_chase' || row.raw?.eventType === 'avoid_chase' || row.signal === 'IGNORE' || (Array.isArray(row.riskFlags) && row.riskFlags.length)));
    return applyStrategyQualityFilters(rows.filter(row => !['review', 'avoid_chase'].includes(String(row.eventType || row.raw?.eventType || '')) && row.signal !== 'IGNORE')).slice(0, 10);
   }
+  if (activeStrategyLabId === 'darvas') {
+   if (strategyLabViewMode === 'breakout') return applyStrategyQualityFilters(rows.filter(row => row.eventType === 'breakout' || row.raw?.eventType === 'breakout'));
+   if (strategyLabViewMode === 'near') return applyStrategyQualityFilters(rows.filter(row => row.eventType === 'near_breakout' || row.raw?.eventType === 'near_breakout'));
+   if (strategyLabViewMode === 'base') return applyStrategyQualityFilters(rows.filter(row => row.eventType === 'base' || row.raw?.eventType === 'base'));
+   if (strategyLabViewMode === 'failed') return applyStrategyQualityFilters(rows.filter(row => row.eventType === 'failed_breakout' || row.raw?.eventType === 'failed_breakout'));
+   if (strategyLabViewMode === 'avoid') return applyStrategyQualityFilters(rows.filter(row => row.eventType === 'avoid_box' || row.raw?.eventType === 'avoid_box' || row.signal === 'IGNORE' || (Array.isArray(row.riskFlags) && row.riskFlags.length)));
+   return applyStrategyQualityFilters(rows.filter(row => !['review', 'avoid_box', 'failed_breakout'].includes(String(row.eventType || row.raw?.eventType || '')) && row.signal !== 'IGNORE')).slice(0, 10);
+  }
+ if (activeStrategyLabId === 'pullback') {
+   if (strategyLabViewMode === 'long') return applyStrategyQualityFilters(rows.filter(row => labDirection(row) !== 'short'));
+   if (strategyLabViewMode === 'short') return applyStrategyQualityFilters(rows.filter(row => labDirection(row) === 'short'));
+  if (strategyLabViewMode === 'reclaim') return applyStrategyQualityFilters(rows.filter(row => row.eventType === 'ema_reclaim' || row.raw?.eventType === 'ema_reclaim'));
+   if (strategyLabViewMode === 'reject') return applyStrategyQualityFilters(rows.filter(row => row.eventType === 'ema_reject_short' || row.raw?.eventType === 'ema_reject_short'));
+   if (strategyLabViewMode === 'pullback') return applyStrategyQualityFilters(rows.filter(row => ['ema_pullback', 'ema_pullback_short'].includes(row.eventType) || ['ema_pullback', 'ema_pullback_short'].includes(row.raw?.eventType)));
+   if (strategyLabViewMode === 'support') return applyStrategyQualityFilters(rows.filter(row => ['round_support', 'round_resistance_short'].includes(row.eventType) || ['round_support', 'round_resistance_short'].includes(row.raw?.eventType)));
+   if (strategyLabViewMode === 'watch') return applyStrategyQualityFilters(rows.filter(row => ['trend_watch', 'trend_watch_short'].includes(row.eventType) || ['trend_watch', 'trend_watch_short'].includes(row.raw?.eventType)));
+   if (strategyLabViewMode === 'avoid') return applyStrategyQualityFilters(rows.filter(row => row.eventType === 'avoid_chase' || row.raw?.eventType === 'avoid_chase' || row.signal === 'IGNORE' || (Array.isArray(row.riskFlags) && row.riskFlags.length)));
+   return applyStrategyQualityFilters(rows.filter(row => !['review', 'avoid_chase'].includes(String(row.eventType || row.raw?.eventType || '')) && row.signal !== 'IGNORE')).slice(0, 12);
+  }
   if (activeStrategyLabId === 'stage') {
  if (strategyLabViewMode === 'stage2') return applyStrategyQualityFilters(rows.filter(row => row.stage === 'STAGE_II'));
  if (strategyLabViewMode === 'stage1') return applyStrategyQualityFilters(rows.filter(row => row.stage === 'STAGE_I'));
@@ -631,6 +737,7 @@
  }
 
  function labStatusForActive(snapshot = strategyLabSnapshot) {
+ if (activeStrategyLabId === 'early') return labEarlyOpportunityStatus(snapshot || {});
  if (activeStrategyLabId !== 'current') return snapshot?.[activeStrategyLabId]?.status || {};
  return {
  status: snapshot?.current?.status || 'Current scanner ready',
@@ -684,6 +791,29 @@
   ['avoid', 'Avoid Chase'],
   ['all', 'All'],
   ]
+  : activeStrategyLabId === 'darvas'
+  ? [
+  ['focus', 'Focus'],
+  ['breakout', 'Breakout'],
+  ['near', 'Near Top'],
+  ['base', 'Base'],
+  ['failed', 'Failed'],
+  ['avoid', 'Avoid'],
+  ['all', 'All'],
+  ]
+  : activeStrategyLabId === 'pullback'
+  ? [
+  ['focus', 'Focus'],
+  ['long', 'Long'],
+  ['short', 'Short'],
+  ['reclaim', '9 EMA Reclaim'],
+  ['reject', '9 EMA Reject'],
+  ['pullback', '9 EMA Touch'],
+  ['support', 'Round Level'],
+  ['watch', 'Trend Watch'],
+  ['avoid', 'Avoid Chase'],
+  ['all', 'All'],
+  ]
   : activeStrategyLabId === 'stage'
   ? [
  ['focus', 'Best Order'],
@@ -719,6 +849,8 @@
  }
  const notificationToggle = activeStrategyLabId === 'radar'
  ? `<button type="button" class="bsm ${strategyLabRadarNotificationsEnabled ? 'primary' : 'secondary'} radar-notify-toggle" id="btnRadarNotificationToggle" aria-pressed="${strategyLabRadarNotificationsEnabled ? 'true' : 'false'}"><span>${strategyLabRadarNotificationsEnabled ? 'Notifications On' : 'Notifications Off'}</span></button>`
+ : activeStrategyLabId === 'native_straddle'
+ ? `<button type="button" class="bsm ${strategyLabNativeStraddleNotificationsEnabled ? 'primary' : 'secondary'} radar-notify-toggle" id="btnNativeStraddleNotificationToggle" aria-pressed="${strategyLabNativeStraddleNotificationsEnabled ? 'true' : 'false'}"><span>${strategyLabNativeStraddleNotificationsEnabled ? 'Notifications On' : 'Notifications Off'}</span></button>`
  : '';
  return `${notificationToggle}<button type="button" class="bsm primary" id="btnRunStrategyScan" data-run-strategy="${labEsc(strategy.id)}">Run ${labEsc(strategy.shortName || strategy.displayName || strategy.id)} Scan</button>
  <button type="button" class="bsm secondary" id="btnRefreshStrategyLab">Refresh</button>`;
@@ -747,6 +879,29 @@
    const notes = [
    diagnostics.universeRows ? `${diagnostics.universeRows} liquid symbols checked for stretch` : '',
    skipped.insufficientHistory ? `${skipped.insufficientHistory} with short 15m history` : '',
+   skipped.reviewOnly ? `${skipped.reviewOnly} review-only rows` : '',
+   skipped.fetchErrors ? `${skipped.fetchErrors} data errors` : '',
+   ].filter(Boolean);
+   return notes.length ? `<div class="strategy-lab-diagnostics">${notes.map(labEsc).join(' | ')}</div>` : '';
+  }
+  if (activeStrategyLabId === 'native_straddle') {
+   const skipped = status.skipped || {};
+   const diagnostics = status.diagnostics || {};
+   const notes = [
+   diagnostics.underlyings ? `${diagnostics.underlyings} underlyings checked` : '',
+   diagnostics.cachedChains ? `${diagnostics.cachedChains} served from 24h cache` : '',
+   skipped.noChain ? `${skipped.noChain} without native chain` : '',
+   skipped.noContract ? `${skipped.noContract} without tradable MV contract` : '',
+   skipped.fetchErrors ? `${skipped.fetchErrors} data errors` : '',
+   ].filter(Boolean);
+   return notes.length ? `<div class="strategy-lab-diagnostics">${notes.map(labEsc).join(' | ')}</div>` : '';
+  }
+  if (activeStrategyLabId === 'pullback') {
+   const skipped = status.skipped || {};
+   const diagnostics = status.diagnostics || {};
+   const notes = [
+   diagnostics.universeRows ? `${diagnostics.universeRows} liquid symbols checked for 9 EMA pullbacks` : '',
+   skipped.insufficientHistory ? `${skipped.insufficientHistory} with short 1D history` : '',
    skipped.reviewOnly ? `${skipped.reviewOnly} review-only rows` : '',
    skipped.fetchErrors ? `${skipped.fetchErrors} data errors` : '',
    ].filter(Boolean);
@@ -892,6 +1047,12 @@
  }
 
  function buildGenericChartDraft(row = {}) {
+ if (isDarvasChartReviewRow(row)) {
+  return buildDarvasChartDraft(row);
+ }
+ if (row.raw?.chartTradingDraft && typeof row.raw.chartTradingDraft === 'object') {
+  return { ...row.raw.chartTradingDraft, updatedAt: Date.now() };
+ }
  const isShort = String(row.direction || '').includes('short') || row.signal === 'SELL';
  return {
  symbol: String(row.symbol || '').trim().toUpperCase(),
@@ -929,6 +1090,14 @@
   { key: 'new', label: 'New Coin', tone: 'info', rows: allRows.filter(row => row.eventType === 'new_coin' || row.raw?.eventType === 'new_coin' || row.raw?.isFirstSeenNew || row.raw?.isShortHistory) },
   { key: 'avoid', label: 'Avoid / Trap', tone: 'ignore', rows: allRows.filter(row => row.eventType === 'avoid_trap' || row.raw?.eventType === 'avoid_trap' || row.signal === 'IGNORE') },
   ]
+  : activeStrategyLabId === 'native_straddle'
+  ? [
+  { key: 'sell', label: 'Sell Premium', tone: 'developing', rows: allRows.filter(row => row.eventType === 'sell_straddle' || row.raw?.eventType === 'sell_straddle' || row.signal === 'SELL') },
+  { key: 'buy', label: 'Buy Volatility', tone: 'buy', rows: allRows.filter(row => row.eventType === 'buy_straddle' || row.raw?.eventType === 'buy_straddle' || row.signal === 'BUY') },
+  { key: 'avoid', label: 'Avoid', tone: 'ignore', rows: allRows.filter(row => row.eventType === 'avoid_straddle' || row.raw?.eventType === 'avoid_straddle' || row.signal === 'IGNORE') },
+  { key: 'btc', label: 'BTC / ETH', tone: 'info', rows: allRows.filter(row => ['BTC', 'ETH'].includes(String(row.raw?.underlying || '').toUpperCase())) },
+  { key: 'chart', label: '15m Chart', tone: 'watch', rows: allRows.filter(row => String(row.raw?.timeframe || '').toLowerCase() === '15m') },
+  ]
   : activeStrategyLabId === 'reversal'
   ? [
   { key: 'liquidation', label: 'Liq Reversal', tone: 'buy', rows: allRows.filter(row => row.eventType === 'liquidation_reversal' || row.raw?.eventType === 'liquidation_reversal') },
@@ -957,6 +1126,8 @@
   ? `Advisory only: ${allRows.length} live market rows, no auto-trade writes`
   : activeStrategyLabId === 'reversal'
   ? `Counter-trend scanner-only: ${allRows.length} stretched rows, chart confirmation required`
+  : activeStrategyLabId === 'native_straddle'
+  ? `Native straddle scanner-only: ${allRows.length} MV rows, 15m chart confirmation required`
   : activeStrategyLabId === 'wizard'
   ? (status.marketHealth?.pass ? 'BTC regime allows long scans' : 'BTC regime cautious: prefer waitlist over new long entries')
   : `${countStage(allRows, 'STAGE_II')} Stage II and ${countStage(allRows, 'STAGE_IV')} Stage IV rows in latest lifecycle scan`;
@@ -996,7 +1167,16 @@
  }
  if (strategy === 'radar') {
  if (eventType === 'breakout' || Number(row.score || 0) >= 78) return 'review';
- if (eventType === 'pressure' || eventType === 'new_coin' || eventType === 'ema_obv') return 'wait';
+   if (eventType === 'pressure' || eventType === 'new_coin' || eventType === 'ema_obv') return 'wait';
+  }
+ if (strategy === 'native_straddle') {
+  if (eventType === 'sell_straddle' || eventType === 'buy_straddle') return Number(row.score || 0) >= 68 ? 'review' : 'wait';
+  return 'avoid';
+ }
+ if (strategy === 'pullback') {
+  if (['ema_reclaim', 'round_support', 'ema_reject_short', 'round_resistance_short'].includes(eventType) || row.signal === 'BUY' || row.signal === 'SELL') return 'review';
+  if (['ema_pullback', 'trend_watch', 'ema_pullback_short', 'trend_watch_short'].includes(eventType)) return 'wait';
+  if (eventType === 'avoid_chase') return 'avoid';
  }
  if (strategy === 'early') {
  if (Number(row.raw?.sourceCount || 0) > 1 || Number(row.score || 0) >= 76) return 'review';
@@ -1026,6 +1206,7 @@
  if (row.stage === 'STAGE_IV') return 'Wait for a base before any long review';
  if (raw.resistance || row.targets?.resistance) return `Break above ${labPrice(raw.resistance || row.targets?.resistance)}`;
  if (raw.vwap || row.targets?.vwap) return `Hold or reject VWAP ${labPrice(raw.vwap || row.targets?.vwap)}`;
+ if (row.strategyId === 'native_straddle' || activeStrategyLabId === 'native_straddle') return `Open 15m chart for ${row.symbol} and confirm premium behavior`;
  if (row.triggerPrice || row.entry) return `Price near ${labPrice(row.triggerPrice || row.entry)}`;
  return pack.nextAction || 'Open chart and confirm price behavior';
  }
@@ -1087,12 +1268,13 @@
  const selected = selectedStrategySymbol === row.symbol ? 'selected' : '';
  const tone = rowTone(row);
  const bucket = labGuidanceBucket(row);
+ const direction = labDirection(row);
  const action = labGuidedAction(row);
  const why = labPlainWhy(row);
  const trigger = labNextTrigger(row);
- return `<button type="button" class="strategy-guided-row ${tone} ${bucket} ${selected}" data-strategy-symbol="${labEsc(row.symbol)}">
+ return `<button type="button" class="strategy-guided-row ${tone} ${bucket} ${direction ? `dir-${direction}` : ''} ${selected}" data-strategy-symbol="${labEsc(row.symbol)}">
  <span class="strategy-guided-rank">${index + 1}</span>
- <span class="strategy-guided-symbol"><strong>${labEsc(row.symbol)}</strong><small>${labEsc(rowSignalLabel(row))}</small></span>
+ <span class="strategy-guided-symbol"><strong>${labSymbolWithDirection(row)}</strong><small>${labEsc(rowSignalLabel(row))}</small></span>
  <span class="strategy-guided-action">${labEsc(action)}<small>${labEsc(labPriorityLabel(row))}</small></span>
  <span class="strategy-guided-why">${labEsc(why || row.setupLabel || 'Scanner found this row for review.')}</span>
  <span class="strategy-guided-trigger">${labEsc(trigger)}<small>Score ${labFmt(row.score || row.confidence, 0)}</small></span>
@@ -1170,6 +1352,8 @@
   : 'Current scanner';
   const radarCounts = status.eventCounts || {};
   const reversalCounts = status.eventCounts || {};
+  const darvasCounts = status.eventCounts || {};
+  const pullbackCounts = status.eventCounts || {};
   const replaySummary = status.replaySummary || {};
   const metricRows = activeStrategyLabId === 'early'
  ? [
@@ -1217,6 +1401,42 @@
  buildMetric('Best Setup', best ? `${best.symbol} ${best.score}/100` : 'Waiting', best?.score >= 75 ? 'ok' : 'warn'),
  buildMetric('Last Scan', labAge(status.lastScanTs || status.ts), 'info'),
  ].join('')
+ : activeStrategyLabId === 'darvas'
+ ? [
+ buildMetric('Active Strategy', strategy.displayName || 'Darvas Box Lab', 'info'),
+ buildMetric('Mode', 'Scanner only', 'warn'),
+ buildMetric('Breakout', String(darvasCounts.breakout || 0), darvasCounts.breakout ? 'ok' : 'info'),
+ buildMetric('Near Top', String(darvasCounts.near_breakout || 0), darvasCounts.near_breakout ? 'warn' : 'info'),
+ buildMetric('Base', String(darvasCounts.base || 0), darvasCounts.base ? 'warn' : 'info'),
+ buildMetric('Failed', String(darvasCounts.failed_breakout || 0), darvasCounts.failed_breakout ? 'warn' : 'info'),
+ buildMetric('Avoid', String(darvasCounts.avoid_box || 0), darvasCounts.avoid_box ? 'info' : 'ok'),
+ buildMetric('Best Box', best ? `${best.symbol} ${best.score}/100` : 'Waiting', best?.score >= 75 ? 'ok' : 'warn'),
+ buildMetric('Last Scan', labAge(status.lastScanTs || status.ts), 'info'),
+ ].join('')
+ : activeStrategyLabId === 'pullback'
+ ? [
+ buildMetric('Active Strategy', strategy.displayName || 'EMA Pullback Lab', 'info'),
+ buildMetric('Mode', 'Scanner only', 'warn'),
+ buildMetric('9 EMA Reclaim', String(pullbackCounts.ema_reclaim || 0), pullbackCounts.ema_reclaim ? 'ok' : 'info'),
+ buildMetric('9 EMA Touch', String(pullbackCounts.ema_pullback || 0), pullbackCounts.ema_pullback ? 'warn' : 'info'),
+ buildMetric('Round Support', String(pullbackCounts.round_support || 0), pullbackCounts.round_support ? 'ok' : 'info'),
+ buildMetric('Trend Watch', String(pullbackCounts.trend_watch || 0), pullbackCounts.trend_watch ? 'warn' : 'info'),
+ buildMetric('Avoid Chase', String(pullbackCounts.avoid_chase || 0), pullbackCounts.avoid_chase ? 'warn' : 'info'),
+ buildMetric('Best Pullback', best ? `${best.symbol} ${best.score}/100` : 'Waiting', best?.score >= 75 ? 'ok' : 'warn'),
+ buildMetric('Last Scan', labAge(status.lastScanTs || status.ts), 'info'),
+ ].join('')
+ : activeStrategyLabId === 'native_straddle'
+ ? [
+ buildMetric('Active Strategy', strategy.displayName || 'Native Straddle Scanner', 'info'),
+ buildMetric('Mode', 'Notify only', 'warn'),
+ buildMetric('Sell Premium', String(status.eventCounts?.sell_straddle || 0), status.eventCounts?.sell_straddle ? 'warn' : 'info'),
+ buildMetric('Buy Vol', String(status.eventCounts?.buy_straddle || 0), status.eventCounts?.buy_straddle ? 'ok' : 'info'),
+ buildMetric('Avoid', String(status.eventCounts?.avoid_straddle || 0), status.eventCounts?.avoid_straddle ? 'info' : 'ok'),
+ buildMetric('Best MV', best ? `${best.raw?.underlying || best.symbol} ${best.score}/100` : 'Waiting', best?.score >= 68 ? 'ok' : 'warn'),
+ buildMetric('Cache', '24h only', 'info'),
+ buildMetric('Chart', '15m', 'info'),
+ buildMetric('Last Scan', labAge(status.lastScanTs || status.ts), 'info'),
+ ].join('')
  : [
  buildMetric('Active Strategy', strategy.displayName || strategy.id || 'Current Strategy', 'info'),
  buildMetric('Mode', mode, isScannerOnly() ? 'warn' : 'ok'),
@@ -1254,6 +1474,55 @@
  ${buildStrategyDiagnostics(status)}`;
  }
 
+ function labDirection(row = {}) {
+  const raw = String(row.direction || row.raw?.direction || row.side || row.raw?.side || '').trim().toLowerCase();
+  const signal = String(row.signal || '').trim().toUpperCase();
+  const eventType = String(row.eventType || row.raw?.eventType || '').trim().toLowerCase();
+  const action = String(row.actionLabel || row.raw?.actionLabel || row.setupLabel || '').trim().toLowerCase();
+  const sourceRows = Array.isArray(row.raw?.sourceRows) ? row.raw.sourceRows : [];
+  if (
+   raw.includes('short') ||
+   raw.includes('sell') ||
+   signal === 'SELL' ||
+   eventType.startsWith('sell_') ||
+   eventType.includes('_short') ||
+   eventType === 'pressure' ||
+   action.includes('short')
+  ) return 'short';
+  if (
+   raw.includes('long') ||
+   raw.includes('buy') ||
+   signal === 'BUY' ||
+   eventType.startsWith('buy_') ||
+   action.includes('buy') ||
+   action.includes('long') ||
+   (row.stage === 'STAGE_II' && signal !== 'IGNORE')
+  ) return 'long';
+  if (sourceRows.some(item => labDirection(item) === 'short')) return 'short';
+  if (sourceRows.some(item => labDirection(item) === 'long')) return 'long';
+  if (
+   signal === 'WATCHLIST' &&
+   ['breakout', 'ema_obv', 'new_coin', 'vwap', 'mean_reversion', 'reclaim', 'near_breakout', 'base', 'ema_reclaim', 'ema_pullback', 'round_support', 'trend_watch'].includes(eventType)
+  ) return 'long';
+  return '';
+ }
+
+ function labDirectionBadge(row = {}) {
+  const direction = labDirection(row);
+  if (!direction) return '';
+  return `<b class="strategy-direction-badge ${labEsc(direction)}">${direction === 'short' ? 'SHORT' : 'LONG'}</b>`;
+ }
+
+ function labDirectionClass(row = {}) {
+  const direction = labDirection(row);
+  return direction ? `dir-${direction}` : '';
+ }
+
+ function labSymbolWithDirection(row = {}, fallbackSymbol = '') {
+  const symbol = fallbackSymbol || row.symbol || row.raw?.underlying || '--';
+  return `${labEsc(symbol)}${labDirectionBadge(row)}`;
+ }
+
  function rowTone(row = {}) {
   if (activeStrategyLabId === 'early' || row.strategyId === 'early') {
    if (row.raw?.earlyType === 'avoid_late' || row.signal === 'IGNORE') return 'ignore';
@@ -1278,6 +1547,36 @@
    if (eventType === 'avoid_chase' || row.signal === 'IGNORE') return 'ignore';
    if (Number(row.score || 0) >= 75) return 'good';
    return 'watch';
+  }
+  if (activeStrategyLabId === 'darvas') {
+   const eventType = String(row.eventType || row.raw?.eventType || '');
+   if (eventType === 'breakout' || row.signal === 'BUY') return 'buy';
+   if (eventType === 'near_breakout') return 'good';
+   if (eventType === 'base') return 'watch';
+   if (eventType === 'failed_breakout' || eventType === 'avoid_box' || row.signal === 'IGNORE') return 'ignore';
+   if (Number(row.score || 0) >= 75) return 'good';
+   return 'watch';
+  }
+  if (activeStrategyLabId === 'pullback') {
+   const eventType = String(row.eventType || row.raw?.eventType || '');
+   if (labDirection(row) === 'short') {
+    if (eventType === 'ema_reject_short' || eventType === 'round_resistance_short' || row.signal === 'SELL') return 'short';
+    if (eventType === 'ema_pullback_short') return 'short-watch';
+    if (eventType === 'trend_watch_short') return 'watch';
+   }
+   if (eventType === 'ema_reclaim' || eventType === 'round_support' || row.signal === 'BUY') return 'buy';
+   if (eventType === 'ema_pullback') return 'good';
+   if (eventType === 'trend_watch') return 'watch';
+   if (eventType === 'avoid_chase' || row.signal === 'IGNORE') return 'ignore';
+   if (Number(row.score || 0) >= 75) return 'good';
+   return 'watch';
+  }
+  if (activeStrategyLabId === 'native_straddle') {
+   const eventType = String(row.eventType || row.raw?.eventType || '');
+   if (eventType === 'buy_straddle' || row.signal === 'BUY') return 'buy';
+   if (eventType === 'sell_straddle' || row.signal === 'SELL') return 'developing';
+   if (eventType === 'avoid_straddle' || row.signal === 'IGNORE') return 'ignore';
+   return Number(row.score || 0) >= 68 ? 'good' : 'watch';
   }
   if (activeStrategyLabId === 'stage') {
  if (row.stage === 'STAGE_II') return row.signal === 'BUY' ? 'buy' : 'good';
@@ -1305,6 +1604,13 @@ function rowSignalLabel(row = {}) {
   }
   if (activeStrategyLabId === 'radar') return row.raw?.eventLabel || row.setupLabel || row.eventType || '--';
   if (activeStrategyLabId === 'reversal') return row.raw?.eventLabel || row.setupLabel || row.eventType || '--';
+  if (activeStrategyLabId === 'darvas') return row.raw?.eventLabel || row.setupLabel || row.eventType || '--';
+  if (activeStrategyLabId === 'pullback') {
+   const direction = labDirection(row);
+   const dir = direction === 'short' ? 'Short' : direction === 'long' ? 'Long' : '';
+   return `${dir ? `${dir} ` : ''}${row.raw?.eventLabel || row.setupLabel || row.eventType || '--'}`;
+  }
+  if (activeStrategyLabId === 'native_straddle') return row.actionLabel || row.raw?.eventLabel || row.setupLabel || row.eventType || '--';
   if (activeStrategyLabId === 'stage') return row.actionLabel || row.stageLabel || row.stage || '--';
  if (row.signal !== 'IGNORE') return row.signal || '--';
  if (isScannerOnly() && Number(row.score || 0) >= 45) return 'DEVELOPING';
@@ -1332,8 +1638,8 @@ function rowSignalLabel(row = {}) {
  : row.stage === 'STAGE_III'
  ? `Exit ${labPrice(row.exitPrice || row.protectLevel)}`
  : `Support ${labPrice(row.exitPrice || metrics.rangeLow)}`;
- return `<tr class="strategy-lab-row ${tone} ${selected}" data-strategy-symbol="${labEsc(row.symbol)}">
- <td><strong>${labEsc(row.symbol)}</strong><small>${labEsc(row.stageLabel || '')}</small></td>
+ return `<tr class="strategy-lab-row ${tone} ${labDirectionClass(row)} ${selected}" data-strategy-symbol="${labEsc(row.symbol)}">
+ <td><strong>${labSymbolWithDirection(row)}</strong><small>${labEsc(row.stageLabel || '')}</small></td>
  <td><span class="strategy-signal ${tone}"${labHelpAttrs(shortStageLabel(row), 'stage', true)}>${labEsc(shortStageLabel(row))}</span></td>
  <td>${labEsc(row.actionLabel || '--')}</td>
  <td>${labEsc(labPriorityLabel(row))}</td>
@@ -1360,8 +1666,8 @@ function buildRadarRow(row = {}) {
   : row.eventType === 'vwap'
   ? `VWAP ${labPrice(raw.vwap || row.targets?.vwap)}`
   : `R ${labPrice(raw.resistance || row.targets?.resistance)}`;
-  return `<tr class="strategy-lab-row radar ${tone} ${selected}" data-strategy-symbol="${labEsc(row.symbol)}">
- <td><strong>${labEsc(row.symbol)}</strong><small>${labEsc(row.raw?.isFirstSeenNew || row.raw?.isShortHistory ? 'New / short history' : row.setupLabel || '')}</small></td>
+  return `<tr class="strategy-lab-row radar ${tone} ${labDirectionClass(row)} ${selected}" data-strategy-symbol="${labEsc(row.symbol)}">
+ <td><strong>${labSymbolWithDirection(row)}</strong><small>${labEsc(row.raw?.isFirstSeenNew || row.raw?.isShortHistory ? 'New / short history' : row.setupLabel || '')}</small></td>
  <td>${labEsc(move)}</td>
  <td><span class="strategy-signal ${tone}"${labHelpAttrs(row.eventType || row.raw?.eventType || rowSignalLabel(row), 'radar', true)}>${labEsc(rowSignalLabel(row))}</span></td>
  <td>${labEsc(volume)}<small>${labEsc(raw.latestQuoteVolume ? `$${labFmt(raw.latestQuoteVolume, 0)}` : '--')}</small></td>
@@ -1389,14 +1695,59 @@ function buildReversalRow(row = {}) {
  : row.checks?.fundingCrowdedLong || row.checks?.fundingCrowdedShort
  ? 'Funding crowd'
  : 'Wait';
- return `<tr class="strategy-lab-row reversal ${tone} ${selected}" data-strategy-symbol="${labEsc(row.symbol)}">
-<td><strong>${labEsc(row.symbol)}</strong><small>${labEsc(row.setupLabel || '')}</small></td>
+ return `<tr class="strategy-lab-row reversal ${tone} ${labDirectionClass(row)} ${selected}" data-strategy-symbol="${labEsc(row.symbol)}">
+<td><strong>${labSymbolWithDirection(row)}</strong><small>${labEsc(row.setupLabel || '')}</small></td>
 <td>${labEsc(move)}</td>
 <td><span class="strategy-signal ${tone}"${labHelpAttrs(row.eventType || row.raw?.eventType || rowSignalLabel(row), 'reversal', true)}>${labEsc(rowSignalLabel(row))}</span></td>
 <td>${labEsc(stretch)}</td>
 <td>${labEsc(balance)}</td>
 <td>${labEsc(trigger)}<small>${labEsc(raw.volumeRatio ? `${labFmt(raw.volumeRatio, 2)}x volume` : 'volume --')}</small></td>
 <td>${labEsc(row.actionLabel || '--')}<small>${labEsc(labPriorityLabel(row))}</small></td>
+<td>${labFmt(row.score, 0)}</td>
+</tr>`;
+}
+
+function buildDarvasRow(row = {}) {
+ const selected = selectedStrategySymbol === row.symbol ? 'selected' : '';
+ const tone = rowTone(row);
+ const raw = row.raw || {};
+ const box = raw.boxTop && raw.boxBottom ? `${labPrice(raw.boxBottom)} - ${labPrice(raw.boxTop)}` : '--';
+ const proximity = Number.isFinite(Number(raw.nearTopPct)) ? `${labFmt(raw.nearTopPct, 2)}%` : '--';
+ const volume = raw.volumeRatio ? `${labFmt(raw.volumeRatio, 2)}x` : '--';
+ return `<tr class="strategy-lab-row darvas ${tone} ${labDirectionClass(row)} ${selected}" data-strategy-symbol="${labEsc(row.symbol)}">
+<td><strong>${labSymbolWithDirection(row)}</strong><small>${labEsc(row.setupLabel || '')}</small></td>
+<td><span class="strategy-signal ${tone}"${labHelpAttrs(row.eventType || row.raw?.eventType || rowSignalLabel(row), 'darvas', true)}>${labEsc(rowSignalLabel(row))}</span></td>
+<td>${labEsc(row.actionLabel || '--')}<small>${labEsc(labPriorityLabel(row))}</small></td>
+<td>${labEsc(box)}<small>${labEsc(raw.boxHeightPct ? `${labFmt(raw.boxHeightPct, 2)}% box` : 'box --')}</small></td>
+<td>${labPrice(raw.boxTop || row.triggerPrice)}</td>
+<td>${labEsc(proximity)}</td>
+<td>${labEsc(volume)}<small>${labEsc(raw.latestQuoteVolume ? `$${labFmt(raw.latestQuoteVolume, 0)}` : '--')}</small></td>
+<td>${labPrice(row.stop || raw.boxBottom)}</td>
+<td>${labFmt(row.score, 0)}</td>
+</tr>`;
+}
+
+function buildPullbackRow(row = {}) {
+ const selected = selectedStrategySymbol === row.symbol ? 'selected' : '';
+ const tone = rowTone(row);
+ const raw = row.raw || {};
+ const emaRead = [
+ raw.ema9 ? `9 ${labPrice(raw.ema9)}` : '9 --',
+ raw.ema21 ? `21 ${labPrice(raw.ema21)}` : '21 --',
+ ].join(' | ');
+ const entryRead = `${labPrice(raw.bestEntry || row.entry)} / ${labPrice(row.stop || raw.stop)}`;
+ const extension = Number.isFinite(Number(raw.extensionPct)) ? `${labPct(raw.extensionPct, 2)} vs 9 EMA` : '--';
+ const reward = raw.rrToTarget1 ? `${labFmt(raw.rrToTarget1, 2)}R` : '--';
+ const touch = raw.touchAge == null ? 'No touch' : raw.touchAge === 0 ? 'Today' : `${labFmt(raw.touchAge, 0)}d ago`;
+ return `<tr class="strategy-lab-row pullback ${tone} ${labDirectionClass(row)} ${selected}" data-strategy-symbol="${labEsc(row.symbol)}">
+<td><strong>${labSymbolWithDirection(row)}</strong><small>${labEsc(row.setupLabel || '')}</small></td>
+<td><span class="strategy-signal ${tone}"${labHelpAttrs(row.eventType || row.raw?.eventType || rowSignalLabel(row), 'pullback', true)}>${labEsc(rowSignalLabel(row))}</span></td>
+<td>${labEsc(row.actionLabel || '--')}<small>${labEsc(labPriorityLabel(row))}</small></td>
+<td>${labEsc(emaRead)}<small>${labEsc(touch)}</small></td>
+<td>${labEsc(entryRead)}<small>Entry / Stop</small></td>
+<td>${labEsc(extension)}<small>${labEsc(raw.roundSupport ? `Support ${labPrice(raw.roundSupport)}` : 'Support --')}</small></td>
+<td>${labEsc(reward)}<small>${labEsc(raw.previousHigh ? `Prev high ${labPrice(raw.previousHigh)}` : 'Target --')}</small></td>
+<td>${labEsc(raw.volumeRatio ? `${labFmt(raw.volumeRatio, 2)}x` : '--')}<small>${labEsc(raw.latestQuoteVolume ? `$${labFmt(raw.latestQuoteVolume, 0)}` : 'volume --')}</small></td>
 <td>${labFmt(row.score, 0)}</td>
 </tr>`;
 }
@@ -1409,8 +1760,8 @@ function buildEarlyRow(row = {}) {
  const sourceText = Array.isArray(raw.sources) ? raw.sources.join(' + ') : '--';
  const confirmText = Array.isArray(raw.confirmations) && raw.confirmations.length ? raw.confirmations[0] : 'Wait for confirmation';
  const rejectText = Array.isArray(raw.rejections) && raw.rejections.length ? raw.rejections[0] : 'No major rejection';
- return `<tr class="strategy-lab-row early ${tone} ${selected}" data-strategy-symbol="${labEsc(row.symbol)}">
-<td><strong>${labEsc(row.symbol)}</strong><small>${labEsc(sourceText)}</small></td>
+ return `<tr class="strategy-lab-row early ${tone} ${labDirectionClass(row)} ${selected}" data-strategy-symbol="${labEsc(row.symbol)}">
+<td><strong>${labSymbolWithDirection(row)}</strong><small>${labEsc(sourceText)}</small></td>
 <td><span class="strategy-signal ${tone}"${labHelpAttrs(raw.earlyType || 'early', 'early', true)}>${labEsc(rowSignalLabel(row))}</span></td>
 <td>${labFmt(row.score, 0)}<small>${labEsc(row.priorityLabel || '')}</small></td>
 <td>${labEsc(confirmText)}</td>
@@ -1421,19 +1772,45 @@ function buildEarlyRow(row = {}) {
 </tr>`;
 }
 
+function buildNativeStraddleRow(row = {}) {
+ const selected = selectedStrategySymbol === row.symbol ? 'selected' : '';
+ const tone = rowTone(row);
+ const raw = row.raw || {};
+ const market = raw.marketContext || {};
+ const premiumRead = raw.premiumRead || {};
+ const quote = raw.bid && raw.ask ? `${labFmt(raw.bid, 2)} / ${labFmt(raw.ask, 2)}` : '--';
+ const premium = raw.premiumPerContract ? `$${labFmt(raw.premiumPerContract, 2)}` : labPrice(row.entry);
+ const expiry = raw.daysToExpiry < 1 ? `${labFmt(Math.max(0, Number(raw.daysToExpiry || 0)) * 24, 1)}h` : `${labFmt(raw.daysToExpiry, 1)}d`;
+ return `<tr class="strategy-lab-row native-straddle ${tone} ${labDirectionClass(row)} ${selected}" data-strategy-symbol="${labEsc(row.symbol)}">
+<td><strong>${labSymbolWithDirection(row, raw.underlying || row.symbol)}</strong><small>${labEsc(row.symbol)}</small></td>
+<td><span class="strategy-signal ${tone}"${labHelpAttrs(row.eventType || row.raw?.eventType || rowSignalLabel(row), 'native_straddle', true)}>${labEsc(rowSignalLabel(row))}</span></td>
+<td>${labEsc(row.actionLabel || '--')}<small>${labEsc(labPriorityLabel(row))}</small></td>
+<td>${labPrice(raw.strike)}<small>Spot ${labPrice(raw.underlyingPrice || row.targets?.underlyingPrice)}</small></td>
+<td>${labEsc(premium)}<small>${labEsc(quote)}</small></td>
+<td>${labEsc(expiry)}<small>${labEsc(raw.expiryLabel || raw.expiryKey || '--')}</small></td>
+<td>${labFmt(raw.spreadPct, 2)}%<small>OI ${labFmt(raw.openInterest, 0)} | Vol ${labFmt(raw.volume, 0)}</small></td>
+<td>${labFmt(market.sellPremiumScore, 0)}<small>${labEsc(market.label || 'Market')}</small></td>
+<td>${labEsc(premiumRead.trendState || '--')}<small>${labFmt(premiumRead.move2h, 1)}% 2h</small></td>
+<td><button type="button" class="strategy-row-chart-btn" data-strategy-chart-review="${labEsc(row.symbol)}">15m Chart</button></td>
+</tr>`;
+}
+
 function buildStrategyRow(row = {}) {
   if (activeStrategyLabId === 'early') return buildEarlyRow(row);
   if (activeStrategyLabId === 'stage') return buildStageRow(row);
   if (activeStrategyLabId === 'radar') return buildRadarRow(row);
   if (activeStrategyLabId === 'reversal') return buildReversalRow(row);
+  if (activeStrategyLabId === 'darvas') return buildDarvasRow(row);
+  if (activeStrategyLabId === 'pullback') return buildPullbackRow(row);
+  if (activeStrategyLabId === 'native_straddle') return buildNativeStraddleRow(row);
   const selected = selectedStrategySymbol === row.symbol ? 'selected' : '';
  const tone = rowTone(row);
  const rs = row.raw?.rsScore ?? row.rsScore ?? '--';
  const pivot = row.raw?.pivotPrice ? labFmt(row.raw.pivotPrice, 4) : '--';
  const risk = row.riskPercent ? `${labFmt(row.riskPercent, 2)}%` : '--';
  const action = row.actionLabel || (row.signal === 'BUY' ? 'Buy now' : row.signal === 'WATCHLIST' ? 'Wait' : row.signal === 'SELL' ? 'Short watch' : 'Ignore');
- return `<tr class="strategy-lab-row ${tone} ${selected}" data-strategy-symbol="${labEsc(row.symbol)}">
- <td><strong>${labEsc(row.symbol)}</strong><small>${labEsc(row.setupLabel || '')}</small></td>
+ return `<tr class="strategy-lab-row ${tone} ${labDirectionClass(row)} ${selected}" data-strategy-symbol="${labEsc(row.symbol)}">
+ <td><strong>${labSymbolWithDirection(row)}</strong><small>${labEsc(row.setupLabel || '')}</small></td>
  <td><span class="strategy-signal ${tone}"${labHelpAttrs(rowSignalLabel(row), activeStrategyLabId, isScannerOnly())}>${labEsc(rowSignalLabel(row))}</span></td>
  <td>${labEsc(action)}</td>
  <td>${labEsc(labPriorityLabel(row))}</td>
@@ -1473,7 +1850,21 @@ skipped.reviewOnly ? `${skipped.reviewOnly} review-only rows` : '',
 skipped.fetchErrors ? `${skipped.fetchErrors} data errors` : '',
 ].filter(Boolean).join(', ')}.`
 : '';
-const copy = radarEmptyNote || stageEmptyNote || reversalEmptyNote || (activeStrategyLabId === 'current'
+const darvasEmptyNote = activeStrategyLabId === 'darvas' && (skipped.insufficientHistory || skipped.fetchErrors || skipped.reviewOnly)
+? `No rows in this view. Diagnostics: ${[
+skipped.insufficientHistory ? `${skipped.insufficientHistory} short 1D history` : '',
+skipped.reviewOnly ? `${skipped.reviewOnly} review-only boxes` : '',
+skipped.fetchErrors ? `${skipped.fetchErrors} data errors` : '',
+].filter(Boolean).join(', ')}.`
+: '';
+const pullbackEmptyNote = activeStrategyLabId === 'pullback' && (skipped.insufficientHistory || skipped.fetchErrors || skipped.reviewOnly)
+? `No rows in this view. Diagnostics: ${[
+skipped.insufficientHistory ? `${skipped.insufficientHistory} short 1D history` : '',
+skipped.reviewOnly ? `${skipped.reviewOnly} review-only pullbacks` : '',
+skipped.fetchErrors ? `${skipped.fetchErrors} data errors` : '',
+].filter(Boolean).join(', ')}.`
+: '';
+const copy = radarEmptyNote || stageEmptyNote || reversalEmptyNote || darvasEmptyNote || pullbackEmptyNote || (activeStrategyLabId === 'current'
 ? 'Run the current scanner to populate this strategy view.'
 : `Run ${strategy.shortName || strategy.displayName || 'Strategy'} Scan to build scanner-only results.`);
  return `<div class="empty strategy-lab-empty"><div class="ei">--</div><div class="eh">No strategy results yet</div><div class="es">${labEsc(copy)}</div></div>`;
@@ -1488,6 +1879,12 @@ const heading = activeStrategyLabId === 'radar'
  ? '<thead><tr><th>Coin</th><th>Early Type</th><th>Score</th><th>Confirms When</th><th>Rejects If</th><th>Trigger</th><th>Invalid</th><th>Chart</th></tr></thead>'
  : activeStrategyLabId === 'reversal'
  ? '<thead><tr><th>Coin</th><th>Move</th><th>Event</th><th>Stretch</th><th>Balance</th><th>Trigger</th><th>Action</th><th>Score</th></tr></thead>'
+ : activeStrategyLabId === 'darvas'
+ ? '<thead><tr><th>Coin</th><th>Event</th><th>Action</th><th>Box</th><th>Top</th><th>To Top</th><th>Volume</th><th>Invalid</th><th>Score</th></tr></thead>'
+ : activeStrategyLabId === 'pullback'
+ ? '<thead><tr><th>Coin</th><th>Event</th><th>Action</th><th>EMA Read</th><th>Entry / Stop</th><th>Distance</th><th>Reward</th><th>Volume</th><th>Score</th></tr></thead>'
+ : activeStrategyLabId === 'native_straddle'
+ ? '<thead><tr><th>Underlying</th><th>Signal</th><th>Action</th><th>Strike</th><th>Premium</th><th>Expiry</th><th>Spread</th><th>Market</th><th>MV 15m</th><th>Chart</th></tr></thead>'
  : activeStrategyLabId === 'stage'
  ? '<thead><tr><th>Symbol</th><th>Stage</th><th>Action</th><th>Priority</th><th>Confidence</th><th>30W Slope</th><th>Range</th><th>Volume</th><th>Protect/Trigger</th></tr></thead>'
  : '<thead><tr><th>Symbol</th><th>Signal</th><th>Action</th><th>Priority</th><th>Score</th><th>RS</th><th>Pivot</th><th>Entry</th><th>Stop</th><th>Risk</th></tr></thead>';
@@ -1517,10 +1914,10 @@ const heading = activeStrategyLabId === 'radar'
  </div>`;
  }
 
- function buildRuleBacktest(row = {}) {
- const test = row.raw?.ruleBacktest || {};
+ function buildRuleEvidence(row = {}) {
+ const test = row.raw?.ruleEvidence || {};
  return `<div class="strategy-report-block">
- <div class="strategy-report-title">Rule Backtest</div>
+ <div class="strategy-report-title">Rule Evidence</div>
  <div class="strategy-mini-grid">
  <div><span>Sample</span><strong>${labEsc(test.label || 'No sample')}</strong></div>
  <div><span>Trades</span><strong>${labEsc(test.samples ?? 0)}</strong></div>
@@ -1570,9 +1967,9 @@ const heading = activeStrategyLabId === 'radar'
  const reasons = (row.reasons || []).slice(0, 9).map(reason => `<li>${labEsc(reason)}</li>`).join('');
  const trendText = checks.maRising ? '30WMA turning up' : checks.maDeclining ? '30WMA declining' : checks.maFlat ? '30WMA flat' : '30WMA mixed';
  const priceText = checks.priceAboveMa ? 'Price above 30WMA' : checks.priceBelowMa ? 'Price below 30WMA' : 'Price near 30WMA';
- return `<aside class="strategy-lab-detail">
+ return `<aside class="strategy-lab-detail ${labDirectionClass(row)}">
  <div class="strategy-detail-head">
- <div><span>Stage Scanner</span><strong>${labEsc(row.symbol)}</strong></div>
+ <div><span>Stage Scanner</span><strong>${labSymbolWithDirection(row)}</strong></div>
  <em class="${rowTone(row)}">${labEsc(labPriorityLabel(row))}</em>
  </div>
  <div class="strategy-detail-actions"><button type="button" data-strategy-chart-review="${labEsc(row.symbol)}">Review chart</button><button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button></div>
@@ -1606,7 +2003,7 @@ const heading = activeStrategyLabId === 'radar'
  </div>
  </details>
  ${buildDecisionNotes(row)}
- ${buildRuleBacktest(row)}
+ ${buildRuleEvidence(row)}
  ${buildAgingAndTransition(row)}
  ${buildAlertControls(row)}
  </aside>`;
@@ -1620,9 +2017,9 @@ const heading = activeStrategyLabId === 'radar'
  const checks = row.checks || {};
  const reasons = (row.reasons || []).slice(0, 8).map(reason => `<li>${labEsc(reason)}</li>`).join('');
  const contractions = Array.isArray(raw.contractions) && raw.contractions.length ? raw.contractions.map(v => `${labFmt(v, 1)}%`).join(' / ') : '--';
- return `<aside class="strategy-lab-detail">
+ return `<aside class="strategy-lab-detail ${labDirectionClass(row)}">
  <div class="strategy-detail-head">
- <div><span>${labEsc(getStrategyMeta(row.strategyId || activeStrategyLabId)?.displayName || 'Current Strategy')}</span><strong>${labEsc(row.symbol)}</strong></div>
+ <div><span>${labEsc(getStrategyMeta(row.strategyId || activeStrategyLabId)?.displayName || 'Current Strategy')}</span><strong>${labSymbolWithDirection(row)}</strong></div>
  <em class="${rowTone(row)}">${labEsc(labPriorityLabel(row))}</em>
  </div>
  <div class="strategy-detail-actions"><button type="button" data-strategy-chart-review="${labEsc(row.symbol)}">Review chart</button><button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button></div>
@@ -1655,7 +2052,7 @@ const heading = activeStrategyLabId === 'radar'
  </div>
  </details>
  ${buildDecisionNotes(row)}
- ${buildRuleBacktest(row)}
+ ${buildRuleEvidence(row)}
  ${buildAgingAndTransition(row)}
  ${buildAlertControls(row)}
  </aside>`;
@@ -1675,9 +2072,9 @@ function buildRadarDetail(row = null) {
   const avoidTrap = raw.avoidTrap || {};
   const replay = raw.replay || null;
   const replayRows = Array.isArray(replay?.horizons) ? replay.horizons : [];
-  return `<aside class="strategy-lab-detail radar-detail">
+  return `<aside class="strategy-lab-detail radar-detail ${labDirectionClass(row)}">
  <div class="strategy-detail-head">
- <div><span>Live Radar</span><strong>${labEsc(row.symbol)}</strong></div>
+ <div><span>Live Radar</span><strong>${labSymbolWithDirection(row)}</strong></div>
  <em class="${rowTone(row)}">${labEsc(labPriorityLabel(row))}</em>
  </div>
  <div class="strategy-detail-actions"><button type="button" data-strategy-chart-review="${labEsc(row.symbol)}">Review chart</button><button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button></div>
@@ -1763,9 +2160,9 @@ function buildReversalDetail(row = null) {
  const scoreParts = raw.scoreParts || {};
  const scoreRows = Array.isArray(scoreParts.rows) ? scoreParts.rows : [];
  const side = String(row.direction || '').includes('short') || row.signal === 'SELL' ? 'Short fade' : String(row.direction || '').includes('long') || row.signal === 'BUY' ? 'Long bounce' : 'Watch only';
- return `<aside class="strategy-lab-detail reversal-detail">
+ return `<aside class="strategy-lab-detail reversal-detail ${labDirectionClass(row)}">
 <div class="strategy-detail-head">
-<div><span>Reversal Lab</span><strong>${labEsc(row.symbol)}</strong></div>
+<div><span>Reversal Lab</span><strong>${labSymbolWithDirection(row)}</strong></div>
 <em class="${rowTone(row)}">${labEsc(labPriorityLabel(row))}</em>
 </div>
 <div class="strategy-detail-actions"><button type="button" data-strategy-chart-review="${labEsc(row.symbol)}">Review chart</button><button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button></div>
@@ -1827,6 +2224,191 @@ ${buildAlertControls(row)}
 </aside>`;
 }
 
+function buildDarvasDetail(row = null) {
+ if (!row) {
+  return '<aside class="strategy-lab-detail darvas-detail"><div class="strategy-detail-empty">Select a Darvas row to inspect box top, box bottom, volume confirmation, failed-breakout risk, and scanner-only action.</div></aside>';
+ }
+ const raw = row.raw || {};
+ const checks = row.checks || {};
+ const reasons = (row.reasons || []).slice(0, 9).map(reason => `<li>${labEsc(reason)}</li>`).join('');
+ const riskFlags = Array.isArray(row.riskFlags) && row.riskFlags.length ? row.riskFlags : Array.isArray(raw.riskFlags) ? raw.riskFlags : [];
+ const scoreParts = raw.scoreParts || {};
+ const scoreRows = Array.isArray(scoreParts.rows) ? scoreParts.rows : [];
+ return `<aside class="strategy-lab-detail darvas-detail ${labDirectionClass(row)}">
+<div class="strategy-detail-head">
+<div><span>Darvas Box Lab</span><strong>${labSymbolWithDirection(row)}</strong></div>
+<em class="${rowTone(row)}">${labEsc(labPriorityLabel(row))}</em>
+</div>
+<div class="strategy-detail-actions"><button type="button" data-strategy-chart-review="${labEsc(row.symbol)}">Review chart</button><button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button></div>
+${buildPlainHelpPanel(row)}
+<div class="strategy-detail-grid">
+<div><span>Entry</span><strong>${labPrice(row.entry || raw.latestPrice)}</strong></div>
+<div><span>Box Top</span><strong>${labPrice(raw.boxTop || row.triggerPrice)}</strong></div>
+<div><span>Box Bottom</span><strong>${labPrice(raw.boxBottom || row.stop)}</strong></div>
+<div><span>Stop</span><strong>${labPrice(row.stop || raw.boxBottom)}</strong></div>
+<div><span>Target 1</span><strong>${labPrice(row.targets?.target1 || row.targets?.target2R)}</strong></div>
+<div><span>Target 2</span><strong>${labPrice(row.targets?.target3R)}</strong></div>
+<div><span>Box Height</span><strong>${labPct(raw.boxHeightPct, 2)}</strong></div>
+<div><span>Volume</span><strong>${raw.volumeRatio ? `${labFmt(raw.volumeRatio, 2)}x` : '--'}</strong></div>
+</div>
+<div class="strategy-checks">
+${buildCheck('Trend stack supports momentum', checks.trendUp)}
+${buildCheck('Box is tight enough', checks.tightEnough)}
+${buildCheck('Price near box top', checks.nearBreakout || checks.breakout)}
+${buildCheck('Breakout confirmed', checks.breakout)}
+${buildCheck('Volume confirmed', checks.volumeConfirmed)}
+${buildCheck('Base respected', checks.base)}
+${buildCheck('No failed breakout', !checks.failedBreakout)}
+${buildCheck('Liquidity acceptable', !checks.lowLiquidity)}
+</div>
+<div class="strategy-detail-notes">
+<div class="strategy-detail-label">Darvas Notes</div>
+<ul>${reasons || '<li>No Darvas box notes available yet.</li>'}</ul>
+</div>
+<div class="strategy-report-block">
+<div class="strategy-report-title">Score Explanation</div>
+<div class="strategy-score-stack">
+${scoreRows.length ? scoreRows.map(item => `<div><span>${labEsc(item.label)}</span><strong class="${Number(item.value || 0) < 0 ? 'loss' : 'good'}">${Number(item.value || 0) > 0 ? '+' : ''}${labFmt(item.value, 0)}</strong></div>`).join('') : '<p>No score breakdown available yet.</p>'}
+</div>
+</div>
+<details class="strategy-formula-detail">
+<summary>Darvas data</summary>
+<div class="strategy-detail-grid">
+<div><span>EMA 20</span><strong>${labPrice(raw.ema20)}</strong></div>
+<div><span>EMA 50</span><strong>${labPrice(raw.ema50)}</strong></div>
+<div><span>EMA 100</span><strong>${labPrice(raw.ema100)}</strong></div>
+<div><span>ATR14</span><strong>${labPrice(raw.atr14)}</strong></div>
+<div><span>To Box Top</span><strong>${labPct(raw.nearTopPct, 2)}</strong></div>
+<div><span>Inside Box</span><strong>${labPct(raw.closesInsidePct, 1)}</strong></div>
+<div><span>24H / 4H</span><strong>${labPct(raw.change24h, 1)} / ${labPct(raw.move4h, 1)}</strong></div>
+<div><span>15m / 1D</span><strong>${labEsc(raw.candleCount15m || 0)} / ${labEsc(raw.candleCount1d || 0)}</strong></div>
+</div>
+</details>
+<div class="strategy-report-block">
+<div class="strategy-report-title">Risk Flags</div>
+<p>${labEsc(riskFlags.length ? riskFlags.join(' | ') : 'No major risk flag recorded. Scanner-only, confirm breakout manually before action.')}</p>
+</div>
+${buildDecisionNotes(row)}
+<div class="strategy-report-block">
+<div class="strategy-report-title">Chart Draft</div>
+<button type="button" class="strategy-chart-draft-btn" data-darvas-chart-draft="${labEsc(row.symbol)}">Open Chart With Darvas Box</button>
+<p>Loads box top, box bottom, entry, and targets as chart context. It does not place an order.</p>
+</div>
+${buildAlertControls(row)}
+</aside>`;
+}
+
+function buildPullbackDetail(row = null) {
+ if (!row) {
+  return '<aside class="strategy-lab-detail pullback-detail"><div class="strategy-detail-empty">Select a pullback row to inspect 9 EMA touch, reclaim proof, round support, extension, stop, and reward.</div></aside>';
+ }
+ const raw = row.raw || {};
+ const reasons = (Array.isArray(row.reasons) ? row.reasons : []).slice(0, 8).map(item => `<li>${labEsc(item)}</li>`).join('');
+ const scoreRows = Array.isArray(raw.scoreParts?.rows) ? raw.scoreParts.rows : [];
+ const levels = raw.chartLevels || {};
+ const direction = labDirection(row);
+ const isShort = direction === 'short';
+ return `<aside class="strategy-lab-detail pullback-detail ${labDirectionClass(row)}">
+<div class="strategy-detail-head">
+<div><span>EMA Pullback Lab</span><strong>${labSymbolWithDirection(row)}</strong><small>${labEsc(row.setupLabel || row.eventType || '')}</small></div>
+<span class="strategy-score">${labFmt(row.score, 0)}</span>
+</div>
+${buildPlainHelpPanel(row)}
+<div class="strategy-report-block">
+<div class="strategy-report-title">Best Entry Read</div>
+<div class="strategy-mini-grid">
+<div><span>Ideal 9 EMA</span><strong>${labPrice(raw.idealPullback || raw.ema9)}</strong><small>${labEsc(raw.touchAge == null ? 'No recent touch' : raw.touchAge === 0 ? 'Touched today' : `Touched ${labFmt(raw.touchAge, 0)}d ago`)}</small></div>
+<div><span>Entry</span><strong>${labPrice(raw.bestEntry || row.entry)}</strong><small>${labEsc(row.actionLabel || '--')}</small></div>
+<div><span>Stop</span><strong>${labPrice(row.stop || raw.stop)}</strong><small>${isShort ? 'Above pullback high' : 'Below pullback low'}</small></div>
+<div><span>Extension</span><strong>${labPct(raw.extensionPct, 2)}</strong><small>${isShort ? 'Below 9 EMA' : 'Above 9 EMA'}</small></div>
+<div><span>Reward</span><strong>${raw.rrToTarget1 ? `${labFmt(raw.rrToTarget1, 2)}R` : '--'}</strong><small>${isShort ? 'To previous low / 2R' : 'To previous high / 2R'}</small></div>
+<div><span>${isShort ? 'Round Resistance' : 'Round Support'}</span><strong>${labPrice(raw.roundSupport)}</strong><small>${raw.roundSupportDistancePct ? `${labFmt(raw.roundSupportDistancePct, 2)}% away` : '--'}</small></div>
+</div>
+</div>
+<div class="strategy-report-block">
+<div class="strategy-report-title">Trend Checks</div>
+<div class="strategy-check-grid">
+${buildCheck(isShort ? 'Trend stack down' : 'Trend stack up', isShort ? row.checks?.trendDown : row.checks?.trendUp, isShort ? 'DOWN' : 'UP', 'WAIT')}
+${buildCheck('9 EMA touched', row.checks?.touchedRecently, 'TOUCH', 'WAIT')}
+${buildCheck(isShort ? 'Rejected 9 EMA' : 'Reclaimed 9 EMA', isShort ? row.checks?.reject : row.checks?.reclaim, isShort ? 'REJECT' : 'RECLAIM', 'WAIT')}
+${buildCheck(isShort ? 'OBV confirms selling' : 'OBV supports trend', row.checks?.obvUp, 'OBV', 'WEAK')}
+${buildCheck('Not late chase', !row.checks?.lateChase, 'OK', 'LATE')}
+</div>
+</div>
+<div class="strategy-report-block">
+<div class="strategy-report-title">Chart Levels</div>
+<div class="strategy-mini-grid">
+<div><span>Trigger</span><strong>${labPrice(levels.trigger || row.triggerPrice)}</strong></div>
+<div><span>Target 1</span><strong>${labPrice(levels.target1 || row.targets?.target1)}</strong></div>
+<div><span>Target 2</span><strong>${labPrice(levels.target2 || row.targets?.target2R)}</strong></div>
+<div><span>Target 3</span><strong>${labPrice(levels.target3 || row.targets?.target3R)}</strong></div>
+</div>
+</div>
+<div class="strategy-report-block">
+<div class="strategy-report-title">Score Parts</div>
+<div class="strategy-mini-grid">
+${scoreRows.length ? scoreRows.map(item => `<div><span>${labEsc(item.label)}</span><strong class="${Number(item.value || 0) < 0 ? 'loss' : 'good'}">${Number(item.value || 0) > 0 ? '+' : ''}${labFmt(item.value, 0)}</strong></div>`).join('') : '<p>No pullback score parts recorded yet.</p>'}
+</div>
+</div>
+<ul>${reasons || '<li>No pullback notes available yet.</li>'}</ul>
+${buildDecisionNotes(row)}
+<button type="button" class="strategy-chart-draft-btn" data-pullback-chart-draft="${labEsc(row.symbol)}">Open Chart With Pullback Draft</button>
+</aside>`;
+}
+
+function buildNativeStraddleDetail(row = null) {
+ if (!row) {
+  return '<aside class="strategy-lab-detail native-straddle-detail"><div class="strategy-detail-empty">Select a Native Straddle row to inspect premium, spread, liquidity, market score, and the 15m chart handoff.</div></aside>';
+ }
+ const raw = row.raw || {};
+ const market = raw.marketContext || {};
+ const premiumRead = raw.premiumRead || {};
+ const reasons = (row.reasons || []).slice(0, 9).map(reason => `<li>${labEsc(reason)}</li>`).join('');
+ const expiry = raw.daysToExpiry < 1 ? `${labFmt(Math.max(0, Number(raw.daysToExpiry || 0)) * 24, 1)}h` : `${labFmt(raw.daysToExpiry, 1)}d`;
+ return `<aside class="strategy-lab-detail native-straddle-detail ${labDirectionClass(row)}">
+<div class="strategy-detail-head">
+<div><span>Native Straddle Scanner</span><strong>${labSymbolWithDirection(row, raw.underlying || row.symbol)}</strong></div>
+<em class="${rowTone(row)}">${labEsc(row.actionLabel || labPriorityLabel(row))}</em>
+</div>
+<div class="strategy-detail-actions"><button type="button" data-strategy-chart-review="${labEsc(row.symbol)}">Open 15m chart</button><button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button></div>
+${buildPlainHelpPanel(row)}
+<div class="strategy-detail-grid">
+<div><span>MV Symbol</span><strong>${labEsc(row.symbol)}</strong></div>
+<div><span>Action</span><strong>${labEsc(row.actionLabel || '--')}</strong></div>
+<div><span>Score</span><strong>${labFmt(row.score, 0)}/100</strong></div>
+<div><span>Strike</span><strong>${labPrice(raw.strike || row.targets?.strike)}</strong></div>
+<div><span>Spot</span><strong>${labPrice(raw.underlyingPrice || row.targets?.underlyingPrice)}</strong></div>
+<div><span>Premium</span><strong>${raw.premiumPerContract ? `$${labFmt(raw.premiumPerContract, 2)}` : labPrice(row.entry)}</strong></div>
+<div><span>Spread</span><strong>${labFmt(raw.spreadPct, 2)}%</strong></div>
+<div><span>Expiry</span><strong>${labEsc(expiry)}</strong></div>
+<div><span>Market score</span><strong>${labFmt(market.sellPremiumScore, 0)}/100</strong></div>
+<div><span>Market read</span><strong>${labEsc(market.label || '--')}</strong></div>
+<div><span>MV premium</span><strong>${labEsc(premiumRead.trendState || '--')}</strong></div>
+<div><span>MV 2h / 4h</span><strong>${labFmt(premiumRead.move2h, 1)}% / ${labFmt(premiumRead.move4h, 1)}%</strong></div>
+</div>
+<div class="strategy-checks">
+${buildCheck('Native MV contract', row.checks?.nativeMvContract)}
+${buildCheck('Premium available', row.checks?.hasPremium)}
+${buildCheck('Spread acceptable', row.checks?.spreadOk)}
+${buildCheck('BTC/ETH calm for sell', row.checks?.marketCalmForSell)}
+${buildCheck('MV premium not expanding', row.checks?.premiumNotExpanding)}
+${buildCheck('Advisory only', row.checks?.advisoryOnly)}
+${buildCheck('No auto trade', row.checks?.noAutoTrade)}
+</div>
+<div class="strategy-detail-notes">
+<div class="strategy-detail-label">Scanner Notes</div>
+<ul>${reasons || '<li>No native straddle notes available yet.</li>'}</ul>
+</div>
+<div class="strategy-report-block">
+<div class="strategy-report-title">15m Chart Handoff</div>
+<button type="button" class="strategy-chart-draft-btn" data-strategy-chart-review="${labEsc(row.symbol)}">Open Native Straddle Chart</button>
+<p>Loads the MV native straddle symbol on the chart with 15m default context. This does not place an order.</p>
+</div>
+${buildDecisionNotes(row)}
+${buildAlertControls(row)}
+</aside>`;
+}
+
 function buildEarlyDetail(row = null) {
  if (!row) {
   return '<aside class="strategy-lab-detail early-detail"><div class="strategy-detail-empty">Select an early opportunity row to inspect why it is early, what confirms it, what rejects it, and which chart level matters.</div></aside>';
@@ -1837,9 +2419,9 @@ function buildEarlyDetail(row = null) {
  const confirmations = Array.isArray(raw.confirmations) ? raw.confirmations : [];
  const rejections = Array.isArray(raw.rejections) ? raw.rejections : [];
  const sources = Array.isArray(raw.sourceRows) ? raw.sourceRows : [];
- return `<aside class="strategy-lab-detail early-detail">
+ return `<aside class="strategy-lab-detail early-detail ${labDirectionClass(row)}">
 <div class="strategy-detail-head">
-<div><span>Early Opportunity</span><strong>${labEsc(row.symbol)}</strong></div>
+<div><span>Early Opportunity</span><strong>${labSymbolWithDirection(row)}</strong></div>
 <em class="${rowTone(row)}">${labEsc(row.priorityLabel || labPriorityLabel(row))}</em>
 </div>
 <div class="strategy-detail-actions"><button type="button" data-strategy-chart-review="${labEsc(row.symbol)}">Review chart</button><button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button></div>
@@ -1892,6 +2474,9 @@ function buildDetail(row = null) {
   if (activeStrategyLabId === 'early') return buildEarlyDetail(row);
   if (activeStrategyLabId === 'radar') return buildRadarDetail(row);
   if (activeStrategyLabId === 'reversal') return buildReversalDetail(row);
+  if (activeStrategyLabId === 'darvas') return buildDarvasDetail(row);
+  if (activeStrategyLabId === 'pullback') return buildPullbackDetail(row);
+  if (activeStrategyLabId === 'native_straddle') return buildNativeStraddleDetail(row);
   return activeStrategyLabId === 'stage' ? buildStageDetail(row) : buildGenericDetail(row);
 }
 
@@ -1930,11 +2515,19 @@ function buildDetail(row = null) {
    'strategyResults.stage',
    'strategyResults.radar',
    'strategyResults.reversal',
+   'strategyResults.darvas',
+   'strategyResults.pullback',
+   'strategyResults.native_straddle',
    'strategyStatus.wizard',
    'strategyStatus.stage',
    'strategyStatus.radar',
    'strategyStatus.reversal',
+   'strategyStatus.darvas',
+   'strategyStatus.pullback',
+   'strategyStatus.native_straddle',
    'strategyLabAutoScan',
+   'strategyLabUnifiedScanStatus',
+   'lastMainScanContextMeta',
    'scanResults',
    'scanStatus',
    'scanActive',
@@ -1991,9 +2584,10 @@ function buildDetail(row = null) {
  global.reportUiError?.('Strategy Lab failed', chrome.runtime.lastError || new Error(resp?.error || 'Unknown error'), { timeoutMs: 7000 });
  return;
  }
- chrome.storage.local.get(['strategyLabScannerAlerts', 'strategyLabRadarNotificationsEnabled', 'strategyLabResearchWatchlist', 'strategyLabQualityFilters'], data => {
+ chrome.storage.local.get(['strategyLabScannerAlerts', 'strategyLabRadarNotificationsEnabled', 'strategyLabNativeStraddleNotificationsEnabled', 'strategyLabResearchWatchlist', 'strategyLabQualityFilters'], data => {
  strategyLabAlerts = Array.isArray(data.strategyLabScannerAlerts) ? data.strategyLabScannerAlerts : [];
  strategyLabRadarNotificationsEnabled = data.strategyLabRadarNotificationsEnabled === true;
+ strategyLabNativeStraddleNotificationsEnabled = data.strategyLabNativeStraddleNotificationsEnabled !== false;
  strategyLabResearchWatchlist = Array.isArray(data.strategyLabResearchWatchlist) ? data.strategyLabResearchWatchlist.map(value => String(value || '').toUpperCase()).filter(Boolean).slice(0, 80) : [];
  const filters = data.strategyLabQualityFilters && typeof data.strategyLabQualityFilters === 'object' ? data.strategyLabQualityFilters : {};
  strategyLabMinScore = Math.max(0, Math.min(100, Number(filters.minScore || strategyLabMinScore || 0)));
@@ -2086,6 +2680,88 @@ updatedAt: Date.now(),
 };
 }
 
+function buildDarvasChartDraft(row = {}) {
+const boxTop = Number(row.raw?.boxTop || row.targets?.boxTop || row.triggerPrice || row.entry || 0);
+const boxBottom = Number(row.raw?.boxBottom || row.targets?.boxBottom || row.stop || 0);
+const rawBox = row.raw?.darvasBox && typeof row.raw.darvasBox === 'object' ? row.raw.darvasBox : {};
+return {
+symbol: String(row.symbol || '').trim().toUpperCase(),
+side: 'buy',
+entry: Number(row.entry || row.raw?.latestPrice || 0),
+stopLoss: Number(row.stop || row.raw?.boxBottom || 0),
+takeProfit: Number(row.targets?.target1 || row.targets?.target2R || 0),
+size: 1,
+sizeMode: 'contracts',
+orderType: 'market_order',
+entryMode: row.eventType === 'breakout' ? 'market' : 'limit',
+source: 'strategy-lab-darvas',
+note: `${row.raw?.eventLabel || row.setupLabel || 'Darvas Box Lab'} draft. Scanner-only box setup; confirm close above box top and volume manually before any order.`,
+darvasBox: boxTop > 0 && boxBottom > 0 && boxTop > boxBottom ? {
+ top: boxTop,
+ bottom: boxBottom,
+ age: Number(rawBox.age || row.raw?.boxAge || 24) || 24,
+ startTime: Number(rawBox.startTime || row.raw?.boxStartTime || 0),
+ endTime: Number(rawBox.endTime || row.raw?.boxEndTime || 0),
+ eventType: String(row.eventType || row.raw?.eventType || '').trim().toLowerCase(),
+ label: row.raw?.eventLabel || row.setupLabel || 'Darvas Box',
+ status: row.eventType === 'breakout' ? 'Breakout Confirmed' : row.eventType === 'failed_breakout' ? 'Failed' : row.eventType === 'near_breakout' || row.eventType === 'base' ? 'Active' : '',
+ score: Number(row.score || row.confidence || 0) || 0,
+ quality: Number(row.score || 0) >= 80 ? 'High Quality' : Number(row.score || 0) >= 60 ? 'Medium Quality' : 'Low Quality',
+ heightPercent: Number(row.raw?.boxHeightPct || 0) || 0,
+ volumeConfirmed: row.checks?.volumeConfirmed === true,
+ volumeRatio: Number(row.raw?.volumeRatio || 0) || 0,
+ riskPercent: Number(row.riskPercent || 0) || 0,
+ stopLoss: Number(row.stop || row.raw?.chartLevels?.stop || row.raw?.boxBottom || 0) || 0,
+ target1: Number(row.targets?.target1 || row.raw?.chartLevels?.target1 || 0) || 0,
+ target2: Number(row.targets?.target3R || row.raw?.chartLevels?.target2 || 0) || 0,
+ reason: Array.isArray(row.reasons) && row.reasons.length ? row.reasons[0] : '',
+} : null,
+updatedAt: Date.now(),
+};
+}
+
+function buildPullbackChartDraft(row = {}) {
+const direction = labDirection(row);
+const isShort = direction === 'short';
+return {
+symbol: String(row.symbol || '').trim().toUpperCase(),
+side: isShort ? 'sell' : 'buy',
+entry: Number(row.entry || row.raw?.bestEntry || row.raw?.latestPrice || 0),
+stopLoss: Number(row.stop || row.raw?.stop || 0),
+takeProfit: Number(row.targets?.target2R || row.targets?.target1 || row.raw?.chartLevels?.target2 || 0),
+size: 1,
+sizeMode: 'contracts',
+orderType: 'market_order',
+entryMode: row.eventType === 'ema_reclaim' || row.eventType === 'round_support' ? 'market' : 'limit',
+source: 'strategy-lab-pullback',
+note: `${row.raw?.eventLabel || row.setupLabel || 'EMA Pullback Lab'} draft. Scanner-only ${isShort ? 'short-side ' : ''}trend pullback setup; confirm ${isShort ? '9 EMA rejection and stop above pullback high' : '9 EMA reclaim and stop below pullback low'} before any order.`,
+pullbackLevels: {
+idealEntry: Number(row.raw?.idealPullback || row.targets?.ema9 || 0) || 0,
+ ema9: Number(row.raw?.ema9 || row.targets?.ema9 || 0) || 0,
+ ema21: Number(row.raw?.ema21 || row.targets?.ema21 || 0) || 0,
+touchLow: Number(row.raw?.touchLow || 0) || 0,
+touchHigh: Number(row.raw?.touchHigh || 0) || 0,
+ previousHigh: Number(row.raw?.previousHigh || row.targets?.previousHigh || 0) || 0,
+ roundSupport: Number(row.raw?.roundSupport || row.targets?.roundSupport || 0) || 0,
+ extensionPct: Number(row.raw?.extensionPct || 0) || 0,
+},
+updatedAt: Date.now(),
+};
+}
+
+function isDarvasChartReviewRow(row = {}) {
+ const strategyId = String(row.strategyId || activeStrategyLabId || '').trim().toLowerCase();
+ return strategyId === 'darvas'
+ || Number(row.raw?.boxTop || row.targets?.boxTop || 0) > 0
+ || Number(row.raw?.boxBottom || row.targets?.boxBottom || 0) > 0;
+}
+
+function buildStrategyChartReviewDraft(row = {}) {
+ const strategyId = String(row.strategyId || activeStrategyLabId || '').trim().toLowerCase();
+ if (strategyId === 'pullback') return buildPullbackChartDraft(row);
+ return isDarvasChartReviewRow(row) ? buildDarvasChartDraft(row) : buildGenericChartDraft(row);
+}
+
 function alignStrategyHelpTooltips(root) {
  if (!root?.querySelectorAll) return;
  root.querySelectorAll('[data-strategy-help]').forEach(node => {
@@ -2120,25 +2796,23 @@ function bindStrategyLab(root, rows) {
  strategyLabRadarNotificationsEnabled = !strategyLabRadarNotificationsEnabled;
  chrome.storage.local.set({ strategyLabRadarNotificationsEnabled: strategyLabRadarNotificationsEnabled }, () => renderStrategyLab(strategyLabSnapshot));
  });
+ root.querySelector('#btnNativeStraddleNotificationToggle')?.addEventListener('click', () => {
+ strategyLabNativeStraddleNotificationsEnabled = !strategyLabNativeStraddleNotificationsEnabled;
+ chrome.storage.local.set({ strategyLabNativeStraddleNotificationsEnabled: strategyLabNativeStraddleNotificationsEnabled }, () => renderStrategyLab(strategyLabSnapshot));
+ });
  root.querySelector('#btnOpenCurrentScan')?.addEventListener('click', () => global.setActiveWorkspaceTab?.('scanner', true, true));
  root.querySelector('#btnRunAllStrategyScans')?.addEventListener('click', () => {
  const btn = root.querySelector('#btnRunAllStrategyScans');
  if (btn) {
  btn.disabled = true;
- btn.textContent = 'Scanning...';
+ btn.textContent = 'Main scan...';
  }
  startStrategyLabPolling();
- scannerRegistryList()
- .filter(strategy => strategy.scannerAction)
- .forEach((strategy, index) => {
-  window.setTimeout(() => {
-   chrome.runtime.sendMessage({ action: strategy.scannerAction }, resp => {
-    if (chrome.runtime.lastError || !resp?.ok) {
-     global.reportUiError?.(`${strategy.displayName || strategy.id} failed`, chrome.runtime.lastError || new Error(resp?.error || 'Unknown error'), { timeoutMs: 7000 });
-    }
-    loadStrategyLab();
-   });
-  }, index * 450);
+ chrome.runtime.sendMessage({ action: 'strategy-lab:runUnifiedScan' }, resp => {
+  if (chrome.runtime.lastError || !resp?.ok) {
+   global.reportUiError?.('Unified scanner run failed', chrome.runtime.lastError || new Error(resp?.error || 'Unknown error'), { timeoutMs: 7000 });
+  }
+  loadStrategyLab();
  });
  });
  root.querySelector('#btnRunStrategyScan')?.addEventListener('click', () => {
@@ -2204,13 +2878,18 @@ function bindStrategyLab(root, rows) {
  root.querySelectorAll('[data-strategy-chart-review]').forEach(button => {
  button.addEventListener('click', async () => {
  const symbol = button.dataset.strategyChartReview || selectedStrategySymbol || '';
- const selected = labAllScannerRows(strategyLabSnapshot || {}).find(item => item.symbol === symbol)
- || labRowsForActive(strategyLabSnapshot).find(item => item.symbol === symbol)
+ const activeMatch = labRowsForActive(strategyLabSnapshot).find(item => item.symbol === symbol);
+const selected = activeMatch
+ || labAllScannerRows(strategyLabSnapshot || {}).find(item => item.symbol === symbol)
  || { symbol };
- await global.openSignalInChartWorkspace?.({
+const isDarvas = isDarvasChartReviewRow(selected);
+const isPullback = String(selected.strategyId || activeStrategyLabId || '').trim().toLowerCase() === 'pullback';
+await global.openSignalInChartWorkspace?.({
  ...selected,
- chartTradingDraft: buildGenericChartDraft(selected),
- }, { reviewTab: true, returnTab: 'strategy', returnSymbol: symbol });
+ strategyId: isDarvas ? 'darvas' : isPullback ? 'pullback' : (selected.strategyId || activeStrategyLabId || ''),
+ chartTradingDraft: buildStrategyChartReviewDraft(selected),
+ timeframe: isDarvas ? '1d' : isPullback ? '1d' : selected.timeframe,
+ }, { reviewTab: true, returnTab: 'strategy', returnSymbol: symbol, strategyId: isDarvas ? 'darvas' : isPullback ? 'pullback' : (selected.strategyId || activeStrategyLabId || ''), timeframe: isDarvas ? '1d' : isPullback ? '1d' : undefined, visibleCandleCount: isDarvas || isPullback ? 120 : undefined });
  });
  });
 root.querySelectorAll('[data-radar-chart-draft]').forEach(button => {
@@ -2233,6 +2912,32 @@ if (!selected) return;
 ...selected,
 chartTradingDraft: buildReversalChartDraft(selected),
  }, { reviewTab: true, returnTab: 'strategy', returnSymbol: symbol });
+});
+});
+root.querySelectorAll('[data-pullback-chart-draft]').forEach(button => {
+button.addEventListener('click', async () => {
+const symbol = button.dataset.pullbackChartDraft || selectedStrategySymbol || '';
+const selected = labStrategyRows(strategyLabSnapshot || {}, activeStrategyLabId).find(item => item.symbol === symbol) || null;
+if (!selected) return;
+ await global.openSignalInChartWorkspace?.({
+...selected,
+strategyId: 'pullback',
+chartTradingDraft: buildPullbackChartDraft(selected),
+timeframe: '1d',
+ }, { reviewTab: true, returnTab: 'strategy', returnSymbol: symbol, strategyId: 'pullback', timeframe: '1d', visibleCandleCount: 120 });
+});
+});
+root.querySelectorAll('[data-darvas-chart-draft]').forEach(button => {
+button.addEventListener('click', async () => {
+const symbol = button.dataset.darvasChartDraft || selectedStrategySymbol || '';
+const selected = labStrategyRows(strategyLabSnapshot || {}, activeStrategyLabId).find(item => item.symbol === symbol) || null;
+if (!selected) return;
+ await global.openSignalInChartWorkspace?.({
+...selected,
+strategyId: 'darvas',
+chartTradingDraft: buildDarvasChartDraft(selected),
+ timeframe: '1d',
+ }, { reviewTab: true, returnTab: 'strategy', returnSymbol: symbol, strategyId: 'darvas', timeframe: '1d', visibleCandleCount: 120 });
 });
 });
 if (!selectedStrategySymbol && rows[0]?.symbol) selectedStrategySymbol = rows[0].symbol;

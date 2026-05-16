@@ -38,7 +38,21 @@ function buildDecisionState(results = [], marketIndex = null, manualWatchlist = 
 }
 
 const CLOSED_CANDLE_FETCH_OPTIONS = Object.freeze({ closedOnly: true });
+const SCAN_CANDLE_FETCH_OPTIONS = Object.freeze({ closedOnly: true, timeoutMs: 30000 });
+const SCAN_PARTIAL_CHECKPOINT_EVERY = 20;
 const MARKET_INDEX_HISTORY_LIMIT = 5000;
+const MARKET_INDEX_HISTORY_SCHEMA_VERSION = 2;
+const MARKET_INDEX_BASE_VALUE = 10000;
+const MARKET_INDEX_CHANGE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const MARKET_INDEX_CHANGE_TARGET_TOLERANCE_MS = 90 * 60 * 1000;
+const MARKET_INDEX_REBALANCE_DEFAULT_DAYS = 7;
+const MARKET_INDEX_RETENTION_MULTIPLIER = 1.5;
+const MARKET_INDEX_CORE_LOCK_RATIO = 0.7;
+const MARKET_INDEX_EXCLUDED_BASES = new Set([
+ 'USDT', 'USDC', 'BUSD', 'DAI', 'FDUSD', 'TUSD', 'USDP', 'PYUSD', 'GUSD',
+ 'PAXG', 'XAUT', 'XAN', 'SLVON',
+ 'BTCDOM',
+]);
 
 function applyFundingDecisionContext(results = [], threshold = 0) {
  const limit = Math.abs(Number(threshold || 0));
@@ -48,11 +62,34 @@ function applyFundingDecisionContext(results = [], threshold = 0) {
  return results;
 }
 
+function normalizeIndexSymbol(symbol = '') {
+ return String(symbol || '').trim().toUpperCase();
+}
+
+function getIndexBaseSymbol(symbol = '') {
+ const normalized = normalizeIndexSymbol(symbol);
+ if (normalized.endsWith('USDT')) return normalized.slice(0, -4);
+ if (normalized.endsWith('USD')) return normalized.slice(0, -3);
+ return normalized;
+}
+
+function isIndexEligibleSymbol(symbol = '', ticker = {}) {
+ const normalized = normalizeIndexSymbol(symbol);
+ if (!normalized || (!normalized.endsWith('USD') && !normalized.endsWith('USDT'))) return false;
+ const base = getIndexBaseSymbol(normalized);
+ if (!base || MARKET_INDEX_EXCLUDED_BASES.has(base) || /DOM$/.test(base)) return false;
+ return Number(ticker?.usdVol24h || 0) > 0 && Number(ticker?.price || 0) > 0;
+}
+
+function isManuallyExcludedIndexSymbol(symbol = '', excludedSymbols = new Set()) {
+ const normalized = normalizeIndexSymbol(symbol);
+ const base = getIndexBaseSymbol(normalized);
+ return excludedSymbols.has(normalized) || excludedSymbols.has(base);
+}
+
 function buildBenchmarkEligibleUniverse(tickerMap = {}) {
- const EXCLUDE = /PAXG|XAUT|USDT(USD)?$|BTCDOM/;
  return Object.entries(tickerMap)
- .filter(([sym, t]) => !EXCLUDE.test(sym) && (sym.endsWith('USD') || sym.endsWith('USDT'))
- && t.usdVol24h > 0 && t.price > 0);
+ .filter(([sym, t]) => isIndexEligibleSymbol(sym, t));
 }
 
 function resolveBenchmarkCondition(value = 0) {
@@ -70,7 +107,7 @@ function buildBenchmarkSnapshot(code, label, method, constituents = [], extras =
  if (!constituents.length) return null;
  const totalWeight = constituents.reduce((sum, item) => sum + Number(item.weight || 0), 0) || 1;
  const value = constituents.reduce((sum, item) => sum + Number(item.change || 0) * (Number(item.weight || 0) / totalWeight), 0);
- const composite = +(10000 * (1 + value / 100)).toFixed(2);
+ const composite = +(MARKET_INDEX_BASE_VALUE * (1 + value / 100)).toFixed(2);
  return {
  code,
  label,
@@ -169,38 +206,372 @@ function calcInternalBenchmarkSuite(tickerMap = {}, prevMarketIndex = null) {
  return { cf, sp };
 }
 
-function calcMarketIndex(tickerMap, prevMarketIndex = null, marketIndexSettings = {}) {
+function roundIndexNumber(value = 0, digits = 2) {
+ const numeric = Number(value);
+ if (!Number.isFinite(numeric)) return 0;
+ return +numeric.toFixed(digits);
+}
+
+function buildMarketIndexSettingsHash(indexSettings = {}) {
+ return [
+ Number(indexSettings.maxConstituents || 100),
+ Number(indexSettings.rebalanceDays || MARKET_INDEX_REBALANCE_DEFAULT_DAYS),
+ (indexSettings.excludedSymbols || []).map(normalizeIndexSymbol).sort().join(','),
+ ].join('|');
+}
+
+function selectMarketIndexConstituents(universe = [], prevState = null, maxConstituents = 10) {
+ const maxCount = Math.max(1, Math.floor(Number(maxConstituents || 10)));
+ const ranked = universe
+ .map(([sym, ticker]) => ({
+ sym: normalizeIndexSymbol(sym),
+ ticker,
+ price: Number(ticker?.price || 0),
+ vol: Number(ticker?.usdVol24h || 0),
+ }))
+ .filter(item => item.sym && item.price > 0 && item.vol > 0)
+ .sort((a, b) => b.vol - a.vol);
+ const rankMap = new Map(ranked.map((item, index) => [item.sym, index + 1]));
+ const bySymbol = new Map(ranked.map(item => [item.sym, item]));
+ const selected = [];
+ const seen = new Set();
+ const push = item => {
+ if (!item || seen.has(item.sym) || selected.length >= maxCount) return;
+ seen.add(item.sym);
+ selected.push(item);
+ };
+ const coreCount = Math.min(maxCount, Math.max(1, Math.ceil(maxCount * MARKET_INDEX_CORE_LOCK_RATIO)));
+ ranked.slice(0, coreCount).forEach(push);
+ const retentionCutoff = Math.max(maxCount, Math.ceil(maxCount * MARKET_INDEX_RETENTION_MULTIPLIER));
+ (prevState?.constituents || []).forEach(previous => {
+ const sym = normalizeIndexSymbol(previous?.sym);
+ const item = bySymbol.get(sym);
+ const rank = rankMap.get(sym) || Infinity;
+ if (item && rank <= retentionCutoff) push(item);
+ });
+ ranked.forEach(push);
+ return selected;
+}
+
+function buildRebalancedMarketIndexState(selected = [], composite = MARKET_INDEX_BASE_VALUE, now = Date.now(), metadata = {}) {
+ const active = selected.filter(item => Number(item?.price || item?.ticker?.price || 0) > 0);
+ const equalWeight = active.length ? (1 / active.length) : 0;
+ const safeComposite = Number(composite || MARKET_INDEX_BASE_VALUE) > 0 ? Number(composite || MARKET_INDEX_BASE_VALUE) : MARKET_INDEX_BASE_VALUE;
+ const constituents = active.map((item, index) => {
+ const price = Number(item.price || item.ticker?.price || 0);
+ const units = price > 0 ? (safeComposite * equalWeight) / price : 0;
+ return {
+ sym: normalizeIndexSymbol(item.sym),
+ rank: index + 1,
+ units,
+ weight: equalWeight * 100,
+ price,
+ lastPrice: price,
+ vol: Number(item.vol || item.ticker?.usdVol24h || 0),
+ };
+ });
+ return {
+ baseValue: MARKET_INDEX_BASE_VALUE,
+ divisor: 1,
+ composite: roundIndexNumber(safeComposite),
+ lastComposite: roundIndexNumber(safeComposite),
+ lastPrices: constituents.reduce((acc, item) => {
+ acc[item.sym] = item.lastPrice;
+ return acc;
+ }, {}),
+ constituents,
+ settingsHash: metadata.settingsHash || '',
+ lastRebalancedAt: now,
+ lastRebalanceReason: metadata.reason || 'scheduled',
+ rebuildNonce: Number(metadata.rebuildNonce || 0),
+ };
+}
+
+function calculateMarketIndexCompositeFromState(state = null, tickerMap = {}) {
+ const constituents = Array.isArray(state?.constituents) ? state.constituents : [];
+ if (!constituents.length) {
+ return {
+ composite: MARKET_INDEX_BASE_VALUE,
+ missing: [],
+ usedFallback: false,
+ totalVolumeUSD: 0,
+ liveConstituents: [],
+ };
+ }
+ let marketValue = 0;
+ let totalVolumeUSD = 0;
+ const missing = [];
+ const liveConstituents = constituents.map((item, index) => {
+ const sym = normalizeIndexSymbol(item?.sym);
+ const ticker = tickerMap[sym] || null;
+ const livePrice = Number(ticker?.price || 0);
+ const fallbackPrice = Number(state?.lastPrices?.[sym] || item?.lastPrice || item?.price || 0);
+ const price = livePrice > 0 ? livePrice : fallbackPrice;
+ if (!(livePrice > 0)) missing.push(sym);
+ const units = Number(item?.units || 0);
+ marketValue += units * price;
+ totalVolumeUSD += Number(ticker?.usdVol24h || item?.vol || 0);
+ return {
+ sym,
+ rank: index + 1,
+ units,
+ weight: Number(item?.weight || 0),
+ price,
+ lastPrice: price,
+ vol: Number(ticker?.usdVol24h || item?.vol || 0),
+ change: Number(ticker?.change24h || 0),
+ fundingRate: Number(ticker?.fundingRate || 0),
+ oi: Number(ticker?.oi || 0),
+ stale: !(livePrice > 0),
+ };
+ });
+ const divisor = Number(state?.divisor || 1) || 1;
+ return {
+ composite: roundIndexNumber(marketValue / divisor),
+ missing,
+ usedFallback: missing.length > 0,
+ totalVolumeUSD,
+ liveConstituents,
+ };
+}
+
+function marketIndexHistoryPoints(history = []) {
+ return (Array.isArray(history) ? history : [])
+ .map(item => ({
+ ts: Number(item?.ts || 0),
+ composite: Number(item?.composite || 0),
+ }))
+ .filter(item => Number.isFinite(item.ts) && item.ts > 0 && Number.isFinite(item.composite) && item.composite > 0)
+ .sort((a, b) => a.ts - b.ts);
+}
+
+function resolveMarketIndexChangeBaseline(history = [], currentTs = Date.now(), windowMs = MARKET_INDEX_CHANGE_WINDOW_MS) {
+ const rows = marketIndexHistoryPoints(history).filter(item => item.ts < currentTs - 1000);
+ if (!rows.length) return null;
+ const targetTs = currentTs - Math.max(1, Number(windowMs || MARKET_INDEX_CHANGE_WINDOW_MS));
+ let best = rows[0];
+ let bestGap = Math.abs(best.ts - targetTs);
+ rows.forEach(item => {
+ const gap = Math.abs(item.ts - targetTs);
+ if (gap < bestGap) {
+ best = item;
+ bestGap = gap;
+ }
+ });
+ const ageMs = Math.max(0, currentTs - best.ts);
+ const exactRollingWindow = Math.abs(ageMs - MARKET_INDEX_CHANGE_WINDOW_MS) <= MARKET_INDEX_CHANGE_TARGET_TOLERANCE_MS;
+ return {
+ ...best,
+ targetTs,
+ ageMs,
+ basis: exactRollingWindow ? 'rolling_24h' : 'since_available_history',
+ label: exactRollingWindow ? '24h' : 'history',
+ };
+}
+
+function applyMarketIndexWindowChange(marketIndex = null, history = [], now = Date.now()) {
+ if (!marketIndex || !(Number(marketIndex.composite) > 0)) return marketIndex;
+ const composite = Number(marketIndex.composite || 0);
+ const fallbackPrevious = Number(marketIndex.previousComposite || marketIndex.scanPreviousComposite || 0);
+ const fallbackPoints = Number(marketIndex.indexChangePoints || marketIndex.scanChangePoints || 0);
+ const fallbackPct = Number(marketIndex.indexChangePct || marketIndex.scanChangePct || 0);
+ const baseline = resolveMarketIndexChangeBaseline(history, Number(marketIndex.ts || now) || now);
+ const baseComposite = Number(baseline?.composite || fallbackPrevious || 0);
+ const points = baseComposite > 0 ? composite - baseComposite : fallbackPoints;
+ const pct = baseComposite > 0 ? (points / baseComposite) * 100 : fallbackPct;
+ const basis = baseline?.basis || 'since_previous_scan';
+ const label = baseline?.label || 'scan';
+ return {
+ ...marketIndex,
+ scanChangePct: Number.isFinite(Number(marketIndex.scanChangePct)) ? marketIndex.scanChangePct : roundIndexNumber(fallbackPct),
+ scanChangePoints: Number.isFinite(Number(marketIndex.scanChangePoints)) ? marketIndex.scanChangePoints : roundIndexNumber(fallbackPoints),
+ scanPreviousComposite: Number.isFinite(Number(marketIndex.scanPreviousComposite)) ? marketIndex.scanPreviousComposite : roundIndexNumber(fallbackPrevious),
+ indexChangePct: roundIndexNumber(pct),
+ indexChangePoints: roundIndexNumber(points),
+ indexChangeBasis: basis,
+ indexChangeWindowLabel: label,
+ indexChangeWindowMs: baseline ? Math.round(Number(baseline.ageMs || 0)) : 0,
+ indexChangeBaselineTs: Number(baseline?.ts || 0),
+ indexChangeBaselineComposite: baseComposite > 0 ? roundIndexNumber(baseComposite) : 0,
+ previousComposite: baseComposite > 0 ? roundIndexNumber(baseComposite) : roundIndexNumber(fallbackPrevious),
+ };
+}
+
+function buildFwdSentimentTape(constituents = [], prevOIData = {}) {
+ const rows = (Array.isArray(constituents) ? constituents : []).filter(item => Number(item?.price || 0) > 0);
+ if (!rows.length) {
+ return {
+ value: 0,
+ score: 0,
+ condition: 'neutral',
+ label: 'Neutral',
+ advancing: 0,
+ declining: 0,
+ breadthPct: 50,
+ advancingVolumePct: 50,
+ fundingStressPct: 0,
+ oiExpansionPct: 0,
+ drivers: ['No eligible live constituents yet'],
+ };
+ }
+ const total = rows.length;
+ const totalVolume = rows.reduce((sum, item) => sum + Number(item.vol || 0), 0) || 1;
+ const advancingRows = rows.filter(item => Number(item.change || 0) > 0);
+ const decliningRows = rows.filter(item => Number(item.change || 0) < 0);
+ const value = rows.reduce((sum, item) => sum + Number(item.change || 0), 0) / total;
+ const breadthPct = (advancingRows.length / total) * 100;
+ const advancingVolumePct = advancingRows.reduce((sum, item) => sum + Number(item.vol || 0), 0) / totalVolume * 100;
+ const btc = rows.find(item => /^(BTC|XBT)/.test(String(item.sym || '')));
+ const eth = rows.find(item => /^ETH/.test(String(item.sym || '')));
+ const fundingStressPct = rows.filter(item => Math.abs(Number(item.fundingRate || 0)) >= 0.05).length / total * 100;
+ const oiExpansionRows = rows.filter(item => {
+ const prev = Number(prevOIData?.[item.sym] || 0);
+ const oi = Number(item.oi || 0);
+ return prev > 0 && oi > 0 && ((oi - prev) / prev) >= 0.05;
+ });
+ const oiExpansionPct = (oiExpansionRows.length / total) * 100;
+ const leadershipBonus = (Number(btc?.change || 0) >= 1 && Number(eth?.change || 0) >= 1)
+ ? 10
+ : (Number(btc?.change || 0) <= -1 && Number(eth?.change || 0) <= -1)
+ ? -10
+ : 0;
+ const score = Math.max(-100, Math.min(100,
+ (value * 8)
+ + ((breadthPct - 50) * 0.7)
+ + ((advancingVolumePct - 50) * 0.35)
+ + leadershipBonus
+ + (oiExpansionPct * 0.12)
+ - (fundingStressPct * 0.2)
+ ));
+ const condition = resolveBenchmarkCondition(value);
+ const label = score >= 35 ? 'Risk On'
+ : score <= -35 ? 'Risk Off'
+ : score >= 12 ? 'Constructive'
+ : score <= -12 ? 'Defensive'
+ : 'Neutral';
+ const drivers = [
+ `${advancingRows.length}/${total} constituents advancing`,
+ `${roundIndexNumber(advancingVolumePct, 1)}% of basket volume in advancing names`,
+ btc || eth ? `BTC ${roundIndexNumber(Number(btc?.change || 0))}% / ETH ${roundIndexNumber(Number(eth?.change || 0))}% leadership` : 'BTC/ETH leadership unavailable',
+ fundingStressPct > 0 ? `${roundIndexNumber(fundingStressPct, 1)}% funding stress` : 'Funding stress contained',
+ oiExpansionPct > 0 ? `${roundIndexNumber(oiExpansionPct, 1)}% OI expansion` : 'No broad OI expansion',
+ ].slice(0, 5);
+ return {
+ value: roundIndexNumber(value),
+ score: Math.round(score),
+ condition,
+ label,
+ advancing: advancingRows.length,
+ declining: decliningRows.length,
+ breadthPct: roundIndexNumber(breadthPct, 1),
+ advancingVolumePct: roundIndexNumber(advancingVolumePct, 1),
+ fundingStressPct: roundIndexNumber(fundingStressPct, 1),
+ oiExpansionPct: roundIndexNumber(oiExpansionPct, 1),
+ btcChange: roundIndexNumber(Number(btc?.change || 0)),
+ ethChange: roundIndexNumber(Number(eth?.change || 0)),
+ drivers,
+ };
+}
+
+function calcMarketIndex(tickerMap, prevMarketIndex = null, marketIndexSettings = {}, prevOIData = {}) {
  const indexSettings = scanSanitizeMarketIndexSettings(marketIndexSettings || {});
  const excludedSymbols = new Set((indexSettings.excludedSymbols || []).map(symbol => String(symbol || '').toUpperCase()));
  const allTickers = buildBenchmarkEligibleUniverse(tickerMap);
- const eligibleTickers = allTickers.filter(([sym]) => !excludedSymbols.has(String(sym || '').toUpperCase()));
- dlog(`FWD-10: ${eligibleTickers.length} eligible from ${Object.keys(tickerMap).length} (excluded ${excludedSymbols.size})`);
- const configuredMaxConstituents = Math.max(1, Number(indexSettings.maxConstituents || 10));
- const tickers = eligibleTickers.sort((a, b) => b[1].usdVol24h - a[1].usdVol24h).slice(0, configuredMaxConstituents);
- if (!tickers.length) { dlog('FWD-10: null'); return null; }
- const totalVol = tickers.reduce((s, [, t]) => s + (t.usdVol24h || 1), 0);
- if (!totalVol) return null;
- const equalWeight = tickers.length ? (100 / tickers.length) : 0;
- const val = tickers.reduce((s, [, t]) => s + ((t.change24h || 0) / tickers.length), 0);
- const condition = resolveBenchmarkCondition(val);
- const compositeValue = +(10000 * (1 + val / 100)).toFixed(2);
+ const eligibleTickers = allTickers.filter(([sym]) => !isManuallyExcludedIndexSymbol(sym, excludedSymbols));
+ dlog(`FWD-100: ${eligibleTickers.length} eligible from ${Object.keys(tickerMap).length} (excluded ${excludedSymbols.size})`);
+ const configuredMaxConstituents = Math.max(1, Number(indexSettings.maxConstituents || 100));
+ const settingsHash = buildMarketIndexSettingsHash(indexSettings);
+ const now = Date.now();
+ const prevState = prevMarketIndex?.indexState || null;
+ const prevRebuildNonce = Number(prevState?.rebuildNonce || 0);
+ const rebuildNonce = Number(indexSettings.rebuildNonce || 0);
+ const rebalanceMs = Math.max(1, Number(indexSettings.rebalanceDays || MARKET_INDEX_REBALANCE_DEFAULT_DAYS)) * 24 * 60 * 60 * 1000;
+ const settingsChanged = !!prevState?.settingsHash && prevState.settingsHash !== settingsHash;
+ const manualRebuild = rebuildNonce > prevRebuildNonce;
+ const scheduledRebalance = !prevState?.lastRebalancedAt || (now - Number(prevState.lastRebalancedAt || 0)) >= rebalanceMs;
+ const selected = selectMarketIndexConstituents(eligibleTickers, prevState, configuredMaxConstituents);
+ if (!selected.length) { dlog('FWD-100: null'); return null; }
+ const reason = !prevState ? 'initial'
+ : manualRebuild ? 'manual'
+ : settingsChanged ? 'settings'
+ : scheduledRebalance ? 'weekly'
+ : 'carry';
+ const shouldRebalance = reason !== 'carry';
+ const previousComposite = Number(prevState?.lastComposite || prevMarketIndex?.composite || MARKET_INDEX_BASE_VALUE);
+ const oldStateCalc = prevState ? calculateMarketIndexCompositeFromState(prevState, tickerMap) : null;
+ const currentCompositeBeforeRebalance = oldStateCalc?.composite || previousComposite || MARKET_INDEX_BASE_VALUE;
+ const state = shouldRebalance
+ ? buildRebalancedMarketIndexState(selected, currentCompositeBeforeRebalance, now, { settingsHash, reason, rebuildNonce })
+ : prevState;
+ const calculated = calculateMarketIndexCompositeFromState(state, tickerMap);
+ const indexChangePct = previousComposite > 0
+ ? ((calculated.composite - previousComposite) / previousComposite) * 100
+ : 0;
+ const updatedState = {
+ ...state,
+ composite: calculated.composite,
+ lastComposite: calculated.composite,
+ lastPrices: calculated.liveConstituents.reduce((acc, item) => {
+ acc[item.sym] = item.price;
+ return acc;
+ }, {}),
+ constituents: calculated.liveConstituents.map(item => ({
+ sym: item.sym,
+ rank: item.rank,
+ units: item.units,
+ weight: item.weight,
+ price: item.price,
+ lastPrice: item.price,
+ vol: item.vol,
+ })),
+ settingsHash,
+ rebuildNonce,
+ };
+ const sentiment = buildFwdSentimentTape(calculated.liveConstituents, prevOIData);
+ const totalVol = calculated.totalVolumeUSD;
  const benchmarks = calcInternalBenchmarkSuite(tickerMap, prevMarketIndex);
- dlog(`FWD-10: ${val.toFixed(2)}% | ${condition} | composite ${compositeValue}`);
+ dlog(`FWD-100: index ${calculated.composite} (${roundIndexNumber(indexChangePct)}%) | sentiment ${sentiment.value}% ${sentiment.condition} | ${reason}`);
  return {
- value: +val.toFixed(2), condition, composite: compositeValue,
+ value: sentiment.value,
+ condition: sentiment.condition,
+ composite: calculated.composite,
+ indexValue: calculated.composite,
+ indexChangePct: roundIndexNumber(indexChangePct),
+ indexChangePoints: roundIndexNumber(calculated.composite - previousComposite),
+ previousComposite: roundIndexNumber(previousComposite),
+ scanChangePct: roundIndexNumber(indexChangePct),
+ scanChangePoints: roundIndexNumber(calculated.composite - previousComposite),
+ scanPreviousComposite: roundIndexNumber(previousComposite),
+ indexChangeBasis: 'since_previous_scan',
+ indexChangeWindowLabel: 'scan',
+ indexChangeWindowMs: 0,
+ indexChangeBaselineTs: 0,
+ indexChangeBaselineComposite: 0,
+ sentiment,
  totalVolumeUSD: totalVol, ts: Date.now(),
- method: 'Equal-weight composite',
- selectionLabel: tickers.length < configuredMaxConstituents
- ? `Top ${tickers.length} liquid coins (max ${configuredMaxConstituents})`
- : `Top ${tickers.length} liquid coins`,
+ method: 'Cumulative equal-weight index',
+ selectionLabel: calculated.liveConstituents.length < configuredMaxConstituents
+ ? `Top ${calculated.liveConstituents.length} liquid coins (max ${configuredMaxConstituents})`
+ : `Top ${calculated.liveConstituents.length} liquid coins`,
  configuredMaxConstituents,
  excludedSymbols: Array.from(excludedSymbols),
+ indexState: updatedState,
+ rebalanced: shouldRebalance,
+ rebalanceReason: reason,
+ lastRebalancedAt: updatedState.lastRebalancedAt,
+ nextRebalanceAt: Number(updatedState.lastRebalancedAt || now) + rebalanceMs,
+ missingConstituents: calculated.missing,
  benchmarks,
- topCoins: tickers.map(([sym, t]) => ({
- sym, change: t.change24h || 0,
- weight: +equalWeight.toFixed(2),
- vol: +((t.usdVol24h || 0) / 1e6).toFixed(1),
- price: t.price || 0, fundingRate: t.fundingRate || 0,
+ topCoins: calculated.liveConstituents.map(item => ({
+ sym: item.sym,
+ change: roundIndexNumber(item.change),
+ weight: roundIndexNumber(item.weight),
+ vol: roundIndexNumber((item.vol || 0) / 1e6, 1),
+ price: item.price || 0,
+ fundingRate: item.fundingRate || 0,
+ oi: item.oi || 0,
+ units: item.units,
+ stale: item.stale,
  })),
  };
 }
@@ -360,11 +731,48 @@ async function markScanStopped(status = 'Ready - Click SCAN NOW', progress = 0) 
  });
 }
 
+async function savePartialScanCheckpoint(scanContext, details = {}) {
+ if (!scanContext) return null;
+ const candleSymbols = scanContext.candles instanceof Map ? scanContext.candles.size : 0;
+ const scanResults = Array.isArray(details.results) ? details.results.slice() : [];
+ if (!candleSymbols && !scanResults.length) return null;
+ const scannedRows = Math.max(0, Number(details.scannedRows || 0));
+ const candidateRows = Math.max(scannedRows, Number(details.candidateRows || 0));
+ try {
+ const context = await globalThis.FWDTradeDeskScanContext?.finalize?.(scanContext, {
+ tickerMap: details.tickerMap || scanContext.tickerMap || {},
+ products: Array.isArray(details.products) ? details.products : scanContext.products || [],
+ marketIndex: details.marketIndex || scanContext.marketIndex || null,
+ fundingHeatmap: Array.isArray(details.fundingHeatmap) ? details.fundingHeatmap : scanContext.fundingHeatmap || [],
+ scanResults,
+ decisionShortlist: [],
+ partial: true,
+ scannedRows,
+ candidateRows,
+ });
+ await chrome.storage.local.set({
+ scanPartialAvailable: true,
+ scanPartialTs: Date.now(),
+ scanPartialProgress: {
+ scannedRows,
+ candidateRows,
+ signalRows: scanResults.length,
+ candleSymbols,
+ },
+ });
+ return context;
+ } catch (error) {
+ dlog(`Partial scan checkpoint failed: ${error?.message || error}`);
+ return null;
+ }
+}
+
 // ================================================================
 // RUN SCAN - v14
 // ================================================================
 async function runScan() {
  const scanStartedAt = performanceNow();
+ const scanContext = globalThis.FWDTradeDeskScanContext?.create?.({ startedAt: Date.now() }) || null;
  dlog('=== v14 SCAN START ===');
  await chrome.storage.local.set({
  alerts: [],
@@ -395,8 +803,17 @@ async function runScan() {
  const fundingDecisionThresholdPct = Math.max(0, Number(storeData.autoTradeSettings?.maxAdverseFundingRatePct || 0.05));
 
  const tickerMap = await fetchAllTickers();
+ if (scanContext) scanContext.tickerMap = tickerMap;
 
  await chrome.storage.local.set({ scanStatus: 'Loading products...', scanProgress: 4, scanHeartbeat: Date.now() });
+ fetchDeltaRateLimitQuota()
+ .then(quota => {
+  if (quota) {
+   chrome.storage.local.set({ deltaRateLimitQuota: quota }).catch(() => {});
+   dlog(`Delta quota: current=${quota.currentQuota} resetMs=${quota.remainingMs}`);
+  }
+ })
+ .catch(error => dlog(`Delta quota check failed: ${error?.message || error}`));
  let products = Object.keys(tickerMap).map(sym => {
  const instrumentDescription = scanDescribeDeltaInstrument(sym);
  const assetInfo = scanClassifyDeltaInstrument(sym);
@@ -426,21 +843,53 @@ async function runScan() {
  });
  }
  } catch (e) { dlog(`Products err: ${e.message}`); }
+ if (scanContext) scanContext.products = products;
+
+ // Previous OI
+ const prevOIData = (await new Promise(r => chrome.storage.local.get('prevOI', r))).prevOI || {};
 
  // Market Index
- const marketIndex = calcMarketIndex(tickerMap, storeData.marketIndex || null, strat.marketIndexSettings || {});
+ let marketIndex = calcMarketIndex(tickerMap, storeData.marketIndex || null, strat.marketIndexSettings || {}, prevOIData);
  if (marketIndex) {
- // Persist long FWD-10 history for regime detection and the Chart workspace.
- const histData = await new Promise(r => chrome.storage.local.get(['marketIndexHistory'], r));
- const indexHistory = Array.isArray(histData.marketIndexHistory) ? histData.marketIndexHistory : [];
+ // Persist long FWD-100 history for regime detection and the Chart workspace.
+ const histData = await new Promise(r => chrome.storage.local.get(['marketIndexHistory', 'marketIndexHistoryMigration'], r));
+ const storedHistory = Array.isArray(histData.marketIndexHistory) ? histData.marketIndexHistory : [];
+ const hasLegacyHistory = storedHistory.some(item => Number(item?.schemaVersion || 0) !== MARKET_INDEX_HISTORY_SCHEMA_VERSION);
+ const migration = hasLegacyHistory
+ ? {
+ schemaVersion: MARKET_INDEX_HISTORY_SCHEMA_VERSION,
+ migratedAt: Date.now(),
+ legacyCount: storedHistory.length,
+ reason: 'Started clean cumulative equal-weight FWD-100 history; older reset-style snapshots are not mixed into v2 charts.',
+ }
+ : (histData.marketIndexHistoryMigration || null);
+ const indexHistory = hasLegacyHistory ? [] : storedHistory;
+ marketIndex = applyMarketIndexWindowChange(marketIndex, indexHistory, Date.now());
  indexHistory.push({
+ schemaVersion: MARKET_INDEX_HISTORY_SCHEMA_VERSION,
  composite: marketIndex.composite,
  value: marketIndex.value,
+ indexChangePct: marketIndex.indexChangePct,
+ indexChangePoints: marketIndex.indexChangePoints,
+ indexChangeBasis: marketIndex.indexChangeBasis || '',
+ indexChangeWindowLabel: marketIndex.indexChangeWindowLabel || '',
+ indexChangeWindowMs: marketIndex.indexChangeWindowMs || 0,
+ indexChangeBaselineTs: marketIndex.indexChangeBaselineTs || 0,
+ indexChangeBaselineComposite: marketIndex.indexChangeBaselineComposite || 0,
+ scanChangePct: marketIndex.scanChangePct,
+ scanChangePoints: marketIndex.scanChangePoints,
+ scanPreviousComposite: marketIndex.scanPreviousComposite,
+ sentimentValue: marketIndex.sentiment?.value ?? marketIndex.value,
+ sentimentScore: marketIndex.sentiment?.score ?? 0,
+ sentimentLabel: marketIndex.sentiment?.label || '',
+ sentimentDrivers: marketIndex.sentiment?.drivers || [],
  condition: marketIndex.condition,
  totalVolumeUSD: marketIndex.totalVolumeUSD,
  topCount: Array.isArray(marketIndex.topCoins) ? marketIndex.topCoins.length : 0,
  advancing: Array.isArray(marketIndex.topCoins) ? marketIndex.topCoins.filter(coin => Number(coin?.change || 0) > 0).length : 0,
  declining: Array.isArray(marketIndex.topCoins) ? marketIndex.topCoins.filter(coin => Number(coin?.change || 0) < 0).length : 0,
+ rebalanced: !!marketIndex.rebalanced,
+ rebalanceReason: marketIndex.rebalanceReason || '',
  ts: marketIndex.ts,
  });
  if (indexHistory.length > MARKET_INDEX_HISTORY_LIMIT) {
@@ -451,8 +900,8 @@ async function runScan() {
  marketIndex.regime = regime;
  marketIndex.thresholds = globalThis.FWDTradeDeskShared.getRegimeThresholds(regime);
  marketIndex.thresholdSummary = formatThresholdSummary(marketIndex.thresholds);
- await chrome.storage.local.set({ marketIndex, marketIndexHistory: indexHistory });
- dlog(`FWD-10: ${marketIndex.value}% | ${marketIndex.condition} | regime=${regime}`);
+ await chrome.storage.local.set({ marketIndex, marketIndexHistory: indexHistory, marketIndexHistoryMigration: migration });
+ dlog(`FWD-100: index=${marketIndex.composite} move=${marketIndex.indexChangePct}% | sentiment=${marketIndex.value}% ${marketIndex.condition} | regime=${regime}`);
 
  // Apply regime-aware thresholds to strategy
  const activeThresholds = marketIndex.thresholds;
@@ -482,18 +931,20 @@ async function runScan() {
  const fundingArb = fundingArbitrage(tickerMap, fundingMinVolume);
 
  await chrome.storage.local.set({ fundingRates, fundingHeatmap, fundingArbitrage: fundingArb });
+ if (scanContext) scanContext.fundingHeatmap = fundingHeatmap;
 
  // BTC reference
  await chrome.storage.local.set({ scanStatus: 'Loading BTC ref...', scanProgress: 6, scanHeartbeat: Date.now() });
  let btcRef = null;
  for (const s of ['BTCUSD', 'BTCUSDT', 'XBTUSD']) {
  btcRef = await fetchCandles(s, strat.tf1 || '1d', 100, CLOSED_CANDLE_FETCH_OPTIONS);
+ if (scanContext && Array.isArray(btcRef) && btcRef.length) {
+ globalThis.FWDTradeDeskScanContext?.recordCandles?.(scanContext, s, strat.tf1 || '1d', btcRef);
+ }
  if (btcRef?.length >= 20) break;
  }
  const btcCloses = btcRef?.map(c => c.close) ?? null;
 
- // Previous OI
- const prevOIData = (await new Promise(r => chrome.storage.local.get('prevOI', r))).prevOI || {};
  await chrome.storage.local.set({ totalCoins: products.length });
 
  // Filter & sort candidates (pinned coins always included)
@@ -571,10 +1022,15 @@ async function runScan() {
  }
 
  try {
+ await chrome.storage.local.set({ scanHeartbeat: Date.now() });
  const [dCandles, m2Candles] = await Promise.all([
- fetchCandles(symbol, strat.tf1 || '1d', 200, CLOSED_CANDLE_FETCH_OPTIONS),
- fetchCandles(symbol, strat.tf2 || '15m', 200, CLOSED_CANDLE_FETCH_OPTIONS),
+ fetchCandles(symbol, strat.tf1 || '1d', 200, SCAN_CANDLE_FETCH_OPTIONS),
+ fetchCandles(symbol, strat.tf2 || '15m', 200, SCAN_CANDLE_FETCH_OPTIONS),
  ]);
+ if (scanContext) {
+ globalThis.FWDTradeDeskScanContext?.recordCandles?.(scanContext, symbol, strat.tf1 || '1d', dCandles || []);
+ globalThis.FWDTradeDeskScanContext?.recordCandles?.(scanContext, symbol, strat.tf2 || '15m', m2Candles || []);
+ }
  if (!dCandles && !m2Candles) continue;
 
  const result = analyseCoin(symbol, dCandles || [], m2Candles || [], ticker, strat, marketIndex);
@@ -638,9 +1094,23 @@ async function runScan() {
  await saveAlertsWithLimit(alerts);
 
  if (alertTier === 'execute' && strat.notify !== false) {
+ if (typeof v16PushNotificationFeed === 'function') {
+ v16PushNotificationFeed({
+ tone: 'success',
+ title: `[Current] ${symbol} ${result.direction.toUpperCase()} execute`,
+ symbol,
+ sourceScannerId: 'current',
+ sourceScannerName: 'Current Live',
+ sourceType: 'scanner',
+ what: `${symbol} ${result.direction.toUpperCase()} score ${result.score}/100 | entry $${result.entry?.toFixed(4) || '-'}`,
+ why: result.reasons?.slice(0, 3).join(' | ') || 'Current scanner marked this as an execute alert.',
+ next: 'Review the signal, funding, slot state, and protection preview before live action.',
+ action: 'Open Scanner or Live Trading Analytics for the full decision state.',
+ }).catch(() => null);
+ }
  chrome.notifications.create(`alert_${symbol}_${Date.now()}`, {
  type: 'basic', iconUrl: 'icons/icon48.png',
- title: `${tierLabel} ${result.score}/100 - ${symbol} ${result.direction.toUpperCase()}`,
+ title: `[Current] ${tierLabel} ${result.score}/100 - ${symbol} ${result.direction.toUpperCase()}`,
  message: `${result.reasons.slice(0, 3).join(' | ')} | $${result.entry?.toFixed(4) || '-'}`,
  priority: 2,
  });
@@ -669,6 +1139,17 @@ async function runScan() {
  }
  }
  } catch (e) { dlog(`Error ${symbol}: ${e.message}`); }
+ if (i > 0 && ((i + 1) % SCAN_PARTIAL_CHECKPOINT_EVERY === 0 || i === candidates.length - 1)) {
+ await savePartialScanCheckpoint(scanContext, {
+ tickerMap,
+ products,
+ marketIndex,
+ fundingHeatmap,
+ results,
+ scannedRows: i + 1,
+ candidateRows: candidates.length,
+ });
+ }
  }
 
  if (telegramCfg.enabled && tgQueued > 0) {
@@ -683,6 +1164,14 @@ async function runScan() {
  const enrichedResults = intelligence.results;
  if (marketIndex) {
  marketIndex.leadership = intelligence.marketLeadership;
+ marketIndex.sentiment = {
+ ...(marketIndex.sentiment || {}),
+ leadershipState: intelligence.marketLeadership?.state || 'mixed',
+ leadershipLabel: intelligence.marketLeadership?.label || 'Mixed Leadership',
+ sectorLeaders: intelligence.sectorBreadth?.leaders || [],
+ sectorLaggards: intelligence.sectorBreadth?.laggards || [],
+ liveSignalCount: enrichedResults.length,
+ };
  marketIndex.thresholdSummary = formatThresholdSummary(marketIndex.thresholds || {});
  marketIndex.breadth = {
  leaderSectors: intelligence.sectorBreadth.leaders,
@@ -737,6 +1226,8 @@ async function runScan() {
  autoWatchlist: decisionState.autoWatchlist,
  manualWatchlist,
  watchlist: decisionState.mergedWatchlist,
+ scanPartialAvailable: false,
+ scanPartialProgress: null,
  sectorSummary: intelligence.sectorSummary,
  sectorBreadth: intelligence.sectorBreadth,
  signalHistoryStore: intelligence.signalHistoryStore,
@@ -764,6 +1255,8 @@ async function runScan() {
  autoWatchlist: decisionState.autoWatchlist,
  manualWatchlist,
  watchlist: decisionState.mergedWatchlist,
+ scanPartialAvailable: false,
+ scanPartialProgress: null,
  marketIndex,
  scanStatus: `OK Done - ${enrichedResults.length} signals (trimmed)`,
  scanProgress: 100, lastScan: new Date().toLocaleTimeString(), lastScanTs: Date.now(),
@@ -806,10 +1299,6 @@ async function runScan() {
  if (typeof runAutoTradeEngine === 'function') {
  runAutoTradeEngine(enrichedResults).catch(err => dlog(`[AUTO-TRADE] Engine error: ${String(err?.message || err)} ${String(err?.stack || '').slice(0, 200)}`));
  }
- if (typeof runOptionsAutoTradeEngine === 'function') {
- runOptionsAutoTradeEngine(enrichedResults).catch(err => dlog(`[OPTIONS-AUTO] Engine error: ${String(err?.message || err)} ${String(err?.stack || '').slice(0, 200)}`));
- }
-
  if (typeof fwdRecordPerformanceMetric === 'function') {
  fwdRecordPerformanceMetric('scan', {
  durationMs: performanceNow() - scanStartedAt,
@@ -817,6 +1306,19 @@ async function runScan() {
  scannedCoins: candidates.length,
  totalCoins: products.length,
  storageSaveOk,
+ });
+ }
+ if (scanContext) {
+ await globalThis.FWDTradeDeskScanContext?.finalize?.(scanContext, {
+ tickerMap,
+ products,
+ marketIndex,
+ fundingHeatmap,
+ scanResults: enrichedResults,
+ decisionShortlist: decisionState.shortlist,
+ partial: false,
+ scannedRows: candidates.length,
+ candidateRows: candidates.length,
  });
  }
  return enrichedResults;
@@ -1076,8 +1578,3 @@ async function runCustomAlertPollingPass() {
  })();
  return customAlertPollPromise;
 }
-
-
-// ================================================================
-// BACKTEST
-// ================================================================

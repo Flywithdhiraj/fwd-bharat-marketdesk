@@ -779,10 +779,32 @@ function mergeLevels(levels, tolerancePct = 0.0035) {
  }
  }
  if (found) {
- const totalTouches = found.touches + l.touches;
- found.price = (found.price * found.touches + l.price * l.touches) / totalTouches;
+ const foundTouches = Math.max(1, Number(found.touches || found.touch_count || 1));
+ const levelTouches = Math.max(1, Number(l.touches || l.touch_count || 1));
+ const totalTouches = foundTouches + levelTouches;
+ found.price = (Number(found.price || 0) * foundTouches + Number(l.price || 0) * levelTouches) / totalTouches;
  found.touches = totalTouches;
- found.tf = found.tf.includes(l.tf) ? found.tf : `${found.tf},${l.tf}`;
+ found.touch_count = Math.max(Number(found.touch_count || 0), Number(l.touch_count || 0), totalTouches);
+ found.zoneLow = Math.min(Number(found.zoneLow || found.lower || found.price), Number(l.zoneLow || l.lower || l.price));
+ found.zoneHigh = Math.max(Number(found.zoneHigh || found.upper || found.price), Number(l.zoneHigh || l.upper || l.price));
+ found.strengthPct = Math.max(Number(found.strengthPct || 0), Number(l.strengthPct || 0));
+ found.score = Math.max(Number(found.score || 0), Number(l.score || 0));
+ found.smartScore = Math.max(Number(found.smartScore || 0), Number(l.smartScore || 0));
+ found.rejectionCount = Math.max(Number(found.rejectionCount || 0), Number(l.rejectionCount || 0));
+ found.breakoutRetests = Math.max(Number(found.breakoutRetests || 0), Number(l.breakoutRetests || 0));
+ found.consolidationBars = Math.max(Number(found.consolidationBars || 0), Number(l.consolidationBars || 0));
+ found.volumeScore = Math.max(Number(found.volumeScore || 0), Number(l.volumeScore || 0));
+ found.tf = String(found.tf || '').includes(l.tf) ? found.tf : `${found.tf || ''}${found.tf ? ',' : ''}${l.tf || ''}`;
+ found.pivots = [
+ ...(Array.isArray(found.pivots) ? found.pivots : []),
+ ...(Array.isArray(l.pivots) ? l.pivots : []),
+ ...(Array.isArray(l.sourcePivots) ? l.sourcePivots : []),
+ ].slice(-40);
+ found.sourcePivots = [
+ ...(Array.isArray(found.sourcePivots) ? found.sourcePivots : []),
+ ...(Array.isArray(l.sourcePivots) ? l.sourcePivots : []),
+ ...(Array.isArray(l.pivots) ? l.pivots : []),
+ ].slice(-40);
  } else {
  merged.push({ ...l });
  }
@@ -897,6 +919,292 @@ function selectDirectionalLevels(levels, currentPrice, side = 'resistance', maxL
  .sort((a, b) => side === 'resistance' ? a.price - b.price : b.price - a.price);
 }
 
+function keyLevelAverage(values = []) {
+ const cleaned = (Array.isArray(values) ? values : [])
+ .map(value => Number(value || 0))
+ .filter(value => Number.isFinite(value) && value > 0);
+ if (!cleaned.length) return 0;
+ return cleaned.reduce((sum, value) => sum + value, 0) / cleaned.length;
+}
+
+function keyLevelStrengthLabel(score = 0, touchCount = 0) {
+ const touches = Number(touchCount || 0);
+ if (touches >= 15) return 'Strong';
+ if (touches >= 8) return 'Medium';
+ if (touches >= 4) return 'Weak';
+ return 'Developing';
+}
+
+function brokerKeyLevelRole(index = 0) {
+ const roles = [
+ { color: 'red', colorRole: 'resistance-major', roleLabel: '', label: 'Strong Resistance' },
+ { color: 'orange', colorRole: 'resistance-minor', roleLabel: '', label: 'Breakout Retest Zone' },
+ { color: 'blue', colorRole: 'support-near', roleLabel: '', label: 'Support Zone' },
+ { color: 'yellow', colorRole: 'support-deep', roleLabel: '', label: 'Major Bottom Support' },
+ ];
+ return roles[Math.max(0, Math.min(roles.length - 1, Number(index || 0)))] || roles[0];
+}
+
+function detectKeyLevelReactionEvent(rows = [], index = 0, low = 0, high = 0, kind = 'support', width = 0) {
+ const candle = rows[index] || {};
+ const prev = rows[index - 1] || {};
+ const close = Number(candle.close || 0);
+ const open = Number(candle.open || 0);
+ const candleLow = Number(candle.low || close || 0);
+ const candleHigh = Number(candle.high || close || 0);
+ const prevClose = Number(prev.close || 0);
+ const time = Number(candle.time || 0);
+ if (!(time > 0) || !(close > 0) || !(candleLow > 0) || !(candleHigh > 0) || !(low > 0) || !(high > 0)) return null;
+ const range = Math.max(candleHigh - candleLow, close * 0.0001);
+ const body = Math.max(Math.abs(close - open), range * 0.12);
+ const touched = candleLow <= high && candleHigh >= low;
+ const upperWick = Math.max(0, candleHigh - Math.max(open, close));
+ const lowerWick = Math.max(0, Math.min(open, close) - candleLow);
+ const nearLow = Math.max(0, low - Math.max(width, close * 0.0008));
+ const nearHigh = high + Math.max(width, close * 0.0008);
+ const lookback = rows.slice(Math.max(0, index - 5), index);
+ const nearBars = lookback.filter(item => {
+ const itemClose = Number(item.close || 0);
+ const itemLow = Number(item.low || itemClose || 0);
+ const itemHigh = Number(item.high || itemClose || 0);
+ return itemClose >= nearLow && itemClose <= nearHigh && itemLow <= nearHigh && itemHigh >= nearLow;
+ }).length;
+ const hadCloseAbove = rows.slice(Math.max(0, index - 12), index).some(item => Number(item.close || 0) > high);
+ const hadCloseBelow = rows.slice(Math.max(0, index - 12), index).some(item => Number(item.close || 0) < low);
+ const breakoutUp = prevClose > 0 && prevClose <= high && close > high && (touched || nearBars >= 3);
+ const breakoutDown = prevClose > 0 && prevClose >= low && close < low && (touched || nearBars >= 3);
+ const retestAbove = touched && close > high && prevClose > high && hadCloseBelow;
+ const retestBelow = touched && close < low && prevClose < low && hadCloseAbove;
+ if (nearBars >= 3 && (breakoutUp || breakoutDown)) {
+ return { type: 'consolidation-breakout', index, time, price: close, score: 5 + nearBars, volume: Number(candle.volume || 0) };
+ }
+ if (retestAbove || retestBelow) {
+ return { type: 'retest', index, time, price: close, score: 8, volume: Number(candle.volume || 0) };
+ }
+ if (breakoutUp || breakoutDown) {
+ return { type: 'breakout', index, time, price: close, score: 6, volume: Number(candle.volume || 0) };
+ }
+ if (!touched) return null;
+ if (kind === 'resistance') {
+ const wickReject = upperWick >= Math.max(body * 0.65, range * 0.24);
+ if (wickReject && close < high) return { type: 'rejection', index, time, price: Math.min(candleHigh, high), score: 7 + (upperWick / range), volume: Number(candle.volume || 0) };
+ } else {
+ const wickBounce = lowerWick >= Math.max(body * 0.65, range * 0.24);
+ if (wickBounce && close > low) return { type: 'bounce', index, time, price: Math.max(candleLow, low), score: 7 + (lowerWick / range), volume: Number(candle.volume || 0) };
+ }
+ return null;
+}
+
+function clusterKeyLevelReactionEvents(events = [], mergeWindow = 10) {
+ const sorted = (Array.isArray(events) ? events : [])
+ .filter(event => Number(event?.index || 0) >= 0 && Number(event?.time || 0) > 0)
+ .sort((a, b) => Number(a.index || 0) - Number(b.index || 0));
+ const clusters = [];
+ sorted.forEach(event => {
+ const last = clusters[clusters.length - 1];
+ if (last && Number(event.index || 0) - Number(last.endIndex || 0) <= mergeWindow) {
+ last.endIndex = Number(event.index || 0);
+ last.events += 1;
+ last.volume += Number(event.volume || 0);
+ if (Number(event.score || 0) >= Number(last.marker.score || 0)) last.marker = event;
+ return;
+ }
+ clusters.push({
+ startIndex: Number(event.index || 0),
+ endIndex: Number(event.index || 0),
+ events: 1,
+ volume: Number(event.volume || 0),
+ marker: event,
+ });
+ });
+ return clusters;
+}
+
+function analyzeKeyLevelZone(level = {}, candles = [], zoneLow = 0, zoneHigh = 0, currentPrice = 0, kind = 'support', tfLabel = '') {
+ const rows = (Array.isArray(candles) ? candles : [])
+ .map(candle => ({
+ time: Number(candle?.time || 0),
+ open: Number(candle?.open || 0),
+ high: Number(candle?.high || 0),
+ low: Number(candle?.low || 0),
+ close: Number(candle?.close || 0),
+ volume: Number(candle?.volume || 0),
+ }))
+ .filter(candle => candle.time > 0 && candle.open > 0 && candle.high > 0 && candle.low > 0 && candle.close > 0 && candle.high >= candle.low);
+ const price = Number(level.price || level.mid || currentPrice || 0);
+ const low = Math.min(Number(zoneLow || price || 0), Number(zoneHigh || price || 0));
+ const high = Math.max(Number(zoneLow || price || 0), Number(zoneHigh || price || 0));
+ if (!(price > 0) || !(low > 0) || !(high > 0) || !rows.length) {
+ return {
+ touchCount: Math.max(0, Number(level.touches || level.touch_count || 0)),
+ rejectionCount: 0,
+ breakoutRetests: 0,
+ consolidationBars: 0,
+ recencyScore: 0,
+ volumeScore: 0,
+ smartScore: 0,
+ };
+ }
+ const width = Math.max(high - low, price * 0.0008);
+ const nearLow = Math.max(0, low - width * 1.2);
+ const nearHigh = high + width * 1.2;
+ const avgVolume = keyLevelAverage(rows.slice(-Math.min(rows.length, 160)).map(candle => candle.volume));
+ let consolidationBars = 0;
+ let nearRun = 0;
+ let maxNearRun = 0;
+ const events = [];
+
+ for (let index = 0; index < rows.length; index += 1) {
+ const candle = rows[index];
+ const range = Math.max(candle.high - candle.low, price * 0.0001);
+ const bodyLow = Math.min(candle.open, candle.close);
+ const bodyHigh = Math.max(candle.open, candle.close);
+ const bodyNear = bodyLow <= nearHigh && bodyHigh >= nearLow;
+ if (bodyNear) {
+ nearRun += 1;
+ maxNearRun = Math.max(maxNearRun, nearRun);
+ if (range <= width * 4.2 || Math.abs(candle.close - candle.open) <= range * 0.45) consolidationBars += 1;
+ } else {
+ nearRun = 0;
+ }
+ const reaction = detectKeyLevelReactionEvent(rows, index, low, high, kind, width);
+ if (reaction) events.push(reaction);
+ }
+
+ const clusters = clusterKeyLevelReactionEvents(events, 10);
+ const finalTouchCount = clusters.length;
+ const rejectionCount = clusters.filter(cluster => ['rejection', 'bounce'].includes(cluster.marker?.type)).length;
+ const breakoutRetests = clusters.filter(cluster => ['breakout', 'retest', 'consolidation-breakout'].includes(cluster.marker?.type)).length;
+ const latestTouchIndex = clusters.length ? Number(clusters[clusters.length - 1].endIndex || 0) : -1;
+ const touchedVolume = clusters.reduce((sum, cluster) => sum + Number(cluster.volume || 0), 0);
+ const avgTouchedVolume = clusters.length > 0 ? touchedVolume / clusters.length : 0;
+ const volumeRatio = avgVolume > 0 && avgTouchedVolume > 0 ? avgTouchedVolume / avgVolume : 0;
+ const volumeScore = volumeRatio > 0 ? Math.min(18, Math.max(0, 6 + (volumeRatio - 1) * 10)) : 0;
+ const recencyScore = latestTouchIndex >= 0 ? Math.max(0, Math.min(18, ((latestTouchIndex + 1) / rows.length) * 18)) : 0;
+ const rejectionScore = Math.min(30, rejectionCount * 5.2);
+ const retestScore = Math.min(24, breakoutRetests * 12);
+ const consolidationScore = Math.min(18, consolidationBars * 0.9 + Math.max(0, maxNearRun - 3) * 1.4);
+ const distancePct = currentPrice > 0 ? Math.abs(price - currentPrice) / currentPrice : 0;
+ const proximityScore = currentPrice > 0 ? Math.max(0, 22 - distancePct * 650) : 10;
+ const directionalScore = currentPrice > 0
+ ? ((kind === 'resistance' && price >= currentPrice) || (kind === 'support' && price <= currentPrice) ? 10 : -7)
+ : 0;
+ const tf = String(tfLabel || level.tf || '').trim().toUpperCase();
+ const timeframeScore = tf === '1D' ? 8 : tf === 'COMBINED' ? 7 : 4;
+ const smartScore = Math.max(0, Math.round(
+ finalTouchCount * 8
+ + rejectionScore
+ + retestScore
+ + consolidationScore
+ + recencyScore
+ + volumeScore
+ + proximityScore
+ + directionalScore
+ + timeframeScore
+ ));
+ return {
+ touchCount: finalTouchCount,
+ rejectionCount,
+ rejectionStrength: +rejectionScore.toFixed(1),
+ breakoutRetests,
+ consolidationBars,
+ recencyScore: +recencyScore.toFixed(1),
+ volumeScore: +volumeScore.toFixed(1),
+ volumeRatio: +volumeRatio.toFixed(2),
+ smartScore,
+ strength: keyLevelStrengthLabel(smartScore, finalTouchCount),
+ reactionClusters: clusters.slice(-24).map(cluster => ({
+ type: cluster.marker?.type || 'reaction',
+ time: Number(cluster.marker?.time || 0),
+ price: pricePrecision(cluster.marker?.price || price),
+ index: Number(cluster.marker?.index || 0),
+ events: Number(cluster.events || 1),
+ })),
+ };
+}
+
+function buildBrokerKeyLevels(zones = [], currentPrice = 0) {
+ const rankedAll = (Array.isArray(zones) ? zones : [])
+ .filter(zone => Number(zone?.price || zone?.mid || 0) > 0)
+ .map(zone => {
+ const mid = Number(zone.price || zone.mid || 0);
+ const lower = Math.min(Number(zone.zoneLow || zone.lower || mid), Number(zone.zoneHigh || zone.upper || mid));
+ const upper = Math.max(Number(zone.zoneLow || zone.lower || mid), Number(zone.zoneHigh || zone.upper || mid));
+ const inferredKind = currentPrice > 0
+ ? (mid >= currentPrice ? 'resistance' : 'support')
+ : (String(zone.kind || '').toLowerCase() === 'resistance' ? 'resistance' : 'support');
+ return {
+ ...zone,
+ price: mid,
+ zoneLow: lower,
+ zoneHigh: upper,
+ mid,
+ lower,
+ upper,
+ kind: inferredKind,
+ score: Number(zone.smartScore || zone.score || 0),
+ touch_count: Math.max(0, Math.round(Number(zone.touch_count || zone.touches || 0))),
+ };
+ })
+ .sort((a, b) => {
+ const scoreDiff = Number(b.score || 0) - Number(a.score || 0);
+ if (scoreDiff) return scoreDiff;
+ const touchDiff = Number(b.touch_count || 0) - Number(a.touch_count || 0);
+ if (touchDiff) return touchDiff;
+ return Math.abs(Number(a.price || 0) - Number(currentPrice || 0)) - Math.abs(Number(b.price || 0) - Number(currentPrice || 0));
+ });
+ const major = rankedAll.filter(zone => Number(zone.touch_count || zone.touches || 0) >= 4);
+ const ranked = major.length >= 4 ? major : rankedAll;
+ const selected = [];
+ const seen = new Set();
+ const addZone = (zone = null) => {
+ if (!zone || selected.length >= 4) return;
+ const key = Math.round(Number(zone.price || 0) * 1000000);
+ if (seen.has(key)) return;
+ seen.add(key);
+ selected.push(zone);
+ };
+ const above = ranked.filter(zone => !currentPrice || Number(zone.price || 0) >= currentPrice);
+ const below = ranked.filter(zone => currentPrice && Number(zone.price || 0) < currentPrice);
+ above.slice(0, 2).forEach(addZone);
+ below.slice(0, 2).forEach(addZone);
+ ranked.forEach(addZone);
+ const output = selected
+ .slice(0, 4)
+ .sort((a, b) => Number(b.price || 0) - Number(a.price || 0))
+ .map((zone, index) => {
+ const role = brokerKeyLevelRole(index);
+ const mid = pricePrecision(Number(zone.price || zone.mid || 0));
+ const lower = pricePrecision(Number(zone.zoneLow || zone.lower || mid));
+ const upper = pricePrecision(Number(zone.zoneHigh || zone.upper || mid));
+ const kind = currentPrice > 0 ? (mid >= currentPrice ? 'resistance' : 'support') : zone.kind;
+ const touchCount = Math.max(0, Math.round(Number(zone.touch_count || zone.touches || 0)));
+ const score = Math.round(Number(zone.score || zone.smartScore || 0));
+ return {
+ ...zone,
+ upper,
+ lower,
+ mid,
+ price: mid,
+ zoneLow: lower,
+ zoneHigh: upper,
+ type: kind === 'resistance' ? 'Resistance' : 'Support',
+ kind,
+ color: role.color,
+ colorRole: role.colorRole,
+ roleLabel: role.roleLabel,
+ label: role.label,
+ touch_count: touchCount,
+ touches: touchCount,
+ strength: zone.strength || keyLevelStrengthLabel(score, touchCount),
+ score,
+ smartScore: score,
+ reactionClusters: Array.isArray(zone.reactionClusters) ? zone.reactionClusters.slice(-24) : [],
+ };
+ });
+ return output;
+}
+
 function swingDirectionVotes(values, tol = 0.0015) {
  let up = 0;
  let down = 0;
@@ -972,25 +1280,56 @@ function detectKeyLevels(dayCandles, tf15Candles, currentPrice, rawSettings = {}
  const settings = analysisSanitizeKeyLevelSettings(rawSettings || {});
  const price = Number(currentPrice || 0);
 
- function enrichLevels(levels = [], tfLabel, kind, toleranceAbs = 0) {
+ function enrichLevels(levels = [], tfLabel, kind, zoneWidthAbs = 0, sourceCandles = []) {
  return (levels || []).map(level => {
- const zoneHalfWidth = Math.max(
- Number(toleranceAbs || 0) * 0.5,
- Number(level.price || 0) * (tfLabel === '1D' ? 0.0009 : 0.0006)
- );
+ const rawPrice = Number(level.price || level.mid || 0);
+ const zoneWidth = Math.max(Number(zoneWidthAbs || 0), rawPrice * 0.0015);
+ const zoneHalfWidth = Math.max(rawPrice * 0.00075, zoneWidth * 0.5);
+ const zoneLow = Number(level.zoneLow || level.lower || 0) > 0
+ ? Math.min(Number(level.zoneLow || level.lower || 0), rawPrice)
+ : Math.max(0, rawPrice - zoneHalfWidth);
+ const zoneHigh = Number(level.zoneHigh || level.upper || 0) > 0
+ ? Math.max(Number(level.zoneHigh || level.upper || 0), rawPrice)
+ : Math.max(0, rawPrice + zoneHalfWidth);
+ const sourcePivots = [
+ ...(Array.isArray(level.pivots) ? level.pivots : []),
+ ...(Array.isArray(level.sourcePivots) ? level.sourcePivots : []),
+ ].map(pivot => ({
+ price: +Number(pivot.price || 0).toFixed(6),
+ ts: Number(pivot.ts || pivot.time || 0),
+ })).filter(pivot => pivot.price > 0 && pivot.ts > 0);
+ const lowFromAtr = Math.max(0, rawPrice - zoneHalfWidth);
+ const highFromAtr = Math.max(0, rawPrice + zoneHalfWidth);
+ const metrics = analyzeKeyLevelZone(level, sourceCandles, lowFromAtr, highFromAtr, price, kind, tfLabel);
+ const touchCount = Math.max(0, Number(metrics.touchCount || 0));
+ const score = Math.max(Number(level.score || 0), Number(level.smartScore || 0), Number(metrics.smartScore || 0));
  return {
- price: +Number(level.price || 0).toFixed(6),
- zoneLow: +Math.max(0, Number(level.price || 0) - zoneHalfWidth).toFixed(6),
- zoneHigh: +Math.max(0, Number(level.price || 0) + zoneHalfWidth).toFixed(6),
- touches: Number(level.touches || 0),
- strengthPct: +Number(level.strengthPct || 0).toFixed(1),
+ price: +rawPrice.toFixed(6),
+ zoneLow: +Math.max(0, lowFromAtr).toFixed(6),
+ zoneHigh: +Math.max(0, highFromAtr).toFixed(6),
+ upper: +Math.max(0, highFromAtr).toFixed(6),
+ lower: +Math.max(0, lowFromAtr).toFixed(6),
+ mid: +rawPrice.toFixed(6),
+ zoneWidth: +zoneWidth.toFixed(6),
+ touches: touchCount,
+ touch_count: touchCount,
+ strengthPct: +Math.max(Number(level.strengthPct || 0), Math.min(100, score)).toFixed(1),
+ score,
+ smartScore: score,
+ strength: metrics.strength || keyLevelStrengthLabel(score, touchCount),
+ rejectionCount: metrics.rejectionCount,
+ rejectionStrength: metrics.rejectionStrength,
+ breakoutRetests: metrics.breakoutRetests,
+ consolidationBars: metrics.consolidationBars,
+ recencyScore: metrics.recencyScore,
+ volumeScore: metrics.volumeScore,
+ volumeRatio: metrics.volumeRatio,
+ reactionClusters: metrics.reactionClusters || [],
  tf: tfLabel,
  kind,
+ type: kind === 'resistance' ? 'Resistance' : 'Support',
  sourcePivots: settings.showPivotCircles
- ? (Array.isArray(level.pivots) ? level.pivots : []).map(pivot => ({
- price: +Number(pivot.price || 0).toFixed(6),
- ts: Number(pivot.ts || 0),
- }))
+ ? sourcePivots.slice(-24)
  : [],
  };
  });
@@ -1002,6 +1341,10 @@ function detectKeyLevels(dayCandles, tf15Candles, currentPrice, rawSettings = {}
  const toleranceAbs = Math.max(
  Number(atrValue || 0) * (tfLabel === '1D' ? 0.45 : 0.25),
  price > 0 ? price * (tfLabel === '1D' ? 0.0045 : 0.0022) : 0
+ );
+ const zoneWidthAbs = Math.max(
+ price > 0 ? price * 0.0015 : 0,
+ Number(atrValue || 0) * 0.25
  );
  const maxPoolSize = Math.max(settings.numberOfLevels * 2, 8);
  const resistancePool = clusterPivotLevels(pivotData.highs, {
@@ -1024,13 +1367,17 @@ function detectKeyLevels(dayCandles, tf15Candles, currentPrice, rawSettings = {}
  const support = selectDirectionalLevels(supportPool, price, 'support', settings.numberOfLevels);
  return {
  toleranceAbs,
- resistance: enrichLevels(resistance, tfLabel, 'resistance', toleranceAbs),
- support: enrichLevels(support, tfLabel, 'support', toleranceAbs),
+ zoneWidthAbs,
+ resistance: enrichLevels(resistance, tfLabel, 'resistance', zoneWidthAbs, candles || []),
+ support: enrichLevels(support, tfLabel, 'support', zoneWidthAbs, candles || []),
  };
  }
 
  const dayLevels = buildTfLevels(dayCandles || [], '1D');
  const tf15Levels = buildTfLevels(tf15Candles || [], '15m');
+ const allKeyLevelCandles = [...(Array.isArray(dayCandles) ? dayCandles : []), ...(Array.isArray(tf15Candles) ? tf15Candles : [])]
+ .filter(candle => Number(candle?.time || 0) > 0)
+ .sort((a, b) => Number(a.time || 0) - Number(b.time || 0));
  const combined = {
  resistance: enrichLevels(
  selectDirectionalLevels(
@@ -1041,7 +1388,8 @@ function detectKeyLevels(dayCandles, tf15Candles, currentPrice, rawSettings = {}
  ),
  'combined',
  'resistance',
- Math.max(dayLevels.toleranceAbs || 0, tf15Levels.toleranceAbs || 0)
+ Math.max(dayLevels.zoneWidthAbs || 0, tf15Levels.zoneWidthAbs || 0),
+ allKeyLevelCandles
  ),
  support: enrichLevels(
  selectDirectionalLevels(
@@ -1052,12 +1400,17 @@ function detectKeyLevels(dayCandles, tf15Candles, currentPrice, rawSettings = {}
  ),
  'combined',
  'support',
- Math.max(dayLevels.toleranceAbs || 0, tf15Levels.toleranceAbs || 0)
+ Math.max(dayLevels.zoneWidthAbs || 0, tf15Levels.zoneWidthAbs || 0),
+ allKeyLevelCandles
  ),
  };
+ const brokerLevels = buildBrokerKeyLevels([...(combined.resistance || []), ...(combined.support || [])], price);
 
  return {
  config: settings,
+ levels: brokerLevels,
+ smartLevels: brokerLevels,
+ majorLevels: brokerLevels,
  resistance: combined.resistance,
  support: combined.support,
  byTimeframe: {
@@ -1551,11 +1904,13 @@ function parseCandle(c) {
 }
 
 const RES_MAP = {
+ '1w':['1w'], '1wk':['1w'], W:['1w'],
  '1d':['1d'], '4h':['4h'], '1h':['1h'], '30m':['30m'],
  '15m':['15m'], '5m':['5m'], '3m':['3m'], '1m':['1m'],
  D:['1d'], '60':['1h'], '15':['15m'], '5':['5m'], '240':['4h'], '720':['12h'],
 };
 const SECS_MAP = {
+ '1w':604800,
  '1d':86400, '4h':14400, '1h':3600, '30m':1800,
  '15m':900, '5m':300, '3m':180, '1m':60, '12h':43200,
 };
@@ -1581,6 +1936,7 @@ function filterClosedCandles(candles = [], resolution = '', options = {}) {
 
 async function fetchCandles(symbol, resolution, limit = 200, options = {}) {
  const closedOnly = !!options?.closedOnly;
+ const timeoutMs = Math.max(0, Number(options?.timeoutMs || 0));
  const cKey = `${symbol}_${resolution}_${closedOnly ? 'closed' : 'live'}`;
  const c = cached(cKey);
  if (c) return c;
@@ -1614,7 +1970,10 @@ async function fetchCandles(symbol, resolution, limit = 200, options = {}) {
  for (const res of resOpts) {
  try {
  const url = `${BASE}/history/candles?symbol=${encodeURIComponent(symbol)}&resolution=${res}&start=${incrementalStart}&end=${end}`;
- const r = await rateLimitedFetch(url);
+ const fetchOptions = timeoutMs > 0 && typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+ ? { signal: AbortSignal.timeout(timeoutMs) }
+ : {};
+ const r = await rateLimitedFetch(url, fetchOptions);
  if (!r.ok) continue;
  const d = await r.json();
  const raw = d.result ?? d.data ?? (Array.isArray(d) ? d : null);

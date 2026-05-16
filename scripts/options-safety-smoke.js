@@ -6,53 +6,58 @@ const path = require('path');
 const root = path.resolve(__dirname, '..');
 const bg = fs.readFileSync(path.join(root, 'src/renderer/scripts/background/07-options.js'), 'utf8');
 const ui = fs.readFileSync(path.join(root, 'src/renderer/scripts/popup/08-options-workspace.js'), 'utf8');
-const shared = fs.readFileSync(path.join(root, 'src/renderer/scripts/shared/options.js'), 'utf8');
+const registry = fs.readFileSync(path.join(root, 'src/renderer/scripts/shared/strategy-registry.js'), 'utf8');
+const nativeScanner = fs.readFileSync(path.join(root, 'src/renderer/scripts/background/13-native-straddle-scanner.js'), 'utf8');
+const chart = fs.readFileSync(path.join(root, 'src/renderer/scripts/popup/07-chart-workspace.js'), 'utf8');
 
 const checks = [
  {
- name: 'manual strategy requires accepted preview',
- pass: bg.includes('previewAccepted !== true') && ui.includes('FINAL OPTIONS ORDER PREVIEW') && ui.includes('previewAccepted: true'),
+  name: 'native straddle is registered as scanner-only',
+  pass: registry.includes("id: 'native_straddle'")
+  && registry.includes("scannerAction: 'native-straddle:startScan'")
+  && registry.includes('canLiveTrade: false'),
  },
  {
- name: 'repair state locks new option execution',
- pass: bg.includes('optionsExecutionRepairState') && bg.includes('v17AssertOptionsExecutionUnlocked') && bg.includes('Options execution locked'),
+  name: 'native scanner separates product cache from fresh advice',
+  pass: nativeScanner.includes('CACHE_TTL_MS = 24 * 60 * 60 * 1000')
+  && nativeScanner.includes('RESULT_CACHE_TTL_MS = 15 * 60 * 1000')
+  && nativeScanner.includes('v17GetStraddleChain')
+  && nativeScanner.includes('fetchNativePremiumRead')
+  && nativeScanner.includes('nativeStraddleScannerCache'),
  },
  {
- name: 'partial basket failures persist repair state',
- pass: bg.includes('Strategy partially placed') && bg.includes('v17PersistOptionsRepairState') && bg.includes('compensationResults'),
+  name: 'native scanner is notify-only',
+  pass: nativeScanner.includes('noAutoTrade: true')
+  && nativeScanner.includes('advisoryOnly: true')
+  && bg.includes('Native Straddle auto-entry is disabled'),
  },
  {
- name: 'native straddle stop failure triggers rollback',
- pass: bg.includes('native_protection_failed') && bg.includes('stop_protection_failed') && bg.includes('Native straddle') && bg.includes('entered without accepted stop protection'),
+  name: 'options workspace is native-straddle-only',
+  pass: ui.includes('Native Straddle-only')
+  && ui.includes('Native Straddle')
+  && ui.includes('Scan Native')
+  && !ui.includes('renderBuilderMode')
+  && !ui.includes('renderAnalyzerMode')
+  && !ui.includes('renderSkewMode')
+  && !ui.includes('FINAL OPTIONS ORDER PREVIEW')
+  && !ui.includes('place-straddle-order'),
  },
  {
- name: 'native straddle uses BTC market score before selling premium',
- pass: bg.includes('v17BuildUnderlyingStraddleMarketContext') && bg.includes('marketContext') && ui.includes('BUY VOL WATCH') && ui.includes('SELL STRADDLE') && shared.includes('btc_market_score'),
+  name: 'generic options routes and skew endpoint are removed',
+  pass: !bg.includes("msg?.action === 'v17:getOptionsChain'")
+  && !bg.includes("msg?.action === 'v17:getOptionUniverse'")
+  && !bg.includes("msg?.action === 'v17:analyzeOptionStrategy'")
+  && !bg.includes("msg?.action === 'v17:placeOptionStrategyOrders'")
+  && !bg.includes("msg?.action === 'v17:getVolatilitySkew'")
+  && !bg.includes('v17GetVolatilitySkew')
+  && !bg.includes('runOptionsAutoTradeEngine')
+  && !bg.includes('v17FetchOptionTickers'),
  },
  {
- name: 'native long straddle has side-aware protection and exits',
- pass: bg.includes("actionSide = best.preview?.recommendedSide === 'buy' ? 'buy' : 'sell'")
- && bg.includes("side: actionSide === 'buy' ? 'sell' : 'buy'")
- && bg.includes("entrySide === 'buy' ? 'sell' : 'buy'")
- && bg.includes("isLongNative ? 'long_vol_capture' : 'premium_capture'")
- && shared.includes("orderSide === 'buy'")
- && ui.includes("data-side=\"${esc(preview?.orderSide || 'sell')}\""),
- },
- {
- name: 'synthetic straddle partial execution is blocked',
- pass: bg.includes('synthetic_straddle_partial') && bg.includes('fallback_partial_repair_required') && bg.includes('Emergency close failed'),
- },
- {
- name: 'options desk exposes execution health strip',
- pass: ui.includes('renderExecutionHealthStrip') && ui.includes('v17:getOptionsExecutionHealth') && ui.includes('Options Execution Health'),
- },
- {
- name: 'strategy builder help controls are wired',
- pass: ui.includes('showBuilderHelp') && ui.includes('data-options-action="toggle-builder-help"') && ui.includes('Choose expiry') && ui.includes('Review before placing'),
- },
- {
- name: 'booked pnl toggle is active and not disabled',
- pass: ui.includes('showBookedPnl') && ui.includes('data-options-action="toggle-booked-pnl"') && ui.includes('Booked P&L layer is on') && !ui.includes('<input type="checkbox" disabled><span>Add Booked P&L</span>'),
+  name: 'native straddle chart handoff defaults to 15m and avoids chart cache',
+  pass: chart.includes("signal?.raw?.timeframe")
+  && chart.includes("symbol.startsWith('MV-')")
+  && chart.includes('!isNativeStraddleSymbol'),
  },
 ];
 

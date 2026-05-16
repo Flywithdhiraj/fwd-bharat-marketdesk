@@ -1053,6 +1053,11 @@ function v16NormalizeLiveAnalyticsView(value = {}) {
  instrument: 'all',
  setupMode: 'all',
  setupSort: 'impact',
+ tradeCheckSymbol: '',
+ tradeCheckSide: 'long',
+ tradeCheckEntry: '',
+ tradeCheckStop: '',
+ tradeCheckTarget: '',
  autoRefresh: false,
  legend: {
  deposits: true,
@@ -1080,6 +1085,11 @@ function v16NormalizeLiveAnalyticsView(value = {}) {
  normalized.setupSort = ['impact', 'expectancy', 'live', 'winRate'].includes(String(normalized.setupSort || ''))
  ? String(normalized.setupSort)
  : 'impact';
+ normalized.tradeCheckSymbol = v16NormalizeSymbol(normalized.tradeCheckSymbol || '').slice(0, 40);
+ normalized.tradeCheckSide = String(normalized.tradeCheckSide || '').toLowerCase() === 'short' ? 'short' : 'long';
+ normalized.tradeCheckEntry = String(normalized.tradeCheckEntry || '').trim().slice(0, 40);
+ normalized.tradeCheckStop = String(normalized.tradeCheckStop || '').trim().slice(0, 40);
+ normalized.tradeCheckTarget = String(normalized.tradeCheckTarget || '').trim().slice(0, 40);
  normalized.autoRefresh = normalized.autoRefresh === true;
  normalized.legend = {
  deposits: normalized.legend?.deposits !== false,
@@ -1428,24 +1438,36 @@ function v16RenderAnalyticsReliabilityPanel(snapshot = {}, analyticsModel = null
  });
 }
 
-function v16RenderAnalyticsDailyControlPanel(analyticsModel = {}, shadowLedger = {}) {
+function v16RenderAnalyticsDailyControlPanel(analyticsModel = {}, shadowLedger = {}, options = {}) {
  const wrap = document.getElementById('liveAnalyticsDailyControlPanel');
  if (!wrap) return;
+ const paperOnly = options?.paperOnly === true;
  const dayStart = v16LocalStartOfDay(Date.now());
  const paperClosedToday = (Array.isArray(shadowLedger?.closed) ? shadowLedger.closed : []).filter(trade => Number(trade.closedAt || 0) >= dayStart);
  const paperWins = paperClosedToday.filter(trade => Number(trade.rMultiple ?? trade.pnl ?? 0) > 0).length;
  const paperR = paperClosedToday.reduce((sum, trade) => sum + Number(trade.rMultiple ?? 0), 0);
+ const paperClosedAll = Array.isArray(shadowLedger?.closed) ? shadowLedger.closed : [];
+ const paperOpen = Array.isArray(shadowLedger?.open) ? shadowLedger.open : [];
+ const paperWinsAll = paperClosedAll.filter(trade => Number(trade.rMultiple ?? trade.pnl ?? 0) > 0).length;
  const liveClosed = Number(analyticsModel?.tradeCount || 0);
  const livePnl = Number(analyticsModel?.realized || 0);
  const winRate = Number(analyticsModel?.winRate || 0);
- wrap.innerHTML = `
- <section class="risk-manage-setup-shell">
- <div class="risk-manage-section-label">DAILY CONTROL DASHBOARD</div>
- <div class="risk-manage-setup-summary">
+ const cards = paperOnly
+ ? `
+ <article class="risk-manage-setup-summary-card ${paperR >= 0 ? 'tone-good' : 'tone-bad'}"><span>Paper Today</span><strong>${paperClosedToday.length ? `${paperR >= 0 ? '+' : ''}${v16FmtNumber(paperR, 2)}R` : 'NONE'}</strong><small>${paperClosedToday.length} closed | ${paperWins}/${paperClosedToday.length || 0} wins | ${paperOpen.length} open</small></article>
+ <article class="risk-manage-setup-summary-card tone-info"><span>Open Paper</span><strong>${paperOpen.length}</strong><small>Shadow trades still active.</small></article>
+ <article class="risk-manage-setup-summary-card ${paperClosedAll.length ? 'tone-good' : 'tone-muted'}"><span>Closed Paper</span><strong>${paperClosedAll.length}</strong><small>${paperClosedAll.length ? `${paperWinsAll}/${paperClosedAll.length} wins in ledger.` : 'No paper sample yet.'}</small></article>
+ <article class="risk-manage-setup-summary-card tone-warn"><span>Best Use</span><strong>Paper first</strong><small>Promote only setups with enough closed samples and positive expectancy.</small></article>`
+ : `
  <article class="risk-manage-setup-summary-card ${livePnl >= 0 ? 'tone-good' : 'tone-bad'}"><span>Live Closed P&amp;L</span><strong>${v16FmtSigned(livePnl)}</strong><small>${liveClosed} closed in selected range | ${v16FmtNumber(winRate, 1)}% win</small></article>
  <article class="risk-manage-setup-summary-card ${paperR >= 0 ? 'tone-good' : 'tone-bad'}"><span>Paper Today</span><strong>${paperClosedToday.length ? `${paperR >= 0 ? '+' : ''}${v16FmtNumber(paperR, 2)}R` : 'NONE'}</strong><small>${paperClosedToday.length} closed | ${paperWins}/${paperClosedToday.length || 0} wins | ${Number(shadowLedger?.open?.length || 0)} open</small></article>
  <article class="risk-manage-setup-summary-card tone-info"><span>Kill / Slots</span><strong>Review</strong><small>Use Orders health strip for live slot, kill switch, and profile state.</small></article>
- <article class="risk-manage-setup-summary-card tone-warn"><span>Best Use</span><strong>Paper first</strong><small>Promote only setups with enough closed samples and positive expectancy.</small></article>
+ <article class="risk-manage-setup-summary-card tone-warn"><span>Best Use</span><strong>Paper first</strong><small>Promote only setups with enough closed samples and positive expectancy.</small></article>`;
+ wrap.innerHTML = `
+ <section class="risk-manage-setup-shell">
+ <div class="risk-manage-section-label">${paperOnly ? 'PAPER TODAY' : 'DAILY CONTROL DASHBOARD'}</div>
+ <div class="risk-manage-setup-summary">
+ ${cards}
  </div>
  </section>`;
 }
@@ -1455,7 +1477,10 @@ function v16RenderPaperLedgerPanel(shadowLedger = {}) {
  if (!wrap) return;
  const open = Array.isArray(shadowLedger?.open) ? shadowLedger.open : [];
  const closed = Array.isArray(shadowLedger?.closed) ? shadowLedger.closed : [];
- const rows = [...open.slice(0, 12), ...closed.slice(0, 18)].slice(0, 24);
+ const focusSymbol = typeof v16NormalizeTradeCheckSymbol === 'function' ? v16NormalizeTradeCheckSymbol(v16LiveAnalyticsView?.tradeCheckSymbol || '') : '';
+ const filteredOpen = focusSymbol ? open.filter(trade => v16NormalizeSymbol(trade.symbol || '') === focusSymbol) : open;
+ const filteredClosed = focusSymbol ? closed.filter(trade => v16NormalizeSymbol(trade.symbol || '') === focusSymbol) : closed;
+ const rows = [...filteredOpen.slice(0, 12), ...filteredClosed.slice(0, 18)].slice(0, 24);
  const renderRow = trade => {
  const isClosed = String(trade?.status || '').toLowerCase() === 'closed';
  const r = trade?.rMultiple === null || trade?.rMultiple === undefined ? '-' : `${Number(trade.rMultiple) >= 0 ? '+' : ''}${v16FmtNumber(Number(trade.rMultiple || 0), 2)}R`;
@@ -1465,20 +1490,35 @@ function v16RenderPaperLedgerPanel(shadowLedger = {}) {
  <span><strong class="rsf-cell-main">${v16FmtPrice(Number(trade.entryPrice || 0))}</strong><small class="rsf-cell-meta">Entry</small></span>
  <span><strong class="rsf-cell-main">${v16FmtPrice(Number(trade.stopLoss || 0))}</strong><small class="rsf-cell-meta">SL</small></span>
  <span><strong class="rsf-cell-main">${v16FmtPrice(Number(trade.takeProfit || 0))}</strong><small class="rsf-cell-meta">TP</small></span>
- <span><strong class="rsf-cell-main ${Number(trade?.rMultiple || trade?.pnl || 0) >= 0 ? 'good' : 'bad'}">${v16Esc(isClosed ? r : 'OPEN')}</strong><small class="rsf-cell-meta">${v16Esc(triggerText)}</small></span>
+ <span><strong class="rsf-cell-main ${Number(trade?.rMultiple || trade?.pnl || 0) >= 0 ? 'good' : 'bad'}">${v16Esc(isClosed ? r : 'OPEN')}</strong><small class="rsf-cell-meta">${v16Esc(triggerText)}</small>${isClosed ? `<button class="bsm mini" type="button" data-paper-ledger-replay="${v16Esc(trade.id || '')}">Replay</button>` : `<button class="bsm mini" type="button" data-paper-ledger-chart="${v16Esc(trade.symbol || '')}">Chart</button>`}</span>
  </div>`;
  };
  wrap.innerHTML = `
  <section class="risk-manage-setup-shell">
  <div class="risk-manage-section-label">PAPER / SHADOW LEDGER</div>
  <div class="risk-manage-setup-summary">
- <article class="risk-manage-setup-summary-card tone-info"><span>Open Paper</span><strong>${open.length}</strong><small>Simulated trades still active.</small></article>
- <article class="risk-manage-setup-summary-card ${closed.length ? 'tone-good' : 'tone-muted'}"><span>Closed Paper</span><strong>${closed.length}</strong><small>Stored locally, max 1000 rows.</small></article>
+ <article class="risk-manage-setup-summary-card tone-info"><span>Open Paper</span><strong>${filteredOpen.length}</strong><small>${focusSymbol ? `${v16Esc(focusSymbol)} filter active.` : 'Simulated trades still active.'}</small></article>
+ <article class="risk-manage-setup-summary-card ${filteredClosed.length ? 'tone-good' : 'tone-muted'}"><span>Closed Paper</span><strong>${filteredClosed.length}</strong><small>${focusSymbol ? `Closed for ${v16Esc(focusSymbol)}.` : 'Stored locally, max 1000 rows.'}</small></article>
  <article class="risk-manage-setup-summary-card tone-warn"><span>Ledger Rule</span><strong>No orders</strong><small>Paper mode never sends Delta orders.</small></article>
  </div>
  <div class="risk-manage-setup-header"><span>Trade</span><span>Entry</span><span>SL</span><span>TP</span><span>Outcome</span></div>
- <div class="risk-manage-setup-rows">${rows.length ? rows.map(renderRow).join('') : `<div class="account-inline-note">No paper trades yet. Keep Auto Scan and Paper Tracking enabled while the app stays open.</div>`}</div>
+ <div class="risk-manage-setup-rows">${rows.length ? rows.map(renderRow).join('') : `<div class="account-inline-note">${focusSymbol ? `No paper trades yet for ${v16Esc(focusSymbol)}.` : 'No paper trades yet. Keep Auto Scan and Paper Tracking enabled while the app stays open.'}</div>`}</div>
  </section>`;
+ wrap.querySelectorAll('[data-paper-ledger-chart]').forEach(button => {
+ button.addEventListener('click', event => {
+ event.preventDefault();
+ event.stopPropagation();
+ void v16OpenAnalyticsChart?.(button.dataset.paperLedgerChart || '');
+ });
+ });
+ wrap.querySelectorAll('[data-paper-ledger-replay]').forEach(button => {
+ button.addEventListener('click', event => {
+ event.preventDefault();
+ event.stopPropagation();
+ const trade = rows.find(item => String(item.id || '') === String(button.dataset.paperLedgerReplay || ''));
+ if (trade) void v16OpenAnalyticsChart?.(trade.symbol || '', trade);
+ });
+ });
 }
 
 function v16DownloadCsv(filename = '', headers = [], rows = []) {

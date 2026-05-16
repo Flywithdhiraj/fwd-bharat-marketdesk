@@ -18,7 +18,7 @@ function _raf(key, fn) {
 }
 
 async function renderScanner(preloaded = null) {
-const d = preloaded ?? await storeGet(['scanResults', 'watchlist', 'manualWatchlist', 'autoWatchlist', 'decisionShortlist', 'alerts', 'analyticsPositions', 'scanStatus', 'scanActive', 'lastScan', 'lastScanTs', 'strategy', 'marketIndex', 'sectorBreadth']);
+const d = preloaded ?? await storeGet(['scanResults', 'watchlist', 'manualWatchlist', 'autoWatchlist', 'decisionShortlist', 'alerts', 'analyticsPositions', 'scanStatus', 'scanActive', 'lastScan', 'lastScanTs', 'strategy', 'marketIndex', 'sectorBreadth', 'strategyResults.native_straddle', 'strategyStatus.native_straddle']);
  const list = d.scanResults || [];
  const liveAlerts = getLiveAlertSnapshot(d.alerts, list);
  currentWatchlist = d.manualWatchlist || d.watchlist || [];
@@ -29,6 +29,7 @@ const d = preloaded ?? await storeGet(['scanResults', 'watchlist', 'manualWatchl
  renderScannerFeedStatus(d);
  renderSectorBar(list, d.sectorBreadth || null);
  renderScannerInsightsRail(list);
+ renderNativeStraddleScannerRail(d['strategyResults.native_straddle'] || [], d['strategyStatus.native_straddle'] || {});
  renderScannerSpotlightV2(list, liveAlerts, currentWatchlist, d.decisionShortlist || []);
  renderTradeTape(liveAlerts, list);
 
@@ -70,6 +71,57 @@ const d = preloaded ?? await storeGet(['scanResults', 'watchlist', 'manualWatchl
 
  renderCards(list, cont, currentWatchlist);
 
+}
+
+function buildNativeStraddleScannerCard(row = {}) {
+ const raw = row.raw || {};
+ const tone = row.signal === 'BUY' ? 'long' : row.signal === 'SELL' ? 'short' : 'watch';
+ const premium = raw.premiumPerContract ? `$${Number(raw.premiumPerContract || 0).toFixed(2)}` : `$${Number(row.entry || 0).toFixed(2)}`;
+ const expiry = Number(raw.daysToExpiry || 0) < 1
+ ? `${Math.max(0, Number(raw.daysToExpiry || 0) * 24).toFixed(1)}h`
+ : `${Number(raw.daysToExpiry || 0).toFixed(1)}d`;
+ return `<button type="button" class="native-straddle-mini-card ${tone}" data-native-straddle-chart="${esc(row.symbol || '')}">
+ <span>${esc(raw.underlying || row.symbol || '')}</span>
+ <strong>${esc(row.actionLabel || row.setupLabel || 'Native Straddle')}</strong>
+ <small>${esc(row.symbol || '')}</small>
+ <b>Score ${Number(row.score || 0).toFixed(0)} | ${premium} | ${expiry}</b>
+ </button>`;
+}
+
+function renderNativeStraddleScannerRail(rows = [], status = {}) {
+ const wrap = document.getElementById('nativeStraddleScannerRail');
+ if (!wrap) return;
+ const list = Array.isArray(rows) ? rows.slice(0, 4) : [];
+ const active = !!status?.active;
+ const statusText = status?.status || 'Run Native Straddle scan for BTC/ETH MV contracts.';
+ wrap.innerHTML = `<section class="native-straddle-strip">
+ <div class="native-straddle-strip-head">
+ <div><span>Native Straddle Scanner</span><strong>${active ? 'Scanning...' : list.length ? `${list.length} idea${list.length === 1 ? '' : 's'}` : 'Ready'}</strong><small>${esc(statusText)}</small></div>
+ <div class="native-straddle-strip-actions">
+ <button type="button" class="bsm secondary" id="btnNativeStraddleScan">${active ? 'Scanning...' : 'Scan Native'}</button>
+ <button type="button" class="bsm" id="btnNativeStraddleLab">Strategy Lab</button>
+ </div>
+ </div>
+ <div class="native-straddle-strip-list">${list.length ? list.map(buildNativeStraddleScannerCard).join('') : '<div class="native-straddle-empty">No Native Straddle result yet. Scan uses 24h cache only and opens charts in 15m.</div>'}</div>
+ </section>`;
+ wrap.querySelector('#btnNativeStraddleScan')?.addEventListener('click', () => {
+ chrome.runtime.sendMessage({ action: 'native-straddle:startScan', force: true }, () => {
+   setTimeout(() => (globalThis.scheduleWorkspaceTabRender?.('scanner') || renderScanner()), 500);
+  });
+ });
+ wrap.querySelector('#btnNativeStraddleLab')?.addEventListener('click', () => {
+  if (typeof setActiveWorkspaceTab === 'function') setActiveWorkspaceTab('strategies', true, true);
+ });
+ wrap.querySelectorAll('[data-native-straddle-chart]').forEach(button => {
+  button.addEventListener('click', async () => {
+   const symbol = button.dataset.nativeStraddleChart || '';
+   const row = list.find(item => item.symbol === symbol) || { symbol, raw: { timeframe: '15m' } };
+   await globalThis.openSignalInChartWorkspace?.({
+    ...row,
+    chartTradingDraft: row.raw?.chartTradingDraft || null,
+   }, { reviewTab: true, returnTab: 'scanner', returnSymbol: symbol, timeframe: '15m' });
+  });
+ });
 }
 
 function renderScannerFeedStatus(data = {}) {
@@ -134,9 +186,10 @@ function renderSectorBar(list = [], sectorBreadth = null) {
  ...sectors.map(item => {
  const tone = item.breadthState === 'confirmed' ? 'ok' : item.breadthState === 'weak' ? 'fail' : 'warn';
  const active = activeSector === item.sector ? 'active' : '';
+ const assetClass = item.sector === 'RWA' ? 'rwa-sector' : '';
  const title = `${item.sector} | ${item.count} signals | ${item.breadthState === 'confirmed' ? 'Breadth confirms' : item.breadthState === 'weak' ? 'Breadth weak' : 'Breadth mixed'}${item.leader ? ` | Leader ${item.leader}` : ''}`;
  const label = item.breadthState === 'confirmed' ? 'Lead' : item.breadthState === 'weak' ? 'Weak' : 'Mix';
- return `<button type="button" class="preset-btn ${active} ${tone}" data-sector-filter="${esc(item.sector)}" title="${esc(title)}">${esc(item.sector)} <span>${item.count}</span> <em>${esc(label)}</em></button>`;
+ return `<button type="button" class="preset-btn ${active} ${tone} ${assetClass}" data-sector-filter="${esc(item.sector)}" title="${esc(title)}">${esc(item.sector)} <span>${item.count}</span> <em>${esc(item.sector === 'RWA' ? 'Asset' : label)}</em></button>`;
  }),
  ];
 
@@ -960,8 +1013,10 @@ function buildCompactRow(r, isPinned, isChoppyRegime = false) {
  const openPos = livePositions.find(p => String(p.symbol || p.product_symbol || '').toUpperCase() === String(r.symbol || '').toUpperCase());
  const posMarker = openPos ? '<span class="card-in-pos compact">*</span>' : '';
  const age = r.ts ? timeAgo(r.ts) : '';
- return `<tr class="scanner-compact-row${dimClass}" data-sym="${esc(r.symbol)}" title="${esc(scannerWhyLine(r, isChoppyRegime))}">
- <td class="compact-sym">${posMarker}<strong>${esc(r.symbol)}</strong>${isPinned ? ' PIN' : ''}${age ? `<span class="card-signal-age"> ${age}</span>` : ''}</td>
+ const assetInfo = resolveScannerAssetInfo(r);
+ const isRwa = isRwaScannerAsset(assetInfo);
+ return `<tr class="scanner-compact-row${dimClass} ${isRwa ? 'scanner-rwa-row' : ''}" data-sym="${esc(r.symbol)}" title="${esc(scannerWhyLine(r, isChoppyRegime))}">
+ <td class="compact-sym">${posMarker}<strong>${esc(r.symbol)}</strong>${isRwa ? '<span class="scanner-rwa-mini">RWA</span>' : ''}${isPinned ? ' PIN' : ''}${age ? `<span class="card-signal-age"> ${age}</span>` : ''}</td>
  <td><span class="card-dir ${dirClass}" style="font-size:9px;padding:2px 5px">${dirLabel}</span></td>
  <td style="color:${scColor};font-weight:700">${sc}</td>
  <td title="Trade Quality" style="color:${tqColor};font-weight:700">${tq || '--'}</td>
@@ -978,6 +1033,8 @@ function buildScannerTable(rows, watchSet, isChoppyRegime = false) {
  <th>Symbol</th><th>Action</th><th>Score</th><th title="Trade Quality">TQ</th><th>Setup</th><th>24H</th><th title="Funding Rate">FR</th><th>Volume</th><th>Why shown</th>
  </tr></thead>
  <tbody>${rows.map(r => {
+ const assetInfo = resolveScannerAssetInfo(r);
+ const isRwa = isRwaScannerAsset(assetInfo);
  const score = Number(r.score || 0);
  const tq = Number(r.tradeQuality?.score || 0);
  const ch = Number(r.change24h || 0);
@@ -986,8 +1043,8 @@ function buildScannerTable(rows, watchSet, isChoppyRegime = false) {
  const dirClass = r.direction?.includes('short') ? 'short' : r.direction?.includes('watch') ? 'watch' : 'long';
  const frClass = fr > 0 ? 'funding-pos' : fr < 0 ? 'funding-neg' : '';
  const age = r.ts ? timeAgo(r.ts) : '';
- return `<tr class="scanner-front-row ${tier === 'dimmed' ? 'regime-dimmed' : ''}" data-sym="${esc(r.symbol)}">
- <td><strong>${esc(r.symbol || '')}</strong>${watchSet.has(r.symbol) ? '<span class="table-pin">PIN</span>' : ''}${age ? `<small>${age}</small>` : ''}</td>
+ return `<tr class="scanner-front-row ${tier === 'dimmed' ? 'regime-dimmed' : ''} ${isRwa ? 'scanner-rwa-row' : ''}" data-sym="${esc(r.symbol)}">
+ <td><strong>${esc(r.symbol || '')}</strong>${isRwa ? `<span class="scanner-rwa-mini">RWA</span>` : ''}${watchSet.has(r.symbol) ? '<span class="table-pin">PIN</span>' : ''}${age ? `<small>${age}</small>` : ''}</td>
  <td><span class="card-dir ${dirClass}">${esc(scannerDirectionLabel(r.direction))}</span></td>
  <td><span class="table-score">${score}/100</span></td>
  <td>${tq || '--'}</td>
@@ -1002,6 +1059,28 @@ function buildScannerTable(rows, watchSet, isChoppyRegime = false) {
 }
 
 // -- Signal Card Builder - v14: sparkline, market structure, vol climax --
+
+function resolveScannerAssetInfo(r = {}) {
+ if (r.assetClass) {
+ return {
+ assetClass: r.assetClass,
+ assetLabel: r.assetLabel || (String(r.assetClass).startsWith('tokenized_') ? 'Tokenized RWA' : 'Crypto'),
+ assetBadge: r.assetBadge || '',
+ sector: r.sector || '',
+ info: r.assetInfo || '',
+ displayName: r.assetDisplayName || r.name || '',
+ underlyingSymbol: r.underlyingSymbol || '',
+ underlyingName: r.underlyingName || '',
+ };
+ }
+ return typeof classifyDeltaInstrument === 'function' ? classifyDeltaInstrument(r.symbol || '') : {};
+}
+
+function isRwaScannerAsset(assetInfo = {}) {
+ const cls = String(assetInfo?.assetClass || '').toLowerCase();
+ const badge = String(assetInfo?.assetBadge || '').toLowerCase();
+ return cls.startsWith('tokenized_') || badge.includes('rwa');
+}
 
 function buildCard(r, isPinned, isChoppyRegime = false) {
 
@@ -1028,17 +1107,13 @@ function buildCard(r, isPinned, isChoppyRegime = false) {
 
  const frClass = fr > 0 ? 'funding-pos' : fr < 0 ? 'funding-neg' : '';
 
- const assetInfo = r.assetClass
- ? {
- assetClass: r.assetClass,
- assetLabel: r.assetLabel || (r.assetClass === 'tokenized_stock' ? 'Tokenized Stock' : 'Crypto'),
- assetBadge: r.assetBadge || '',
- info: r.assetInfo || '',
- displayName: r.assetDisplayName || r.name || '',
- underlyingSymbol: r.underlyingSymbol || '',
- underlyingName: r.underlyingName || '',
- }
- : (typeof classifyDeltaInstrument === 'function' ? classifyDeltaInstrument(r.symbol || '') : {});
+ const assetInfo = resolveScannerAssetInfo(r);
+ const isRwa = isRwaScannerAsset(assetInfo);
+ const assetLabel = String(assetInfo.assetLabel || (isRwa ? 'RWA' : 'Crypto')).trim();
+ const assetBadge = String(assetInfo.assetBadge || (isRwa ? 'RWA' : 'Crypto')).trim();
+ const assetSubline = isRwa && (assetInfo.underlyingSymbol || assetInfo.underlyingName)
+ ? `${assetInfo.underlyingSymbol || 'RWA'}${assetInfo.underlyingName && assetInfo.underlyingName !== assetInfo.underlyingSymbol ? ` | ${assetInfo.underlyingName}` : ''}`
+ : '';
  const sec = normalizeSectorLabel(r.sector || assetInfo.sector || getSector(r.symbol));
  const productDescription = String(
  r.instrumentDescription
@@ -1182,6 +1257,8 @@ function buildCard(r, isPinned, isChoppyRegime = false) {
 
  const chipList = [
 
+ isRwa ? `<div class="chip rwa-chip">${esc(assetBadge)}</div>` : '',
+
  r.mtfConfirmed ? '<div class="chip ok">MTF</div>' : '<div class="chip warn">PARTIAL</div>',
 
  emergingChip, sentHTML, vwapChip, vpChip, msChip, vcChip,
@@ -1239,6 +1316,9 @@ function buildCard(r, isPinned, isChoppyRegime = false) {
  const productLine = productDescription && productDescription.toUpperCase() !== String(r.symbol || '').toUpperCase()
  ? `<div class="card-product-name">${esc(productDescription)}</div>`
  : '';
+ const assetRibbon = isRwa
+ ? `<div class="scanner-asset-ribbon" title="${esc(assetInfo.info || 'RWA instrument separated from crypto flow.')}"><span>RWA</span><strong>${esc(assetLabel)}</strong>${assetSubline ? `<em>${esc(assetSubline)}</em>` : ''}</div>`
+ : `<div class="scanner-asset-ribbon crypto"><span>CRYPTO</span><strong>Crypto derivative</strong></div>`;
  const trustNote = `Bias ${dirLabel.replace(/^[^\s]+\s/, '')} | ${sec} sector | ${r.mtfConfirmed ? 'confirmed' : 'developing'}${trackedPnl.hasAny ? ` | ${trackedPnl.totalPnl < 0 ? 'tracked drawdown' : 'tracked in profit'}` : ''}`;
  const actionTier = scannerActionTier(r, isChoppyRegime);
  const whyLine = scannerWhyLine(r, isChoppyRegime);
@@ -1266,7 +1346,7 @@ function buildCard(r, isPinned, isChoppyRegime = false) {
 
  return `
 
- <div class="card v16-signal-card scanner-tier-${actionTier} ${r.direction?.includes('short') ? 'short-card' : 'long-card'} ${sc >= 80 ? 'fire' : ''} ${isPinned ? 'pinned' : ''} ${regimeDim ? 'regime-dimmed' : ''}" data-sym="${safeSymbol}">
+ <div class="card v16-signal-card scanner-tier-${actionTier} ${r.direction?.includes('short') ? 'short-card' : 'long-card'} ${sc >= 80 ? 'fire' : ''} ${isPinned ? 'pinned' : ''} ${regimeDim ? 'regime-dimmed' : ''} ${isRwa ? 'rwa-signal-card' : 'crypto-signal-card'}" data-sym="${safeSymbol}" data-asset-class="${esc(assetInfo.assetClass || 'crypto_derivative')}">
  <button class="star-btn ${isPinned ? 'starred' : ''}" data-sym="${r.symbol}" title="${isPinned ? 'Unpin' : 'Pin'}">${isPinned ? '&#9733;' : '&#9734;'}</button>
 
  <div class="card-top">
@@ -1276,7 +1356,8 @@ function buildCard(r, isPinned, isChoppyRegime = false) {
  <div class="card-sym">${r.symbol}${r.spike ? ' [SPIKE]' : ''}${isPinned ? ' [PIN]' : ''}</div>
  ${productLine}
 
- <div class="card-meta">${vol} vol &middot; <span title="Funding Rate">FR</span>: <span class="${frClass}">${frStr}</span> &middot; <span class="card-sector">${esc(sec)}</span>${sessionHTML}${signalAgeHtml}${inPositionBadge}</div>
+ ${assetRibbon}
+ <div class="card-meta">${vol} vol &middot; <span title="Funding Rate">FR</span>: <span class="${frClass}">${frStr}</span> &middot; <span class="card-sector ${isRwa ? 'rwa' : ''}">${esc(sec)}</span>${sessionHTML}${signalAgeHtml}${inPositionBadge}</div>
 
  </div>
 

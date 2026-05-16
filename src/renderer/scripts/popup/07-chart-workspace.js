@@ -37,7 +37,9 @@
 
  const DS_V17_CHART_STATE_KEY = 'dsDetachedChartStateV17';
  const DS_V17_CHART_CACHE_KEY = 'dsChartCacheV17';
- const RESOLUTIONS = Object.freeze(['1m', '5m', '15m', '1h', '4h', '1d']);
+ let chartRuntimeCache = {};
+ let chartPersistentCacheCleared = false;
+ const RESOLUTIONS = Object.freeze(['1m', '5m', '15m', '1h', '4h', '1d', '1w']);
  const RESOLUTION_LABELS = Object.freeze({
  '1m': '1m',
  '5m': '5m',
@@ -45,6 +47,7 @@
  '1h': '1h',
  '4h': '4h',
  '1d': '1D',
+ '1w': '1W',
  });
  const TTL_MS = Object.freeze({
  '1m': 30000,
@@ -53,6 +56,7 @@
  '1h': 600000,
  '4h': 1800000,
  '1d': 14400000,
+ '1w': 43200000,
  });
  const DEFAULT_VISIBLE_COUNTS = Object.freeze({
  '1m': 260,
@@ -61,6 +65,7 @@
  '1h': 420,
  '4h': 520,
  '1d': 520,
+ '1w': 520,
  });
  const MAX_RENDER_CANDLES = 20000;
  const DEFAULT_OBV_SMA_LENGTH = 100;
@@ -71,23 +76,16 @@
  '1h': 120,
  '4h': 140,
  '1d': 140,
+ '1w': 80,
  });
  const PRESET_META = Object.freeze({
  clean: { id: 'clean', label: 'Clean', showEma: false, showSma: false, showKeyLevels: false },
- trend: { id: 'trend', label: 'Trend', showEma: true, showSma: true, showKeyLevels: false, showSupertrend: true },
- momentum: { id: 'momentum', label: 'Momentum', showEma: false, showSma: false, showKeyLevels: false, showRsi: true, showMacd: true },
  key: { id: 'key', label: 'Key Levels', showEma: false, showSma: false, showKeyLevels: true },
- trade: { id: 'trade', label: 'Trade Read', showEma: true, showSma: false, showKeyLevels: true, showVwap: true, showRsi: false, showMacd: false, showIntelligence: true },
- decision: { id: 'decision', label: 'Decision', showEma: true, showSma: false, showKeyLevels: true, showVwap: true, showRsi: false, showMacd: false, showIntelligence: true, showDecision: true },
- analysis: { id: 'analysis', label: 'Full Analysis', showEma: true, showSma: true, showKeyLevels: true, showVwap: true, showBollinger: true, showRsi: true, showMacd: true, showAtr: true, showIntelligence: true },
- ema: { id: 'ema', label: 'EMA', showEma: true, showSma: false, showKeyLevels: false },
- ema_obv: { id: 'ema_obv', label: 'EMA + OBV SMA', showEma: true, showSma: false, showKeyLevels: false, showObv: true, showObvSma: true },
+ decision: { id: 'decision', label: 'Decision', showEma: true, showSma: false, showKeyLevels: true, showObv: true, showObvSma: true, showIntelligence: true, showDecision: true },
+ ema_obv: { id: 'ema_obv', label: 'EMA + OBV', showEma: true, showSma: false, showKeyLevels: false, showObv: true, showObvSma: true },
  });
  const PRESET_GROUPS = Object.freeze([
- { label: 'Decision', presets: ['decision', 'trade'] },
- { label: 'Simple', presets: ['clean', 'key'] },
- { label: 'Technical', presets: ['ema_obv', 'ema', 'trend', 'momentum'] },
- { label: 'Advanced', presets: ['analysis'] },
+ { label: 'Chart Preset', presets: ['clean', 'decision', 'ema_obv'] },
  ]);
  const INDICATOR_DEFS = Object.freeze([
  { key: 'volume', label: 'Volume' },
@@ -100,6 +98,7 @@
  { key: 'macd', label: 'MACD' },
  { key: 'obv', label: 'OBV' },
  { key: 'atr', label: 'ATR' },
+ { key: 'darvas', label: 'Darvas Box' },
  ]);
  const DEFAULT_INDICATORS = Object.freeze({
  volume: true,
@@ -127,6 +126,31 @@
  obvSmaLength: DEFAULT_OBV_SMA_LENGTH,
  atr: false,
  atrRemoved: false,
+ darvas: false,
+ darvasRemoved: false,
+ });
+ const DARVAS_BOX_DEFAULTS = Object.freeze({
+ enabled: false,
+ lookback: 0,
+ confirmationCandles: 3,
+ volumeMultiplier: 1.5,
+ atrBreakoutBuffer: 0.10,
+ retestAtrTolerance: 0.25,
+ stopLossAtrBuffer: 0.25,
+ maxIntradayHeightPct: 5,
+ maxDailyHeightPct: 10,
+ showHistoricalBoxes: true,
+ maxBoxesVisible: 10,
+ showScannerDetails: true,
+ chartLabels: 'minimal',
+ showEntryLine: true,
+ showTargetLines: true,
+ showTargets: true,
+ showStopLoss: true,
+ showTooltip: true,
+ showFailedBoxes: true,
+ showWeakBreakoutBoxes: true,
+ showOnlyHighQuality: false,
  });
  const SURFACE_PREVIEW = 'preview';
  const SURFACE_DETACHED = 'detached';
@@ -140,9 +164,13 @@
  const CHART_RENDER_DEBOUNCE_MS = 90;
  const CHART_MARKET_SYMBOLS_KEY = 'dsChartMarketSymbolsV17';
  const CHART_MARKET_SYMBOLS_TTL_MS = 6 * 60 * 60 * 1000;
+ const FWD_INDEX_HISTORY_CACHE_KEY = 'dsFwdIndexDailyHistoryV17';
+ const FWD_INDEX_HISTORY_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+ const FWD_INDEX_MAX_HISTORY_CANDIDATES = 360;
  const FWD_INDEX_CHART_HISTORY_LIMIT = 5000;
- const FWD_INDEX_SYMBOL = 'FWD10';
- const FWD_INDEX_ALIASES = Object.freeze(['FWD10', 'FWD-10', 'FWD10INDEX', 'FWD-10INDEX', 'F10', 'FWDINDEX']);
+ const FWD_INDEX_DAILY_HISTORY_LIMIT = 730;
+ const FWD_INDEX_SYMBOL = 'FWD100';
+ const FWD_INDEX_ALIASES = Object.freeze(['FWD100', 'FWD-100', 'FWD100INDEX', 'FWD-100INDEX', 'F100', 'FWD10', 'FWD-10', 'FWD10INDEX', 'FWD-10INDEX', 'F10', 'FWDINDEX']);
  let chartMarketSymbolsCache = null;
  let chartMarketSymbolsPromise = null;
  const detachedSurface = {
@@ -283,8 +311,9 @@
  })
  .filter(product => product.symbol)
  .sort((a, b) => a.symbol.localeCompare(b.symbol));
+ const indexProduct = { symbol: FWD_INDEX_SYMBOL, name: 'FWD-100 Equal-Weight Index', description: 'FWD-100 Equal-Weight Index', instrumentDescription: 'FWD-100 Equal-Weight Index', sector: 'Market Index', synthetic: true };
  const withIndex = [
- { symbol: FWD_INDEX_SYMBOL, name: 'FWD-10 INDEX', sector: 'Market Index', synthetic: true },
+ indexProduct,
  ...products.filter(product => product.symbol !== FWD_INDEX_SYMBOL),
  ];
  if (withIndex.length) {
@@ -292,7 +321,7 @@
  await localSet({ [CHART_MARKET_SYMBOLS_KEY]: { products: withIndex, fetchedAt: Date.now() } });
  return withIndex;
  }
- chartMarketSymbolsCache = [{ symbol: FWD_INDEX_SYMBOL, name: 'FWD-10 INDEX', sector: 'Market Index', synthetic: true }, ...cachedRows.filter(product => product.symbol !== FWD_INDEX_SYMBOL)];
+ chartMarketSymbolsCache = [indexProduct, ...cachedRows.filter(product => product.symbol !== FWD_INDEX_SYMBOL)];
  return chartMarketSymbolsCache;
  })().finally(() => {
  chartMarketSymbolsPromise = null;
@@ -478,16 +507,20 @@
 
  function normalizeTimeframe(value = '') {
  const next = String(value || '').trim().toLowerCase();
+ if (next === 'w' || next === '1wk' || next === 'week' || next === 'weekly') return '1w';
  if (next === '1d') return '1d';
  return RESOLUTIONS.includes(next) ? next : '5m';
  }
 
  function normalizePreset(value = '') {
  const preset = String(value || '').trim().toLowerCase();
- if (preset === 'traderead' || preset === 'trade-read') return 'trade';
+ if (preset === 'traderead' || preset === 'trade-read' || preset === 'trade') return 'decision';
  if (preset === 'decisionworkflow' || preset === 'decision-workflow') return 'decision';
  if (preset === 'ema-obv' || preset === 'emaobv' || preset === 'ema_obv_sma') return 'ema_obv';
- return PRESET_META[preset] ? preset : 'clean';
+ if (preset === 'trend' || preset === 'momentum' || preset === 'analysis' || preset === 'full-analysis' || preset === 'ema') return 'ema_obv';
+ if (preset === 'clean') return 'clean';
+ if (preset === 'key' || preset === 'key-levels') return 'key';
+ return PRESET_META[preset] ? preset : 'decision';
  }
 
  function normalizeContextTab(value = '') {
@@ -519,6 +552,35 @@
  const symbol = String(raw.symbol || '').trim().toUpperCase();
  const hasLine = entry > 0 || stopLoss > 0 || takeProfit > 0;
  if (!hasLine && !symbol) return null;
+ const rawDarvasBox = raw.darvasBox && typeof raw.darvasBox === 'object' ? raw.darvasBox : null;
+ const darvasTop = Number(rawDarvasBox?.top || rawDarvasBox?.boxTop || 0);
+ const darvasBottom = Number(rawDarvasBox?.bottom || rawDarvasBox?.boxBottom || 0);
+ const darvasBox = darvasTop > 0 && darvasBottom > 0 && darvasTop > darvasBottom
+ ? {
+  top: darvasTop,
+  bottom: darvasBottom,
+  age: Math.max(2, Math.min(200, Math.round(Number(rawDarvasBox?.age || rawDarvasBox?.boxAge || 24) || 24))),
+  eventType: String(rawDarvasBox?.eventType || '').trim().toLowerCase(),
+  label: String(rawDarvasBox?.label || 'Darvas Box').trim(),
+  status: String(rawDarvasBox?.status || '').trim(),
+  score: clampNumber(rawDarvasBox?.score || rawDarvasBox?.breakoutScore, 0, 0, 100, 0),
+  quality: String(rawDarvasBox?.quality || '').trim(),
+  heightPercent: clampNumber(rawDarvasBox?.heightPercent || rawDarvasBox?.boxHeightPct, 0, 0, 500, 2),
+  volumeConfirmed: rawDarvasBox?.volumeConfirmed === true,
+  volumeRatio: Number(rawDarvasBox?.volumeRatio || 0) || 0,
+  riskPercent: clampNumber(rawDarvasBox?.riskPercent || rawDarvasBox?.riskPct, 0, 0, 500, 2),
+  stopLoss: Number(rawDarvasBox?.stopLoss || rawDarvasBox?.sl || 0) || 0,
+  target1: Number(rawDarvasBox?.target1 || rawDarvasBox?.t1 || 0) || 0,
+  target2: Number(rawDarvasBox?.target2 || rawDarvasBox?.t2 || 0) || 0,
+  reason: String(rawDarvasBox?.reason || '').trim().slice(0, 360),
+  startTime: normalizeTsMs(rawDarvasBox?.startTime || rawDarvasBox?.fromTime || 0),
+  endTime: normalizeTsMs(rawDarvasBox?.endTime || rawDarvasBox?.toTime || 0),
+  formedAt: normalizeTsMs(rawDarvasBox?.formedAt || rawDarvasBox?.confirmedAt || 0),
+  breakoutAt: normalizeTsMs(rawDarvasBox?.breakoutAt || 0),
+  retestAt: normalizeTsMs(rawDarvasBox?.retestAt || 0),
+  failedAt: normalizeTsMs(rawDarvasBox?.failedAt || 0),
+ }
+ : null;
  return {
  symbol,
  side,
@@ -528,7 +590,10 @@
  size: Math.max(0, Number(raw.size || 0) || 0),
  sizeMode: String(raw.sizeMode || 'contracts').trim().toLowerCase() || 'contracts',
  orderType: String(raw.orderType || 'market_order').trim().toLowerCase() || 'market_order',
+ source: String(raw.source || '').trim().slice(0, 80),
+ note: String(raw.note || '').trim().slice(0, 240),
  updatedAt: clampNumber(raw.updatedAt, Date.now(), 0, Number.MAX_SAFE_INTEGER, 0),
+ ...(darvasBox ? { darvasBox } : {}),
  };
  }
 
@@ -650,6 +715,7 @@
  '1h': 60 * 60 * 1000,
  '4h': 4 * 60 * 60 * 1000,
  '1d': 24 * 60 * 60 * 1000,
+ '1w': 7 * 24 * 60 * 60 * 1000,
  };
  return map[normalizeTimeframe(resolution)] || map['5m'];
  }
@@ -706,6 +772,9 @@
  kind: String(line.kind || '').trim().toLowerCase() || '',
  source: String(line.source || '').trim().toLowerCase() || '',
  meta: String(line.meta || '').trim(),
+ orderId: String(line.orderId || line.id || '').trim(),
+ clientOrderId: String(line.clientOrderId || '').trim(),
+ role: String(line.role || line.kind || line.tone || '').trim().toLowerCase(),
  };
  }
 
@@ -722,6 +791,14 @@
  role: String(order.role || '').trim().toLowerCase(),
  side: String(order.side || '').trim().toLowerCase(),
  reduceOnly: !!order.reduceOnly,
+ productId: Number(order.productId || 0),
+ state: String(order.state || '').trim().toLowerCase(),
+ orderType: String(order.orderType || order.type || '').trim().toLowerCase(),
+ stopOrderType: String(order.stopOrderType || '').trim().toLowerCase(),
+ postOnly: order.postOnly === true,
+ remainingSize: Number(order.remainingSize || order.unfilledSize || order.size || 0) || 0,
+ size: Number(order.size || order.remainingSize || order.unfilledSize || 0) || 0,
+ price: Number(order.price || order.limitPrice || order.stopPrice || 0) || 0,
  limitPrice: Number(order.limitPrice || 0),
  stopPrice: Number(order.stopPrice || 0),
  }))
@@ -756,6 +833,39 @@
  function normalizeIndicatorStyle(raw = '') {
  const value = String(raw || '').trim().toLowerCase();
  return value === 'clean' ? 'clean' : 'tradingview';
+ }
+
+ function defaultDarvasLookback(timeframe = '15m') {
+ const tf = normalizeTimeframe(timeframe || '15m');
+ return tf === '1d' || tf === '1w' ? 50 : 20;
+ }
+
+ function sanitizeDarvasBoxSettings(value = {}, timeframe = '15m') {
+ const raw = value && typeof value === 'object' ? value : {};
+ return {
+ enabled: Object.prototype.hasOwnProperty.call(raw, 'enabled') ? raw.enabled !== false : DARVAS_BOX_DEFAULTS.enabled,
+ lookback: clampNumber(raw.lookback, DARVAS_BOX_DEFAULTS.lookback, 0, 160, 0),
+ confirmationCandles: clampNumber(raw.confirmationCandles, DARVAS_BOX_DEFAULTS.confirmationCandles, 2, 8, 0),
+ volumeMultiplier: clampNumber(raw.volumeMultiplier, DARVAS_BOX_DEFAULTS.volumeMultiplier, 0.5, 5, 2),
+ atrBreakoutBuffer: clampNumber(raw.atrBreakoutBuffer, DARVAS_BOX_DEFAULTS.atrBreakoutBuffer, 0, 2, 2),
+ retestAtrTolerance: clampNumber(raw.retestAtrTolerance, DARVAS_BOX_DEFAULTS.retestAtrTolerance, 0.05, 2, 2),
+ stopLossAtrBuffer: clampNumber(raw.stopLossAtrBuffer, DARVAS_BOX_DEFAULTS.stopLossAtrBuffer, 0, 2, 2),
+ maxIntradayHeightPct: clampNumber(raw.maxIntradayHeightPct, DARVAS_BOX_DEFAULTS.maxIntradayHeightPct, 1, 25, 1),
+ maxDailyHeightPct: clampNumber(raw.maxDailyHeightPct, DARVAS_BOX_DEFAULTS.maxDailyHeightPct, 2, 40, 1),
+ showHistoricalBoxes: Object.prototype.hasOwnProperty.call(raw, 'showHistoricalBoxes') ? raw.showHistoricalBoxes !== false : DARVAS_BOX_DEFAULTS.showHistoricalBoxes,
+ maxBoxesVisible: clampNumber(raw.maxBoxesVisible, DARVAS_BOX_DEFAULTS.maxBoxesVisible, 1, 50, 0),
+ showScannerDetails: Object.prototype.hasOwnProperty.call(raw, 'showScannerDetails') ? raw.showScannerDetails !== false : DARVAS_BOX_DEFAULTS.showScannerDetails,
+ chartLabels: String(raw.chartLabels || DARVAS_BOX_DEFAULTS.chartLabels).trim().toLowerCase() === 'detailed' ? 'detailed' : 'minimal',
+ showEntryLine: Object.prototype.hasOwnProperty.call(raw, 'showEntryLine') ? raw.showEntryLine !== false : DARVAS_BOX_DEFAULTS.showEntryLine,
+ showTargetLines: Object.prototype.hasOwnProperty.call(raw, 'showTargetLines') ? raw.showTargetLines !== false : DARVAS_BOX_DEFAULTS.showTargetLines,
+ showTargets: Object.prototype.hasOwnProperty.call(raw, 'showTargets') ? raw.showTargets !== false : DARVAS_BOX_DEFAULTS.showTargets,
+ showStopLoss: Object.prototype.hasOwnProperty.call(raw, 'showStopLoss') ? raw.showStopLoss !== false : DARVAS_BOX_DEFAULTS.showStopLoss,
+ showTooltip: Object.prototype.hasOwnProperty.call(raw, 'showTooltip') ? raw.showTooltip !== false : DARVAS_BOX_DEFAULTS.showTooltip,
+ showFailedBoxes: Object.prototype.hasOwnProperty.call(raw, 'showFailedBoxes') ? raw.showFailedBoxes !== false : DARVAS_BOX_DEFAULTS.showFailedBoxes,
+ showWeakBreakoutBoxes: Object.prototype.hasOwnProperty.call(raw, 'showWeakBreakoutBoxes') ? raw.showWeakBreakoutBoxes !== false : DARVAS_BOX_DEFAULTS.showWeakBreakoutBoxes,
+ showOnlyHighQuality: raw.showOnlyHighQuality === true,
+ activeLookback: Number(raw.lookback || 0) > 0 ? clampNumber(raw.lookback, defaultDarvasLookback(timeframe), 5, 160, 0) : defaultDarvasLookback(timeframe),
+ };
  }
 
  const CHART_REVIEW_TAB_LIMIT = 16;
@@ -815,6 +925,7 @@
  replayMode: null,
  chartTradingDraft: null,
  chartTradingMode: 'select',
+ chartTradingToolsOpen: false,
  orderContext: null,
  refreshNonce: 0,
  uiMode: 'default',
@@ -837,7 +948,9 @@
  showReadout: false,
  showIndicatorLegend: true,
  showGrid: false,
+ compareWithIndex: true,
  hideEventCandles: true,
+ darvasSettings: sanitizeDarvasBoxSettings({}, '15m'),
  chartReviewTabs: [],
  activeChartReviewTabId: '',
  chartReviewOverlayOpen: false,
@@ -877,6 +990,7 @@
  replayMode: normalizeReplayMode(raw.replayMode),
  chartTradingDraft: normalizeChartTradingDraft(raw.chartTradingDraft),
  chartTradingMode: normalizeChartTradingMode(raw.chartTradingMode || base.chartTradingMode),
+ chartTradingToolsOpen: Object.prototype.hasOwnProperty.call(raw, 'chartTradingToolsOpen') ? raw.chartTradingToolsOpen === true : base.chartTradingToolsOpen === true,
  orderContext: normalizeOrderContext(raw.orderContext),
  refreshNonce: clampNumber(raw.refreshNonce, 0, 0, Number.MAX_SAFE_INTEGER, 0),
  uiMode,
@@ -899,7 +1013,9 @@
  showReadout: Object.prototype.hasOwnProperty.call(raw, 'showReadout') ? raw.showReadout === true : base.showReadout === true,
  showIndicatorLegend: Object.prototype.hasOwnProperty.call(raw, 'showIndicatorLegend') ? raw.showIndicatorLegend !== false : base.showIndicatorLegend !== false,
  showGrid: Object.prototype.hasOwnProperty.call(raw, 'showGrid') ? raw.showGrid === true : base.showGrid === true,
+ compareWithIndex: Object.prototype.hasOwnProperty.call(raw, 'compareWithIndex') ? raw.compareWithIndex !== false : base.compareWithIndex !== false,
  hideEventCandles: Object.prototype.hasOwnProperty.call(raw, 'hideEventCandles') ? raw.hideEventCandles === true : base.hideEventCandles === true,
+ darvasSettings: sanitizeDarvasBoxSettings(raw.darvasSettings || base.darvasSettings, timeframe),
  chartReviewTabs: sanitizeChartReviewTabs(raw.chartReviewTabs || base.chartReviewTabs),
  activeChartReviewTabId: String(raw.activeChartReviewTabId || '').trim(),
  chartReviewOverlayOpen: raw.chartReviewOverlayOpen === true,
@@ -989,10 +1105,10 @@
  .sort((a, b) => scoreSignalForChart(b) - scoreSignalForChart(a))[0] || null;
  }
 
- function signalTimeframe(signal = {}, fallback = '5m') {
+function signalTimeframe(signal = {}, fallback = '5m') {
  const lowerLabel = String(signal?.lower?.label || '').trim().toLowerCase();
- return normalizeTimeframe(lowerLabel || signal?.timeframe || fallback || '5m');
- }
+ return normalizeTimeframe(lowerLabel || signal?.timeframe || signal?.raw?.timeframe || fallback || '5m');
+}
 
  async function setChartSymbolFromSignal(signal = {}, options = {}) {
  const symbol = String(signal?.symbol || options.symbol || '').trim().toUpperCase();
@@ -1043,6 +1159,7 @@
  replayMode: null,
  chartTradingDraft: providedDraft || null,
  chartTradingMode: providedDraft ? 'adjust' : 'select',
+ chartTradingToolsOpen: !!providedDraft,
  chartViewMode: options.chartViewMode || current.chartViewMode || 'tab',
  uiMode: 'default',
  rightPanelOpen: hasOption('rightPanelOpen') ? options.rightPanelOpen !== false : current.rightPanelOpen !== false,
@@ -1165,6 +1282,7 @@
  preset: current.preset || 'clean',
  timeframe: current.timeframe || '15m',
  chartTradingDraft: tab.chartTradingDraft || null,
+ chartTradingToolsOpen: !!tab.chartTradingDraft,
  showOrders: current.showOrders,
  showVwap: current.showVwap,
  rightPanelOpen: current.rightPanelOpen,
@@ -1294,13 +1412,15 @@
  }
 
  async function readChartCache() {
- const data = await localGet([DS_V17_CHART_CACHE_KEY]);
- return data?.[DS_V17_CHART_CACHE_KEY] || {};
+ if (!chartPersistentCacheCleared) {
+  chartPersistentCacheCleared = true;
+  localSet({ [DS_V17_CHART_CACHE_KEY]: {} }).catch(() => {});
+ }
+ return chartRuntimeCache || {};
  }
 
  async function writeChartCacheEntry(cacheKey, payload = {}) {
- const cache = await readChartCache();
- const nextCache = { ...(cache || {}) };
+ const nextCache = { ...(chartRuntimeCache || {}) };
  nextCache[cacheKey] = payload;
  Object.keys(nextCache).forEach(key => {
  const entry = nextCache[key];
@@ -1308,7 +1428,9 @@
  const ttl = (TTL_MS[timeframe] || 60000) * 4;
  if ((Date.now() - Number(entry?.fetchedAt || 0)) > ttl) delete nextCache[key];
  });
- await localSet({ [DS_V17_CHART_CACHE_KEY]: nextCache });
+ chartRuntimeCache = Object.fromEntries(Object.entries(nextCache)
+ .sort((a, b) => Number(b[1]?.fetchedAt || 0) - Number(a[1]?.fetchedAt || 0))
+ .slice(0, 8));
  }
 
  function cacheEntryFresh(entry = null, timeframe = '5m') {
@@ -1348,18 +1470,40 @@
  }
 
  function normalizeKeyZone(zone = {}, fallbackKind = 'support', tfLabel = '') {
- const price = Number(zone.price || zone.center || 0);
- const zoneLow = Number(zone.zoneLow || zone.low || price || 0);
- const zoneHigh = Number(zone.zoneHigh || zone.high || price || 0);
+ const price = Number(zone.price || zone.mid || zone.center || 0);
+ const zoneLow = Number(zone.zoneLow || zone.lower || zone.low || price || 0);
+ const zoneHigh = Number(zone.zoneHigh || zone.upper || zone.high || price || 0);
  if (!(price > 0) || !(zoneLow > 0) || !(zoneHigh > 0)) return null;
+ const rawType = String(zone.type || zone.kind || fallbackKind || '').trim().toLowerCase();
+ const kind = rawType.includes('resistance') ? 'resistance' : rawType.includes('support') ? 'support' : (String(fallbackKind || '').trim().toLowerCase() === 'resistance' ? 'resistance' : 'support');
+ const touches = Number(zone.touches || zone.touch_count || zone.count || 0);
+ const rawStrengthPct = Number(zone.strengthPct || zone.percentStrength || 0);
  return {
  price,
  zoneLow: Math.min(zoneLow, zoneHigh),
  zoneHigh: Math.max(zoneLow, zoneHigh),
- touches: Number(zone.touches || zone.count || 0),
- strengthPct: Number(zone.strengthPct || zone.percentStrength || zone.strength || 0),
+ upper: Math.max(zoneLow, zoneHigh),
+ lower: Math.min(zoneLow, zoneHigh),
+ mid: price,
+ touches,
+ touch_count: touches,
+ strengthPct: Number.isFinite(rawStrengthPct) ? rawStrengthPct : 0,
+ score: Number(zone.score || zone.smartScore || 0),
+ smartScore: Number(zone.smartScore || zone.score || 0),
+ strengthLabel: String(zone.strength || zone.strengthLabel || '').trim(),
  tf: String(zone.tf || tfLabel || '').trim() || tfLabel,
- kind: String(zone.kind || fallbackKind || '').trim().toLowerCase() === 'resistance' ? 'resistance' : 'support',
+ kind,
+ type: kind === 'resistance' ? 'Resistance' : 'Support',
+ color: String(zone.color || '').trim(),
+ colorRole: String(zone.colorRole || '').trim(),
+ roleLabel: String(zone.roleLabel || '').trim(),
+ label: String(zone.label || '').trim(),
+ rejectionCount: Number(zone.rejectionCount || 0),
+ rejectionStrength: Number(zone.rejectionStrength || 0),
+ breakoutRetests: Number(zone.breakoutRetests || zone.retestCount || 0),
+ consolidationBars: Number(zone.consolidationBars || 0),
+ volumeScore: Number(zone.volumeScore || 0),
+ volumeRatio: Number(zone.volumeRatio || 0),
  sourcePivots: Array.isArray(zone.sourcePivots || zone.pivots)
  ? (zone.sourcePivots || zone.pivots).map(pivot => ({
  price: Number(pivot.price || 0),
@@ -1378,8 +1522,14 @@
  support: Array.isArray(tfValue?.support) ? tfValue.support.map(zone => normalizeKeyZone(zone, 'support', tfLabel)).filter(Boolean) : [],
  };
  });
+ const normalizeLevelArray = (value = []) => Array.isArray(value)
+ ? value.map(zone => normalizeKeyZone(zone, zone?.kind || zone?.type || 'support', zone?.tf || 'combined')).filter(Boolean)
+ : [];
  return {
  ...keyLevels,
+ levels: normalizeLevelArray(keyLevels.levels || []),
+ smartLevels: normalizeLevelArray(keyLevels.smartLevels || []),
+ majorLevels: normalizeLevelArray(keyLevels.majorLevels || []),
  byTimeframe,
  config: {
  ...sanitizeKeyLevelSettings(keyLevels?.config || keyLevels?.settings || {}),
@@ -1392,13 +1542,393 @@
  return Number.isFinite(numeric) ? numeric : fallback;
  }
 
+ function fwdIndexDayKey(ts = 0) {
+ const date = new Date(normalizeTsMs(ts));
+ if (!(date.getTime() > 0)) return '';
+ return date.toISOString().slice(0, 10);
+ }
+
+ function fwdIndexDayTs(day = '') {
+ const ts = Date.parse(`${day}T00:00:00.000Z`);
+ return Number.isFinite(ts) ? ts : 0;
+ }
+
+ function fwdIndexBaseSymbol(symbol = '') {
+ const normalized = String(symbol || '').trim().toUpperCase();
+ if (normalized.endsWith('USDT')) return normalized.slice(0, -4);
+ if (normalized.endsWith('USD')) return normalized.slice(0, -3);
+ return normalized;
+ }
+
+ function isFwdIndexEligibleHistorySymbol(symbol = '') {
+ const normalized = String(symbol || '').trim().toUpperCase();
+ if (!normalized || isFwdIndexSymbol(normalized)) return false;
+ if (!/USD(T)?$/.test(normalized)) return false;
+ if (/[0-9]{6,}/.test(normalized)) return false;
+ const base = fwdIndexBaseSymbol(normalized);
+ if (!base || /DOM$/.test(base)) return false;
+ return !new Set(['USDT', 'USDC', 'BUSD', 'DAI', 'FDUSD', 'TUSD', 'USDP', 'PYUSD', 'GUSD', 'PAXG', 'XAUT', 'XAN', 'SLVON', 'BTCDOM']).has(base);
+ }
+
+ function fwdIndexConfiguredCount(marketIndex = null) {
+ const sanitized = typeof shared.sanitizeMarketIndexSettings === 'function'
+ ? shared.sanitizeMarketIndexSettings({ maxConstituents: marketIndex?.configuredMaxConstituents || marketIndex?.topCount || marketIndex?.topCoins?.length || 10 })
+ : { maxConstituents: Math.max(3, Math.min(100, Number(marketIndex?.configuredMaxConstituents || marketIndex?.topCoins?.length || 10) || 10)) };
+ return Math.max(3, Math.min(100, Math.round(Number(sanitized.maxConstituents || 10) || 10)));
+ }
+
+ function fwdIndexDisplayName(marketIndex = null) {
+ return `FWD-${fwdIndexConfiguredCount(marketIndex)} Equal-Weight Index`;
+ }
+
+ function fwdIndexExcludedSymbols(marketIndex = null) {
+ return new Set((Array.isArray(marketIndex?.excludedSymbols) ? marketIndex.excludedSymbols : [])
+ .map(symbol => String(symbol || '').trim().toUpperCase())
+ .filter(Boolean));
+ }
+
+ function isFwdIndexManuallyExcluded(symbol = '', excludedSymbols = new Set()) {
+ const normalized = String(symbol || '').trim().toUpperCase();
+ const base = fwdIndexBaseSymbol(normalized);
+ return excludedSymbols.has(normalized) || excludedSymbols.has(base);
+ }
+
+ function uniqueFwdIndexSymbols(symbols = []) {
+ const seen = new Set();
+ const output = [];
+ (Array.isArray(symbols) ? symbols : []).forEach(symbol => {
+ const normalized = String(symbol || '').trim().toUpperCase();
+ if (!normalized || seen.has(normalized)) return;
+ seen.add(normalized);
+ output.push(normalized);
+ });
+ return output;
+ }
+
+ async function fwdIndexHistoryCandidateSymbols(marketIndex = null) {
+ const excludedSymbols = fwdIndexExcludedSymbols(marketIndex);
+ const topSymbols = (Array.isArray(marketIndex?.topCoins) ? marketIndex.topCoins : [])
+ .map(coin => String(coin?.sym || coin?.symbol || '').trim().toUpperCase());
+ const products = await loadChartMarketSymbols(false).catch(() => []);
+ const productSymbols = (Array.isArray(products) ? products : [])
+ .map(product => String(product?.symbol || product || '').trim().toUpperCase());
+ return uniqueFwdIndexSymbols([...topSymbols, ...productSymbols])
+ .filter(symbol => isFwdIndexEligibleHistorySymbol(symbol) && !isFwdIndexManuallyExcluded(symbol, excludedSymbols))
+ .slice(0, FWD_INDEX_MAX_HISTORY_CANDIDATES);
+ }
+
+ function medianChartValue(values = [], fallback = 0) {
+ const cleaned = (Array.isArray(values) ? values : [])
+ .map(value => Number(value))
+ .filter(Number.isFinite)
+ .sort((a, b) => a - b);
+ if (!cleaned.length) return fallback;
+ const middle = Math.floor(cleaned.length / 2);
+ return cleaned.length % 2 ? cleaned[middle] : (cleaned[middle - 1] + cleaned[middle]) / 2;
+ }
+
+ function clampChartReturn(value, min, max) {
+ const numeric = Number(value);
+ if (!Number.isFinite(numeric)) return 0;
+ return Math.max(min, Math.min(max, numeric));
+ }
+
+ function isUsableIndexCandle(candle = {}) {
+ const open = Number(candle.open);
+ const high = Number(candle.high);
+ const low = Number(candle.low);
+ const close = Number(candle.close);
+ if (!(open > 0) || !(high > 0) || !(low > 0) || !(close > 0)) return false;
+ if (high < Math.max(open, close) || low > Math.min(open, close)) return false;
+ if ((high / Math.max(low, 0.0000001)) > 1.8) return false;
+ return true;
+ }
+
+ function fwdIndexHistoryCacheKey(marketIndex = null, symbols = []) {
+ const excluded = Array.from(fwdIndexExcludedSymbols(marketIndex)).sort().join(',');
+ return [
+ `max:${fwdIndexConfiguredCount(marketIndex)}`,
+ `excluded:${excluded}`,
+ `symbols:${uniqueFwdIndexSymbols(symbols).join(',')}`,
+ ].join('|');
+ }
+
+ function scaleFwdIndexCandlesToComposite(candles = [], marketIndex = null) {
+ const rows = (Array.isArray(candles) ? candles : []).map(normalizeCandle).filter(candle => candle.time > 0 && candle.close > 0);
+ const targetClose = finiteChartNumber(marketIndex?.composite, 0);
+ const lastClose = finiteChartNumber(rows[rows.length - 1]?.close, 0);
+ if (!(targetClose > 0) || !(lastClose > 0)) return rows;
+ const scale = targetClose / lastClose;
+ return rows.map(candle => normalizeCandle({
+ ...candle,
+ open: candle.open * scale,
+ high: candle.high * scale,
+ low: candle.low * scale,
+ close: candle.close * scale,
+ volume: candle.volume,
+ }));
+ }
+
+ async function readFwdIndexHistoryCache(cacheKey = '', marketIndex = null) {
+ const data = await localGet([FWD_INDEX_HISTORY_CACHE_KEY]);
+ const cache = data?.[FWD_INDEX_HISTORY_CACHE_KEY] || null;
+ if (!cache || cache.key !== cacheKey || !Array.isArray(cache.candles) || !cache.candles.length) return null;
+ const stale = (Date.now() - Number(cache.generatedAt || 0)) > FWD_INDEX_HISTORY_CACHE_TTL_MS;
+ const candles = scaleFwdIndexCandlesToComposite(cache.candles, marketIndex);
+ return candles.length >= 20 ? {
+ candles,
+ stale,
+ metadata: cache.metadata || {},
+ generatedAt: Number(cache.generatedAt || 0),
+ fromCache: true,
+ } : null;
+ }
+
+ async function writeFwdIndexHistoryCache(cacheKey = '', candles = [], metadata = {}) {
+ if (!cacheKey || !Array.isArray(candles) || candles.length < 20) return;
+ await localSet({
+ [FWD_INDEX_HISTORY_CACHE_KEY]: {
+ key: cacheKey,
+ candles: candles.map(normalizeCandle).filter(candle => candle.time > 0 && candle.close > 0),
+ metadata,
+ generatedAt: Date.now(),
+ },
+ });
+ }
+
+ async function mapFwdIndexLimit(items = [], limit = 8, worker = async value => value) {
+ const rows = Array.isArray(items) ? items : [];
+ const output = new Array(rows.length);
+ let cursor = 0;
+ const workerCount = Math.max(1, Math.min(Math.max(1, Number(limit || 1)), rows.length || 1));
+ await Promise.all(Array.from({ length: workerCount }, async () => {
+ while (cursor < rows.length) {
+ const index = cursor;
+ cursor += 1;
+ try {
+ output[index] = await worker(rows[index], index);
+ } catch (_) {
+ output[index] = null;
+ }
+ }
+ }));
+ return output;
+ }
+
+ async function buildFwdIndexDailyCandlesFromConstituents(marketIndex = null) {
+ const maxCount = fwdIndexConfiguredCount(marketIndex);
+ const symbols = await fwdIndexHistoryCandidateSymbols(marketIndex);
+ if (!symbols.length) return { candles: [], metadata: { maxCount, candidateCount: 0, mode: 'no_candidates' } };
+ const cacheKey = fwdIndexHistoryCacheKey(marketIndex, symbols);
+ const cached = await readFwdIndexHistoryCache(cacheKey, marketIndex);
+ if (cached && !cached.stale) return {
+ candles: cached.candles,
+ metadata: {
+ ...cached.metadata,
+ maxCount,
+ candidateCount: symbols.length,
+ fromCache: true,
+ mode: cached.metadata?.mode || 'historical_daily_liquidity_ranked',
+ },
+ };
+ const responses = await mapFwdIndexLimit(symbols, 8, symbol => runtimeSend('v16:getPublicCandles', {
+ symbol,
+ resolution: '1d',
+ limit: FWD_INDEX_DAILY_HISTORY_LIMIT + 5,
+ }));
+ const bySymbol = responses.map((response, index) => ({
+ symbol: symbols[index],
+ rows: (Array.isArray(response?.candles) ? response.candles : [])
+ .map(normalizeCandle)
+ .filter(candle => candle.time > 0 && isUsableIndexCandle(candle))
+ .sort((a, b) => a.time - b.time)
+ .slice(-FWD_INDEX_DAILY_HISTORY_LIMIT - 5),
+ })).filter(item => item.rows.length >= 20);
+ if (!bySymbol.length) return { candles: cached?.candles || [], metadata: { maxCount, candidateCount: symbols.length, mode: 'no_candle_coverage', fromCache: !!cached } };
+ const maps = bySymbol.map(item => ({
+ symbol: item.symbol,
+ days: new Map(item.rows.map(candle => [fwdIndexDayKey(candle.time), candle])),
+ }));
+ const allDays = Array.from(new Set(maps.flatMap(item => Array.from(item.days.keys()))))
+ .filter(Boolean)
+ .sort()
+ .slice(-FWD_INDEX_DAILY_HISTORY_LIMIT - 1);
+ const minCoverage = Math.max(3, Math.min(maxCount, Math.ceil(maxCount * 0.6)));
+ const output = [];
+ let composite = 10000;
+ let previousDay = '';
+ allDays.forEach(day => {
+ if (!previousDay) {
+ previousDay = day;
+ return;
+ }
+ const legs = maps.map(item => {
+ const prev = item.days.get(previousDay);
+ const current = item.days.get(day);
+ if (!prev || !current || !(prev.close > 0) || !(current.close > 0)) return null;
+ const closeReturn = (current.close / prev.close) - 1;
+ if (!Number.isFinite(closeReturn) || Math.abs(closeReturn) > 0.35) return null;
+ const avgPrice = Math.max(0.0000001, (current.high + current.low + current.close) / 3);
+ return {
+ symbol: item.symbol,
+ closeReturn: clampChartReturn(closeReturn, -0.35, 0.35),
+ highReturn: clampChartReturn((current.high / prev.close) - 1, -0.35, 0.45),
+ lowReturn: clampChartReturn((current.low / prev.close) - 1, -0.45, 0.35),
+ volume: Number(current.volume || 0),
+ dollarVolume: Math.max(0, Number(current.volume || 0) * avgPrice),
+ };
+ }).filter(Boolean);
+ const selected = legs
+ .sort((a, b) => Number(b.dollarVolume || 0) - Number(a.dollarVolume || 0))
+ .slice(0, maxCount);
+ if (selected.length >= minCoverage) {
+ const average = key => selected.reduce((sum, leg) => sum + Number(leg[key] || 0), 0) / Math.max(1, selected.length);
+ const open = composite;
+ const close = composite * (1 + average('closeReturn'));
+ const high = Math.max(open, close, composite * (1 + average('highReturn')));
+ const low = Math.max(1, Math.min(open, close, composite * (1 + average('lowReturn'))));
+ output.push(normalizeCandle({
+ time: fwdIndexDayTs(day),
+ open,
+ high,
+ low,
+ close,
+ volume: selected.reduce((sum, leg) => sum + Number(leg.volume || 0), 0) / Math.max(1, selected.length),
+ }));
+ composite = close;
+ }
+ previousDay = day;
+ });
+ const rawCandles = output.slice(-FWD_INDEX_DAILY_HISTORY_LIMIT);
+ const metadata = {
+ mode: 'historical_daily_liquidity_ranked',
+ maxCount,
+ candidateCount: symbols.length,
+ fetchedCount: bySymbol.length,
+ minCoverage,
+ firstDay: rawCandles[0] ? fwdIndexDayKey(rawCandles[0].time) : '',
+ lastDay: rawCandles[rawCandles.length - 1] ? fwdIndexDayKey(rawCandles[rawCandles.length - 1].time) : '',
+ };
+ if (rawCandles.length >= 20) await writeFwdIndexHistoryCache(cacheKey, rawCandles, metadata);
+ const candles = scaleFwdIndexCandlesToComposite(rawCandles.length >= 20 ? rawCandles : (cached?.candles || []), marketIndex);
+ return {
+ candles,
+ metadata: rawCandles.length >= 20 ? metadata : { ...metadata, fromCache: !!cached, mode: cached?.metadata?.mode || 'insufficient_rebuild_coverage' },
+ };
+ }
+
+ function dailyReturnMapFromCandles(candles = []) {
+ const rows = (Array.isArray(candles) ? candles : [])
+ .map(normalizeCandle)
+ .filter(candle => candle.time > 0 && candle.close > 0)
+ .sort((a, b) => a.time - b.time);
+ const map = new Map();
+ for (let index = 1; index < rows.length; index += 1) {
+ const prev = rows[index - 1];
+ const current = rows[index];
+ if (!(prev?.close > 0) || !(current?.close > 0)) continue;
+ const value = (current.close / prev.close) - 1;
+ if (Number.isFinite(value) && Math.abs(value) <= 0.5) map.set(fwdIndexDayKey(current.time), value);
+ }
+ return map;
+ }
+
+ function pearsonCorrelation(xs = [], ys = []) {
+ const n = Math.min(xs.length, ys.length);
+ if (n < 10) return null;
+ const meanX = xs.slice(0, n).reduce((sum, value) => sum + value, 0) / n;
+ const meanY = ys.slice(0, n).reduce((sum, value) => sum + value, 0) / n;
+ let numerator = 0;
+ let denomX = 0;
+ let denomY = 0;
+ for (let index = 0; index < n; index += 1) {
+ const dx = xs[index] - meanX;
+ const dy = ys[index] - meanY;
+ numerator += dx * dy;
+ denomX += dx * dx;
+ denomY += dy * dy;
+ }
+ const denom = Math.sqrt(denomX * denomY);
+ return denom > 0 ? numerator / denom : null;
+ }
+
+ function formatCorrelationValue(value) {
+ if (!Number.isFinite(Number(value))) return '--';
+ return Number(value).toFixed(2);
+ }
+
+ function classifyIndexCorrelation(value) {
+ const numeric = Number(value);
+ if (!Number.isFinite(numeric)) return { label: 'Index correlation unavailable', tone: 'neutral' };
+ if (numeric >= 0.75) return { label: 'Strong same as FWD-100', tone: 'good' };
+ if (numeric >= 0.5) return { label: 'Mostly same as FWD-100', tone: 'good' };
+ if (numeric >= 0.25) return { label: 'Some index alignment', tone: 'neutral' };
+ if (numeric > -0.25) return { label: 'Low index link', tone: 'neutral' };
+ if (numeric > -0.5) return { label: 'Mild inverse to FWD-100', tone: 'warn' };
+ return { label: 'Inverse to FWD-100', tone: 'bad' };
+ }
+
+ async function buildIndexCorrelation(symbol = '', marketIndex = null, indexDatasetOverride = null) {
+ const normalized = String(symbol || '').trim().toUpperCase();
+ if (!normalized || isFwdIndexSymbol(normalized)) return null;
+ const [coinResponse, indexDataset] = await Promise.all([
+ runtimeSend('v16:getPublicCandles', {
+ symbol: normalized,
+ resolution: '1d',
+ limit: FWD_INDEX_DAILY_HISTORY_LIMIT + 5,
+ }),
+ indexDatasetOverride || loadFwdIndexChartDataset({ symbol: FWD_INDEX_SYMBOL, timeframe: '1d' }),
+ ]);
+ const coinReturns = dailyReturnMapFromCandles(coinResponse?.candles || []);
+ const indexReturns = dailyReturnMapFromCandles(indexDataset?.candles || []);
+ const days = Array.from(coinReturns.keys()).filter(day => indexReturns.has(day)).sort();
+ const calcWindow = size => {
+ const selected = days.slice(-size);
+ const xs = selected.map(day => coinReturns.get(day)).filter(Number.isFinite);
+ const ys = selected.map(day => indexReturns.get(day)).filter(Number.isFinite);
+ const value = xs.length === ys.length ? pearsonCorrelation(xs, ys) : null;
+ return {
+ value,
+ samples: selected.length,
+ };
+ };
+ const c30 = calcWindow(30);
+ const c90 = calcWindow(90);
+ const c180 = calcWindow(180);
+ const primary = c90.value ?? c30.value ?? c180.value;
+ return {
+ symbol: normalized,
+ indexSymbol: FWD_INDEX_SYMBOL,
+ c30,
+ c90,
+ c180,
+ primary,
+ ...classifyIndexCorrelation(primary),
+ };
+ }
+
+ function buildIndexComparison(symbol = '', marketIndex = null, indexDataset = null) {
+ const normalized = String(symbol || '').trim().toUpperCase();
+ if (!normalized || isFwdIndexSymbol(normalized) || !indexDataset?.ok || !Array.isArray(indexDataset.candles)) return null;
+ const candles = indexDataset.candles.map(normalizeCandle).filter(candle => candle.time > 0 && candle.close > 0);
+ if (candles.length < 2) return null;
+ return {
+ symbol: FWD_INDEX_SYMBOL,
+ label: indexDataset.displayName || fwdIndexDisplayName(marketIndex),
+ timeframe: '1d',
+ candles,
+ historyMode: indexDataset.historyMode || '',
+ };
+ }
+
  function buildFwdIndexSyntheticCandles(history = [], marketIndex = null) {
  const seen = new Set();
  const rows = (Array.isArray(history) ? history : [])
  .map(item => ({
  ts: finiteChartNumber(item?.ts, 0),
  composite: finiteChartNumber(item?.composite, 0),
- value: finiteChartNumber(item?.value, 0),
+ value: finiteChartNumber(item?.indexChangePct, finiteChartNumber(item?.value, 0)),
+ sentimentValue: finiteChartNumber(item?.sentimentValue, finiteChartNumber(item?.value, 0)),
  volume: finiteChartNumber(item?.totalVolumeUSD, 0),
  }))
  .filter(item => item.ts > 0 && item.composite > 0)
@@ -1415,7 +1945,8 @@
  rows.push({
  ts: finiteChartNumber(marketIndex.ts, Date.now()),
  composite: finiteChartNumber(marketIndex.composite, 0),
- value: finiteChartNumber(marketIndex.value, 0),
+ value: finiteChartNumber(marketIndex.indexChangePct, 0),
+ sentimentValue: finiteChartNumber(marketIndex.sentiment?.value, finiteChartNumber(marketIndex.value, 0)),
  volume: finiteChartNumber(marketIndex.totalVolumeUSD, 0),
  });
  }
@@ -1439,29 +1970,36 @@
 
  async function loadFwdIndexChartDataset(state = {}, strategy = {}) {
  const data = await localGet(['marketIndex', 'marketIndexHistory']);
- const candles = buildFwdIndexSyntheticCandles(data.marketIndexHistory || [], data.marketIndex || null);
+ const historicalDaily = await buildFwdIndexDailyCandlesFromConstituents(data.marketIndex || null).catch(() => ({ candles: [], metadata: { mode: 'build_failed' } }));
+ const historicalCandles = Array.isArray(historicalDaily?.candles) ? historicalDaily.candles : [];
+ const candles = historicalCandles.length >= 20
+ ? historicalCandles
+ : buildFwdIndexSyntheticCandles(data.marketIndexHistory || [], data.marketIndex || null).slice(-FWD_INDEX_DAILY_HISTORY_LIMIT);
  if (!candles.length) {
  return {
  ok: false,
  symbol: FWD_INDEX_SYMBOL,
- timeframe: normalizeTimeframe(state.timeframe || '5m'),
+ timeframe: '1d',
  candles: [],
  studies: {},
  keyLevels: null,
  fetchedAt: 0,
  syntheticIndex: true,
- error: 'Run Scan Now first. FWD-10 chart uses stored market-index history from scans.',
+ error: 'Run Scan Now first. FWD-100 chart uses stored market-index history from scans.',
  };
  }
  return {
  ok: true,
  symbol: FWD_INDEX_SYMBOL,
- timeframe: normalizeTimeframe(state.timeframe || '5m'),
+ timeframe: '1d',
  candles,
  studies: {},
  keyLevels: null,
  fetchedAt: Date.now(),
  syntheticIndex: true,
+ historyMode: historicalCandles.length >= 20 ? (historicalDaily?.metadata?.mode || 'historical_daily_liquidity_ranked') : 'scan_snapshot_fallback',
+ historyMetadata: historicalDaily?.metadata || {},
+ displayName: fwdIndexDisplayName(data.marketIndex || null),
  marketIndex: data.marketIndex || null,
  };
  }
@@ -1480,11 +2018,12 @@
  };
  }
  if (isFwdIndexSymbol(symbol)) {
- return loadFwdIndexChartDataset({ ...state, symbol: FWD_INDEX_SYMBOL, timeframe }, strategy);
+ return loadFwdIndexChartDataset({ ...state, symbol: FWD_INDEX_SYMBOL, timeframe: '1d' }, strategy);
  }
  const requirement = resolutionCoverageRequirement(state);
  const cacheKey = `${symbol}:${timeframe}`;
- const cacheEnabled = sanitizeChartCacheEnabled(strategy.chartCacheEnabled);
+ const isNativeStraddleSymbol = symbol.startsWith('MV-');
+ const cacheEnabled = !isNativeStraddleSymbol && sanitizeChartCacheEnabled(strategy.chartCacheEnabled);
  const cache = cacheEnabled ? await readChartCache() : {};
  const cachedEntry = cache?.[cacheKey];
  if (!options.force && cacheEnabled && cacheEntryFresh(cachedEntry, timeframe) && cacheEntryCovers(cachedEntry, requirement)) {
@@ -1764,6 +2303,7 @@
  const price = Number(zone.price || 0);
  const touches = Math.max(0, Number(zone.touches || 0));
  const strength = Math.max(0, Number(zone.strengthPct || 0));
+ const providedScore = Math.max(0, Number(zone.smartScore || zone.score || 0));
  const distancePct = referencePrice > 0 && price > 0 ? Math.abs(price - referencePrice) / referencePrice : 1;
  const proximityScore = Math.max(0, 32 - (distancePct * 900));
  const directionalBonus = referencePrice > 0
@@ -1775,12 +2315,297 @@
  const ageDays = latestPivotTs > 0 ? Math.max(0, (Date.now() - latestPivotTs) / 86400000) : 365;
  const recencyScore = Math.max(0, 22 - ageDays * 1.6);
  const mtfBonus = String(zone.tf || '').trim().toUpperCase() === 'COMBINED' ? 12 : 0;
- return (touches * 10) + (strength * 0.75) + proximityScore + directionalBonus + (keyZoneTimeframePriority(zone) * 8) + recencyScore + mtfBonus - widthPenalty;
+ const metricBonus = Math.min(32, Number(zone.rejectionCount || 0) * 2 + Number(zone.breakoutRetests || 0) * 6 + Number(zone.consolidationBars || 0) * 0.6 + Number(zone.volumeScore || 0) * 0.5);
+ const computedScore = (touches * 10) + (strength * 0.75) + proximityScore + directionalBonus + (keyZoneTimeframePriority(zone) * 8) + recencyScore + mtfBonus + metricBonus - widthPenalty;
+ return Math.max(providedScore, computedScore);
  }
 
  function keyLevelDistancePct(zone = {}, referencePrice = 0) {
  const price = Number(zone.price || 0);
  return referencePrice > 0 && price > 0 ? Math.abs(price - referencePrice) / referencePrice : 1;
+ }
+
+ function sahiKeyLevelStrength(count = 0) {
+ const clusters = Math.max(0, Math.round(Number(count || 0)));
+ if (clusters >= 15) return 'Strong';
+ if (clusters >= 8) return 'Medium';
+ if (clusters >= 4) return 'Weak';
+ return 'Developing';
+ }
+
+ function sahiKeyLevelRoles() {
+ return [
+ { colorRole: 'resistance-major', color: 'red', roleLabel: '', label: 'Strong Resistance' },
+ { colorRole: 'resistance-minor', color: 'orange', roleLabel: '', label: 'Breakout Retest Zone' },
+ { colorRole: 'support-near', color: 'blue', roleLabel: '', label: 'Support Zone' },
+ { colorRole: 'support-deep', color: 'yellow', roleLabel: '', label: 'Major Bottom Support' },
+ ];
+ }
+
+ function applySahiKeyLevelRoles(zones = []) {
+ const roles = sahiKeyLevelRoles();
+ return (Array.isArray(zones) ? zones : [])
+ .slice()
+ .sort((a, b) => Number(b.price || b.mid || 0) - Number(a.price || a.mid || 0))
+ .slice(0, 4)
+ .map((zone, index) => ({
+ ...zone,
+ colorRole: roles[index]?.colorRole || zone.colorRole || '',
+ color: roles[index]?.color || zone.color || '',
+ roleLabel: roles[index]?.roleLabel || '',
+ label: roles[index]?.label || zone.label || '',
+ }));
+ }
+
+ function selectReadableSahiKeyZones(zones = [], referencePrice = 0, atrValue = 0) {
+ const rows = (Array.isArray(zones) ? zones : [])
+ .map(zone => ({
+ ...zone,
+ price: Number(zone.price || zone.mid || 0),
+ zoneWidth: Number(zone.zoneWidth || Math.abs(Number(zone.zoneHigh || 0) - Number(zone.zoneLow || 0)) || 0),
+ }))
+ .filter(zone => Number(zone.price || 0) > 0);
+ if (rows.length <= 4) return applySahiKeyLevelRoles(rows);
+ const medianWidth = medianNumber(rows.map(zone => Number(zone.zoneWidth || 0)));
+ const minGap = Math.max(
+ Number(referencePrice || 0) > 0 ? Number(referencePrice || 0) * 0.004 : 0,
+ Number(atrValue || 0) * 0.8,
+ Number(medianWidth || 0) * 1.8
+ );
+ const rank = zone => (
+ Number(zone.reactionClusterCount || zone.touch_count || zone.touches || 0) * 24
+ + Number(zone.smartScore || zone.score || 0)
+ + (Number(zone.fallback || 0) ? -10 : 0)
+ );
+ const selected = [];
+ const addIfSpaced = zone => {
+ if (!zone || selected.length >= 4) return false;
+ const price = Number(zone.price || 0);
+ if (!(price > 0)) return false;
+ if (selected.some(item => Math.abs(Number(item.price || 0) - price) < minGap)) return false;
+ selected.push(zone);
+ return true;
+ };
+ rows.slice().sort((a, b) => rank(b) - rank(a)).forEach(addIfSpaced);
+ if (selected.length < 4) {
+ rows.slice()
+ .filter(zone => !selected.includes(zone))
+ .sort((a, b) => {
+ const aGap = selected.length ? Math.min(...selected.map(item => Math.abs(Number(item.price || 0) - Number(a.price || 0)))) : Number.POSITIVE_INFINITY;
+ const bGap = selected.length ? Math.min(...selected.map(item => Math.abs(Number(item.price || 0) - Number(b.price || 0)))) : Number.POSITIVE_INFINITY;
+ if (Math.abs(bGap - aGap) > 1e-8) return bGap - aGap;
+ return rank(b) - rank(a);
+ })
+ .forEach(zone => {
+ if (selected.length < 4 && !selected.includes(zone)) selected.push(zone);
+ });
+ }
+ return applySahiKeyLevelRoles(selected);
+ }
+
+ function chartTrueRange(candle = {}, previous = null) {
+ const high = Number(candle.high || 0);
+ const low = Number(candle.low || 0);
+ const prevClose = Number(previous?.close || 0);
+ if (!(high > 0) || !(low > 0) || high < low) return 0;
+ if (!(prevClose > 0)) return high - low;
+ return Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+ }
+
+ function chartAtrValue(candles = [], period = 14) {
+ const rows = Array.isArray(candles) ? candles : [];
+ if (rows.length < 2) return 0;
+ const ranges = rows.map((candle, index) => chartTrueRange(candle, rows[index - 1] || null)).filter(value => Number.isFinite(value) && value > 0);
+ if (!ranges.length) return 0;
+ const sample = ranges.slice(-Math.max(1, Number(period || 14)));
+ return sample.reduce((sum, value) => sum + value, 0) / sample.length;
+ }
+
+ function sahiZoneWidth(price = 0, atrValue = 0) {
+ const mid = Number(price || 0);
+ return Math.max(mid > 0 ? mid * 0.0015 : 0, Number(atrValue || 0) * 0.25);
+ }
+
+ function detectVisiblePivotLevels(candles = [], atrValue = 0, referencePrice = 0, settings = {}) {
+ const pivotLength = Math.max(2, Math.min(20, Math.round(Number(settings?.pivotLength || 6) || 6)));
+ const pivotMemory = Math.max(4, Math.min(200, Math.round(Number(settings?.pivotMemory || 50) || 50)));
+ const rows = (Array.isArray(candles) ? candles : [])
+ .map((candle, index) => ({
+ index,
+ time: Number(candle.time || 0),
+ high: Number(candle.high || 0),
+ low: Number(candle.low || 0),
+ close: Number(candle.close || 0),
+ }))
+ .filter(candle => candle.time > 0 && candle.high > 0 && candle.low > 0 && candle.high >= candle.low);
+ if (rows.length < 8) return [];
+ const pivot = Math.max(2, Math.min(pivotLength, Math.floor((rows.length - 1) / 2)));
+ const allPoints = [];
+ for (let index = pivot; index < rows.length - pivot; index += 1) {
+ const candle = rows[index];
+ let isHigh = true;
+ let isLow = true;
+ for (let scan = index - pivot; scan <= index + pivot; scan += 1) {
+ if (scan === index) continue;
+ if (rows[scan].high >= candle.high) isHigh = false;
+ if (rows[scan].low <= candle.low) isLow = false;
+ if (!isHigh && !isLow) break;
+ }
+ if (isHigh) allPoints.push({ price: candle.high, time: candle.time, index, kind: 'resistance' });
+ if (isLow) allPoints.push({ price: candle.low, time: candle.time, index, kind: 'support' });
+ }
+ let points = allPoints.slice(-pivotMemory);
+ if (!points.length) {
+ const highest = rows.reduce((best, candle) => candle.high > best.high ? candle : best, rows[0]);
+ const lowest = rows.reduce((best, candle) => candle.low < best.low ? candle : best, rows[0]);
+ points.push({ price: highest.high, time: highest.time, index: highest.index, kind: 'resistance' });
+ points.push({ price: lowest.low, time: lowest.time, index: lowest.index, kind: 'support' });
+ }
+ const basePrice = Number(referencePrice || rows[rows.length - 1]?.close || 0);
+ const tolerance = Math.max(basePrice > 0 ? basePrice * 0.0015 : 0, Number(atrValue || 0) * 0.25);
+ const clusters = [];
+ points.sort((a, b) => Number(a.price || 0) - Number(b.price || 0)).forEach(point => {
+ const match = clusters.find(cluster => Math.abs(Number(point.price || 0) - Number(cluster.price || 0)) <= tolerance);
+ if (!match) {
+ clusters.push({
+ price: point.price,
+ kind: point.kind,
+ touches: 1,
+ lastIndex: point.index,
+ lastTime: point.time,
+ sourcePivots: [{ price: point.price, ts: point.time }],
+ });
+ return;
+ }
+ const oldWeight = Math.max(1, Number(match.touches || 1));
+ const nextWeight = oldWeight + 1;
+ match.price = ((Number(match.price || 0) * oldWeight) + Number(point.price || 0)) / nextWeight;
+ match.touches = nextWeight;
+ match.kind = Number(match.price || 0) >= basePrice ? 'resistance' : 'support';
+ match.lastIndex = Math.max(Number(match.lastIndex || 0), Number(point.index || 0));
+ match.lastTime = Math.max(Number(match.lastTime || 0), Number(point.time || 0));
+ match.sourcePivots = [...(Array.isArray(match.sourcePivots) ? match.sourcePivots : []), { price: point.price, ts: point.time }].slice(-12);
+ });
+ const extrema = [
+ rows.reduce((best, candle) => candle.high > best.high ? candle : best, rows[0]),
+ rows.reduce((best, candle) => candle.low < best.low ? candle : best, rows[0]),
+ ];
+ extrema.forEach(candle => {
+ const price = candle.high === extrema[0].high ? candle.high : candle.low;
+ const kind = price >= basePrice ? 'resistance' : 'support';
+ const nearExisting = clusters.some(cluster => Math.abs(Number(cluster.price || 0) - price) <= tolerance);
+ if (!nearExisting) {
+ clusters.push({
+ price,
+ kind,
+ touches: 1,
+ lastIndex: candle.index,
+ lastTime: candle.time,
+ sourcePivots: [{ price, ts: candle.time }],
+ });
+ }
+ });
+ if (clusters.length < 4) {
+ const visibleHigh = Math.max(...rows.map(candle => Number(candle.high || 0)).filter(value => value > 0));
+ const visibleLow = Math.min(...rows.map(candle => Number(candle.low || 0)).filter(value => value > 0));
+ const visibleRange = Math.max(0, visibleHigh - visibleLow);
+ [0.82, 0.64, 0.46, 0.28].forEach((ratio, index) => {
+ if (clusters.length >= 4 || !(visibleRange > 0)) return;
+ const price = visibleLow + visibleRange * ratio;
+ const nearExisting = clusters.some(cluster => Math.abs(Number(cluster.price || 0) - price) <= tolerance);
+ if (nearExisting) return;
+ const nearest = rows.reduce((best, candle) => {
+ const gap = Math.min(Math.abs(Number(candle.high || 0) - price), Math.abs(Number(candle.low || 0) - price), Math.abs(Number(candle.close || 0) - price));
+ return !best || gap < best.gap ? { candle, gap } : best;
+ }, null)?.candle || rows[Math.max(0, rows.length - 1 - index)];
+ clusters.push({
+ price,
+ kind: price >= basePrice ? 'resistance' : 'support',
+ touches: 1,
+ lastIndex: nearest.index,
+ lastTime: nearest.time,
+ sourcePivots: [{ price, ts: nearest.time }],
+ fallback: true,
+ });
+ });
+ }
+ return clusters
+ .filter(cluster => Number(cluster.price || 0) > 0)
+ .map(cluster => ({
+ ...cluster,
+ tf: 'visible',
+ mid: Number(cluster.price || 0),
+ score: Number(cluster.touches || 0) * 12 + Number(cluster.lastIndex || 0) / Math.max(1, rows.length),
+ smartScore: Number(cluster.touches || 0) * 12 + Number(cluster.lastIndex || 0) / Math.max(1, rows.length),
+ }));
+ }
+
+ function detectKeyLevelReactionEvent(candles = [], index = 0, zone = {}, width = 0) {
+ const candle = candles[index] || {};
+ const prev = candles[index - 1] || {};
+ const low = Number(zone.zoneLow || zone.lower || zone.price || 0);
+ const high = Number(zone.zoneHigh || zone.upper || zone.price || 0);
+ const kind = zone.kind === 'resistance' ? 'resistance' : 'support';
+ const close = Number(candle.close || 0);
+ const open = Number(candle.open || 0);
+ const candleLow = Number(candle.low || close || 0);
+ const candleHigh = Number(candle.high || close || 0);
+ const prevClose = Number(prev.close || 0);
+ const time = Number(candle.time || 0);
+ if (!(time > 0) || !(close > 0) || !(candleLow > 0) || !(candleHigh > 0) || !(low > 0) || !(high > 0)) return null;
+ const range = Math.max(candleHigh - candleLow, close * 0.0001);
+ const body = Math.max(Math.abs(close - open), range * 0.12);
+ const touched = candleLow <= high && candleHigh >= low;
+ const upperWick = Math.max(0, candleHigh - Math.max(open, close));
+ const lowerWick = Math.max(0, Math.min(open, close) - candleLow);
+ const nearWidth = Math.max(Number(width || 0), close * 0.0008);
+ const nearLow = Math.max(0, low - nearWidth);
+ const nearHigh = high + nearWidth;
+ const lookback = candles.slice(Math.max(0, index - 5), index);
+ const nearBars = lookback.filter(item => {
+ const itemClose = Number(item.close || 0);
+ const itemLow = Number(item.low || itemClose || 0);
+ const itemHigh = Number(item.high || itemClose || 0);
+ return itemClose >= nearLow && itemClose <= nearHigh && itemLow <= nearHigh && itemHigh >= nearLow;
+ }).length;
+ const hadCloseAbove = candles.slice(Math.max(0, index - 12), index).some(item => Number(item.close || 0) > high);
+ const hadCloseBelow = candles.slice(Math.max(0, index - 12), index).some(item => Number(item.close || 0) < low);
+ const breakoutUp = prevClose > 0 && prevClose <= high && close > high && (touched || nearBars >= 3);
+ const breakoutDown = prevClose > 0 && prevClose >= low && close < low && (touched || nearBars >= 3);
+ const retestAbove = touched && close > high && prevClose > high && hadCloseBelow;
+ const retestBelow = touched && close < low && prevClose < low && hadCloseAbove;
+ if (nearBars >= 3 && (breakoutUp || breakoutDown)) {
+ return { type: 'consolidation-breakout', index, time, price: close, score: 5 + nearBars };
+ }
+ if (retestAbove || retestBelow) return { type: 'retest', index, time, price: close, score: 8 };
+ if (breakoutUp || breakoutDown) return { type: 'breakout', index, time, price: close, score: 6 };
+ if (!touched) return null;
+ if (kind === 'resistance') {
+ const wickReject = upperWick >= Math.max(body * 0.65, range * 0.24);
+ if (wickReject && close < high) return { type: 'rejection', index, time, price: Math.min(candleHigh, high), score: 7 + (upperWick / range) };
+ } else {
+ const wickBounce = lowerWick >= Math.max(body * 0.65, range * 0.24);
+ if (wickBounce && close > low) return { type: 'bounce', index, time, price: Math.max(candleLow, low), score: 7 + (lowerWick / range) };
+ }
+ return null;
+ }
+
+ function clusterKeyLevelReactionEvents(events = [], mergeWindow = 10) {
+ const sorted = (Array.isArray(events) ? events : [])
+ .filter(event => Number(event?.index || 0) >= 0 && Number(event?.time || 0) > 0)
+ .sort((a, b) => Number(a.index || 0) - Number(b.index || 0));
+ const clusters = [];
+ sorted.forEach(event => {
+ const last = clusters[clusters.length - 1];
+ if (last && Number(event.index || 0) - Number(last.endIndex || 0) <= mergeWindow) {
+ last.endIndex = Number(event.index || 0);
+ last.events += 1;
+ if (Number(event.score || 0) >= Number(last.marker.score || 0)) last.marker = event;
+ return;
+ }
+ clusters.push({ startIndex: Number(event.index || 0), endIndex: Number(event.index || 0), events: 1, marker: event });
+ });
+ return clusters;
  }
 
  function keyLevelState(zone = {}, candles = [], referencePrice = 0) {
@@ -1816,54 +2641,42 @@
  const low = Number(zone.zoneLow || price || 0);
  const high = Number(zone.zoneHigh || price || 0);
  const source = Array.isArray(candles) ? candles : [];
- const markers = [];
- let respected = 0;
- let broken = 0;
+ const width = Math.max(Math.abs(high - low), price > 0 ? price * 0.0015 : 0);
+ const events = [];
  for (let index = 1; index < source.length; index++) {
- const candle = source[index];
- const prev = source[index - 1] || {};
- const close = Number(candle.close || 0);
- const open = Number(candle.open || 0);
- const candleLow = Number(candle.low || close || 0);
- const candleHigh = Number(candle.high || close || 0);
- const prevClose = Number(prev.close || 0);
- const touched = candleLow <= high && candleHigh >= low;
- if (!touched) continue;
- let type = 'touch';
- if (zone.kind === 'support' && close > high && candleLow <= high) {
- type = 'bounce';
- respected += 1;
- } else if (zone.kind === 'resistance' && close < low && candleHigh >= low) {
- type = 'rejection';
- respected += 1;
- } else if (prevClose <= high && close > high) {
- type = 'breakout';
- broken += 1;
- } else if (prevClose >= low && close < low) {
- type = 'breakdown';
- broken += 1;
+ const event = detectKeyLevelReactionEvent(source, index, zone, width);
+ if (event) events.push(event);
  }
- markers.push({
- type,
- time: Number(candle.time || 0),
- price: type === 'breakout' || type === 'breakdown' ? close : price,
- });
- }
- const total = respected + broken;
- const quality = total > 0 ? Math.round((respected / total) * 100) : Math.min(100, Math.round(Number(zone.touches || 0) * 12));
+ const clusters = clusterKeyLevelReactionEvents(events, 10);
+ const markers = clusters.map(cluster => ({
+ type: cluster.marker?.type || 'reaction',
+ time: Number(cluster.marker?.time || 0),
+ price: Number(cluster.marker?.price || price || 0),
+ clusterSize: Number(cluster.events || 1),
+ index: Number(cluster.marker?.index || 0),
+ }));
+ const respected = markers.filter(marker => ['bounce', 'rejection', 'retest'].includes(marker.type)).length;
+ const total = clusters.length;
+ const quality = total > 0 ? Math.round((respected / total) * 100) : 0;
  const latestTouchTime = markers.length ? Number(markers[markers.length - 1].time || 0) : Math.max(...(Array.isArray(zone.sourcePivots) ? zone.sourcePivots : []).map(pivot => Number(pivot.ts || 0)).filter(Boolean), 0);
  const distancePct = keyLevelDistancePct(zone, referencePrice);
+ const clusterCount = clusters.length;
+ const markerLimit = 18;
  return {
  reactionQuality: quality,
  latestTouchTime,
  distancePct,
  isFar: distancePct > 0.05,
- reactionMarkers: markers.slice(-8),
+ reactionClusterCount: clusterCount,
+ touch_count: clusterCount,
+ touches: clusterCount,
+ strength: sahiKeyLevelStrength(clusterCount),
+ reactionMarkers: markers.slice(-markerLimit),
  };
  }
 
  function rankSahiKeyZones(zones = [], settings = {}, referencePrice = 0, chartTimeframe = '5m') {
- const limit = Math.max(1, Math.min(8, Math.floor(settings.numberOfLevels || 4)));
+ const limit = 4;
  const byKind = ['resistance', 'support'].flatMap(kind => {
  return mergeNearbyKeyZones(
  (Array.isArray(zones) ? zones : []).filter(zone => zone.kind === kind),
@@ -1900,19 +2713,14 @@
  addUnique(ranked.find(zone => zone.kind === 'support'));
  }
  ranked.forEach(addUnique);
- const visible = selected.slice(0, limit).sort((a, b) => Number(b.price || 0) - Number(a.price || 0));
- const resistance = visible.filter(zone => zone.kind === 'resistance').sort((a, b) => Number(b.price || 0) - Number(a.price || 0));
- const support = visible.filter(zone => zone.kind === 'support').sort((a, b) => Number(b.price || 0) - Number(a.price || 0));
- const toneByKey = new Map();
- resistance.forEach((zone, index) => {
- toneByKey.set(zone, index === 0 ? 'resistance-major' : 'resistance-minor');
- });
- support.forEach((zone, index) => {
- toneByKey.set(zone, index === 0 ? 'support-near' : 'support-deep');
- });
+ const visible = applySahiKeyLevelRoles(selected.slice(0, limit));
  return visible.map(zone => ({
  ...zone,
- colorRole: toneByKey.get(zone) || (zone.kind === 'resistance' ? 'resistance-minor' : 'support-near'),
+ upper: Number(zone.zoneHigh || zone.upper || zone.price || 0),
+ lower: Number(zone.zoneLow || zone.lower || zone.price || 0),
+ mid: Number(zone.price || zone.mid || 0),
+ type: zone.kind === 'resistance' ? 'Resistance' : 'Support',
+ touch_count: Math.max(0, Math.round(Number(zone.touch_count || zone.touches || 0))),
  }));
  }
 
@@ -1940,6 +2748,14 @@
  }
 
  function collectVisibleKeyZones(keyLevels = null, settings = {}, referencePrice = 0, chartTimeframe = '5m') {
+ if (!keyLevels || typeof keyLevels !== 'object') return [];
+ const smartSettings = { ...settings, chartTimeframe };
+ const brokerZones = [
+ ...(Array.isArray(keyLevels.smartLevels) ? keyLevels.smartLevels : []),
+ ...(Array.isArray(keyLevels.majorLevels) ? keyLevels.majorLevels : []),
+ ...(Array.isArray(keyLevels.levels) ? keyLevels.levels : []),
+ ].map(zone => normalizeKeyZone(zone, zone?.kind || zone?.type || 'support', zone?.tf || 'combined')).filter(Boolean);
+ if (brokerZones.length) return rankSahiKeyZones(brokerZones, smartSettings, referencePrice, chartTimeframe);
  if (!keyLevels?.byTimeframe) return [];
  const primaryTf = mapChartTfToKeyLevelTf(chartTimeframe);
  const primaryBucket = keyLevels.byTimeframe?.[primaryTf];
@@ -1974,7 +2790,6 @@
  });
  });
  });
- const smartSettings = { ...settings, chartTimeframe };
  return rankSahiKeyZones(zones, smartSettings, referencePrice, chartTimeframe);
  }
 
@@ -2027,6 +2842,9 @@
  price,
  source: 'linked',
  kind: role,
+ role,
+ orderId: String(order.orderId || order.id || '').trim(),
+ clientOrderId: String(order.clientOrderId || '').trim(),
  meta: order.reduceOnly ? 'Reduce only' : '',
  });
  });
@@ -2169,6 +2987,7 @@
  if (indicators.macd || presetMeta.showMacd) chips.push('MACD');
  if (indicators.obv || presetMeta.showObv) chips.push('OBV');
  if (indicators.atr || presetMeta.showAtr) chips.push('ATR');
+ if (indicators.darvas) chips.push('Darvas Box');
  return chips.slice(0, 8);
  }
 
@@ -2199,6 +3018,7 @@
  const presetId = String(presetMeta.id || state.preset || '').trim().toLowerCase();
  if ((presetId === 'key' || presetId === 'clean') && ['ema', 'sma', 'bollinger', 'supertrend', 'rsi', 'macd', 'obv', 'atr'].includes(key)) return false;
  if (raw[`${key}Removed`] === true) return false;
+ if (key === 'darvas') return raw.darvas === true;
  if (key === 'ema') return raw.ema === true || !!presetMeta.showEma;
  if (key === 'sma') return raw.sma === true || !!presetMeta.showSma;
  if (key === 'vwap') return state.showVwap === true || raw.vwap === true || !!presetMeta.showVwap;
@@ -2237,6 +3057,39 @@
  ${lineButton('obvSma', 'SMA Line')}
  </div>
  <label class="ds-indicator-number">SMA <input type="number" min="1" max="500" step="1" value="${escapeHtml(indicators.obvSmaLength || DEFAULT_OBV_SMA_LENGTH)}" data-ds-indicator-number="obvSmaLength" /></label>
+ </div>
+ </details>`;
+ }
+ if (key === 'darvas') {
+ const darvas = sanitizeDarvasBoxSettings(state.darvasSettings || {}, state.timeframe || '15m');
+ const toggle = (toggleKey, label) => `<button class="bsm ${darvas[toggleKey] !== false ? 'active' : ''}" type="button" data-ds-darvas-toggle="${escapeHtml(toggleKey)}">${escapeHtml(label)}</button>`;
+ const number = (numberKey, label, value, min, max, step = '1') => `<label class="ds-darvas-number">${escapeHtml(label)}<input type="number" min="${escapeHtml(min)}" max="${escapeHtml(max)}" step="${escapeHtml(step)}" value="${escapeHtml(value)}" data-ds-darvas-number="${escapeHtml(numberKey)}" /></label>`;
+ return `<details class="ds-chart-indicator-settings ds-darvas-indicator-settings">
+ <summary title="Darvas Box settings">...</summary>
+ <div class="ds-chart-indicator-settings-panel ds-darvas-settings-panel">
+ <div class="ds-chart-settings-title">Darvas Box Settings</div>
+ <div class="ds-chart-settings-options">
+ ${toggle('enabled', 'Enable')}
+ ${toggle('showHistoricalBoxes', 'Historical')}
+ ${toggle('showScannerDetails', 'Scanner')}
+ ${toggle('showOnlyHighQuality', 'High Quality')}
+ </div>
+ <div class="ds-chart-settings-options">
+ ${toggle('showEntryLine', 'Entry')}
+ ${toggle('showStopLoss', 'Stop Loss')}
+ ${toggle('showTargetLines', 'Targets')}
+ ${toggle('showFailedBoxes', 'Failed')}
+ ${toggle('showWeakBreakoutBoxes', 'Weak BO')}
+ </div>
+ <div class="ds-darvas-settings-grid">
+ ${number('lookback', `Lookback (${darvas.lookback > 0 ? darvas.lookback : `Auto ${darvas.activeLookback}`})`, darvas.lookback || '', 0, 160)}
+ ${number('confirmationCandles', 'Confirm', darvas.confirmationCandles, 2, 8)}
+ ${number('volumeMultiplier', 'Volume x', darvas.volumeMultiplier, 0.5, 5, '0.1')}
+ ${number('atrBreakoutBuffer', 'ATR Buffer', darvas.atrBreakoutBuffer, 0, 2, '0.05')}
+ ${number('maxBoxesVisible', 'Max Visible', darvas.maxBoxesVisible, 1, 50)}
+ ${number('maxIntradayHeightPct', 'Max Intra %', darvas.maxIntradayHeightPct, 1, 25, '0.5')}
+ ${number('maxDailyHeightPct', 'Max Daily %', darvas.maxDailyHeightPct, 2, 40, '0.5')}
+ </div>
  </div>
  </details>`;
  }
@@ -2288,14 +3141,41 @@
  </div>`;
  }
 
- function buildChartDraftLines(draft = null) {
+function buildChartDraftLines(draft = null) {
  const normalized = normalizeChartTradingDraft(draft);
  if (!normalized) return [];
  return [
- { key: 'draft_entry', label: 'Draft Entry', tone: 'entry', price: normalized.entry, source: 'draft', meta: 'Draft' },
- { key: 'draft_stop', label: 'Draft Stop', tone: 'stop', price: normalized.stopLoss, source: 'draft', meta: 'Draft' },
- { key: 'draft_target', label: 'Draft Target', tone: 'target', price: normalized.takeProfit, source: 'draft', meta: 'Draft' },
+ { key: 'draft_entry', label: 'Draft Entry', tone: 'entry', role: 'entry', price: normalized.entry, source: 'draft', meta: 'Drag to plan entry' },
+ { key: 'draft_stop', label: 'Draft Stop', tone: 'stop', role: 'stop_loss', price: normalized.stopLoss, source: 'draft', meta: 'Drag to plan stop' },
+ { key: 'draft_target', label: 'Draft Target', tone: 'target', role: 'take_profit', price: normalized.takeProfit, source: 'draft', meta: 'Drag to plan target' },
  ].map(normalizeOrderLine).filter(Boolean);
+ }
+
+ function chartOrderTagRole(line = {}) {
+ const role = String(line.role || line.kind || line.tone || '').trim().toLowerCase();
+ if (role === 'stop_loss' || role === 'stoploss' || role === 'sl' || role === 'stop') return 'stop';
+ if (role === 'take_profit' || role === 'takeprofit' || role === 'tp' || role === 'target') return 'target';
+ if (role === 'entry' || role === 'limit_entry') return 'entry';
+ return '';
+ }
+
+ function chartOrderAmountLabel(line = {}, orderContext = null, draft = null) {
+ const role = chartOrderTagRole(line);
+ if (role !== 'stop' && role !== 'target') return '';
+ const price = Number(line.price || 0);
+ const position = orderContext?.position || null;
+ const entry = Number(position?.entry || draft?.entry || 0);
+ const size = Math.abs(Number(position?.size || draft?.size || 0) || 0);
+ const side = String(position?.side || draft?.side || '').trim().toLowerCase();
+ if (!(price > 0) || !(entry > 0)) return '';
+ const isShort = side === 'short' || side === 'sell';
+ const unitMove = isShort ? entry - price : price - entry;
+ const amount = unitMove * (size > 0 ? size : 1);
+ const percent = entry > 0 ? (unitMove / entry) * 100 : 0;
+ const sign = amount >= 0 ? '+' : '-';
+ const money = `${sign}$${Math.abs(amount).toFixed(2)}`;
+ const pct = `${percent >= 0 ? '+' : '-'}${Math.abs(percent).toFixed(2)}%`;
+ return size > 0 ? `${money} / ${pct}` : `${money} est / ${pct}`;
  }
 
  function buildDraftSummary(state = {}, model = null) {
@@ -2329,7 +3209,7 @@
  const speed = replay?.speedMs || 900;
  return `<div class="ds-chart-replay">
  <button class="bsm ${active && type === 'market' ? 'active' : ''}" type="button" data-ds-chart-replay-mode="market" title="Start market replay for this symbol">Market Replay</button>
- ${state.replaySeed ? `<button class="bsm ${active && type === 'trade' ? 'active' : ''}" type="button" data-ds-chart-replay-mode="trade" title="Replay this trade or backtest result">Trade Replay</button>` : ''}
+ ${state.replaySeed ? `<button class="bsm ${active && type === 'trade' ? 'active' : ''}" type="button" data-ds-chart-replay-mode="trade" title="Replay this trade result">Trade Replay</button>` : ''}
  ${active ? '<button class="bsm" type="button" data-ds-chart-replay-mode="off" title="Exit replay">Live</button>' : ''}
  <button class="bsm" type="button" data-ds-chart-replay="back10" title="Step back 10 candles">&#x219E;</button>
  <button class="bsm" type="button" data-ds-chart-replay="back" title="Step back one candle">&#x2190;</button>
@@ -2348,14 +3228,20 @@
  </div>`;
  }
 
- function buildChartTradeButtons(state = {}, model = null) {
+function buildChartTradeButtons(state = {}, model = null) {
  if (isFwdIndexSymbol(state.symbol || '')) {
  return `<div class="live-order-chart-timeframes ds-chart-trade-controls">
- <span class="account-inline-note">FWD-10 is a market index. Use it for regime and scanner context, not order placement.</span>
+ <span class="account-inline-note">FWD-100 is a market index. Use it for regime and scanner context, not order placement.</span>
  </div>`;
  }
  const mode = normalizeChartTradingMode(state.chartTradingMode);
  const replay = normalizeReplayMode(state.replayMode);
+ const tradingActive = state.chartTradingToolsOpen === true || mode !== 'select' || (!!state.chartTradingDraft && state.chartTradingToolsOpen !== false);
+ if (!tradingActive) {
+ return `<div class="live-order-chart-timeframes ds-chart-trade-controls is-collapsed">
+ <button class="bsm" type="button" title="Show entry, stop, target, and order preview tools" data-ds-chart-trading-mode="entry">Trading Mode</button>
+ </div>`;
+ }
  const modes = [
  ['select', 'Select'],
  ['entry', 'Entry'],
@@ -2370,11 +3256,27 @@
  <button class="bsm ds-chart-trade-btn sell" type="button" title="Preview sell from chart (Shift+C)" data-ds-chart-trade="sell">Preview Sell</button>
  <button class="bsm" type="button" title="Preview stop protection from draft" data-ds-chart-preview-protection="stop">Preview Stop</button>
  <button class="bsm" type="button" title="Preview target protection from draft" data-ds-chart-preview-protection="target">Preview Target</button>
+ <button class="bsm" type="button" title="Hide chart trading tools" data-ds-chart-trading-close="1">Hide Tools</button>
  <button class="bsm" type="button" title="Clear chart draft" data-ds-chart-draft-clear="1">Clear Draft</button>
  </div>`;
  }
 
- function buildTradeReadPanel(intelligence = null, state = {}) {
+function buildChartIndicatorMenu(state = {}, options = {}) {
+ const indicatorState = sanitizeIndicatorState(state.indicators || {});
+ const indicatorButton = definition => `<span class="ds-indicator-menu-item"><button class="bsm ${indicatorState[definition.key] ? 'active' : ''}" type="button" data-ds-chart-indicator="${escapeHtml(definition.key)}">${escapeHtml(definition.label)}</button>${definition.key === 'darvas' ? buildIndicatorSettingsPanel('darvas', state) : ''}</span>`;
+ const compareButton = options.compare !== false && !isFwdIndexSymbol(state.symbol || '')
+ ? `<button class="bsm ${state.compareWithIndex !== false ? 'active' : ''}" type="button" data-ds-chart-toggle="index-compare">Compare Index</button>`
+ : '';
+ return `<details class="ds-indicator-menu">
+ <summary class="bsm">Indicators</summary>
+ <div class="ds-indicator-grid">
+ ${INDICATOR_DEFS.map(indicatorButton).join('')}
+ ${compareButton}
+ </div>
+ </details>`;
+}
+
+function buildTradeReadPanel(intelligence = null, state = {}) {
  const panel = intelligence?.panel;
  if (!panel || state.rightPanelOpen === false) return '';
  const decision = intelligence?.decision || {};
@@ -2562,10 +3464,14 @@
 
  function buildDeskChartPanel(panelKey, title, panelState = {}, dataset = {}, model = null, intelligence = null, state = {}, calculatedIndicators = {}) {
  const tf = normalizeTimeframe(panelState.timeframe || state.timeframe || '5m');
+ const isFwdIndex = dataset?.syntheticIndex === true;
+ const panelResolutions = isFwdIndex ? ['1d'] : RESOLUTIONS;
  const statusText = !panelState.symbol
  ? 'Choose a symbol'
  : dataset?.ok
- ? `${panelState.symbol} | ${RESOLUTION_LABELS[tf]} | ${model?.visibleCount || 0}/${model?.totalCount || 0}`
+ ? (dataset?.syntheticIndex
+ ? `Equal-weight benchmark | ${model?.totalCount || dataset?.candles?.length || 0} bars`
+ : `${RESOLUTION_LABELS[tf]} | ${model?.visibleCount || 0}/${model?.totalCount || 0}`)
  : (dataset?.error || 'Chart unavailable');
  const chartId = `${state.chartViewMode || 'tab'}-${panelKey}`;
  const chartMarkup = !model
@@ -2575,13 +3481,13 @@
  <div class="ds-lwc-chart" data-ds-lwc-chart="${chartId}" role="img" aria-label="${escapeHtml(`${panelState.symbol || 'Symbol'} ${title}`)}"></div>
  <div class="ds-lwc-attribution">Charts powered by <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer">TradingView</a> Lightweight Charts</div>
  ${buildChartNavControls(chartId)}
- ${buildIntelligenceOverlay(model, intelligence, panelState)}
+ ${isFwdIndex ? '' : buildIntelligenceOverlay(model, intelligence, panelState)}
  </div>`;
  return `<section class="ds-desk-panel ds-desk-chart-panel" data-ds-desk-panel="${escapeHtml(panelKey)}">
  <div class="ds-desk-panel-head">
  <div><strong>${escapeHtml(title)}</strong><span>${escapeHtml(statusText)}</span></div>
  <div class="ds-desk-panel-actions">
- <select data-ds-desk-tf="${escapeHtml(panelKey)}">${RESOLUTIONS.map(tfOption => `<option value="${tfOption}" ${tfOption === tf ? 'selected' : ''}>${escapeHtml(RESOLUTION_LABELS[tfOption])}</option>`).join('')}</select>
+ <select data-ds-desk-tf="${escapeHtml(panelKey)}">${panelResolutions.map(tfOption => `<option value="${tfOption}" ${tfOption === tf ? 'selected' : ''}>${escapeHtml(RESOLUTION_LABELS[tfOption])}</option>`).join('')}</select>
  ${buildChartHeaderNavButtons(chartId)}
  <button type="button" title="Fit" data-ds-chart-fit="1">Fit</button>
  <button type="button" title="Reset chart view" data-ds-chart-nav="fit" data-ds-chart-nav-target="${escapeHtml(chartId)}">Reset</button>
@@ -2613,8 +3519,9 @@
  </div>`;
  }
 
- function buildIntelligenceOverlay(model = null, intelligence = null, state = {}) {
+function buildIntelligenceOverlay(model = null, intelligence = null, state = {}) {
  if (!model || !intelligence || state.intelligenceOverlays === false) return '';
+ if (getPresetMeta(state.preset).showDecision !== true) return '';
  const density = normalizeOverlayDensity(state.overlayDensity);
  const maxZones = density === 'minimal' ? 2 : density === 'trade' ? 4 : density === 'analysis' ? 7 : 12;
  const maxMarkers = density === 'minimal' ? 0 : density === 'trade' ? 3 : density === 'analysis' ? 8 : 20;
@@ -2695,7 +3602,6 @@
  const twoYear = tf === '1d' ? 730 : MAX_RENDER_CANDLES;
  const isActive = count => Math.abs(activeCount - count) <= 2;
  const buttons = [
-  ['recent', defaultVisibleCount(tf), 'Recent'],
   ['1y', oneYear, '1Y'],
   ['2y', twoYear, '2Y'],
   ['all', MAX_RENDER_CANDLES, 'All'],
@@ -2726,6 +3632,7 @@
  const visibleWindow = getVisibleWindow(chartCandles, state);
  const visibleCandles = visibleWindow.visibleCandles;
  if (!visibleCandles.length) return null;
+ const isSyntheticIndex = dataset?.syntheticIndex === true;
  const presetMeta = getPresetMeta(state.preset);
  const settings = {
  ...sanitizeKeyLevelSettings(dataset?.keyLevels?.config || strategy.keyLevelSettings || {}),
@@ -2733,33 +3640,82 @@
  };
  const visibleIndices = visibleCandles.map(candle => candles.findIndex(source => Number(source.time || 0) === Number(candle.time || 0)));
  const referencePrice = Number(visibleCandles[visibleCandles.length - 1]?.close || visibleCandles[visibleCandles.length - 1]?.high || 0);
- const visibleKeyZones = presetMeta.showKeyLevels ? collectVisibleKeyZones(dataset.keyLevels, settings, referencePrice, timeframe) : [];
- const enrichedKeyZones = visibleKeyZones.map(zone => {
- const reaction = buildKeyLevelReactionData(zone, visibleCandles, referencePrice);
- const state = keyLevelState(zone, visibleCandles, referencePrice);
- const distanceAbs = Math.abs(Number(zone.price || 0) - referencePrice);
+ const visibleAtr = chartAtrValue(visibleCandles, 14);
+ const keyMemoryCount = Math.max(12, Math.min(200, Math.round(Number(settings.pivotMemory || 50) || 50)));
+ const keyLevelCandles = visibleCandles.slice(-Math.min(visibleCandles.length, keyMemoryCount));
+ const keyLevelAtr = chartAtrValue(keyLevelCandles, 14) || visibleAtr;
+ const backendKeyZones = [];
+ const fallbackKeyZones = !isSyntheticIndex && presetMeta.showKeyLevels ? detectVisiblePivotLevels(keyLevelCandles, keyLevelAtr, referencePrice, settings) : [];
+ const mergeTolerance = Math.max(referencePrice > 0 ? referencePrice * 0.0015 : 0, keyLevelAtr * 0.25);
+ const visibleKeyZones = [];
+ [...backendKeyZones, ...fallbackKeyZones].forEach(zone => {
+ const price = Number(zone.price || zone.mid || 0);
+ if (!(price > 0)) return;
+ const match = visibleKeyZones.find(item => Math.abs(Number(item.price || item.mid || 0) - price) <= mergeTolerance);
+ if (!match) {
+ visibleKeyZones.push(zone);
+ return;
+ }
+ if (Number(zone.touches || zone.touch_count || 0) > Number(match.touches || match.touch_count || 0)) {
+ Object.assign(match, {
+ ...zone,
+ sourcePivots: [
+ ...(Array.isArray(match.sourcePivots) ? match.sourcePivots : []),
+ ...(Array.isArray(zone.sourcePivots) ? zone.sourcePivots : []),
+ ].slice(-16),
+ });
+ }
+ });
+ const keyZoneCandidates = visibleKeyZones.map(zone => {
+ const mid = Number(zone.price || zone.mid || 0);
+ const zoneWidth = sahiZoneWidth(mid, keyLevelAtr);
+ const halfWidth = zoneWidth * 0.5;
+ const zoneForChart = {
+ ...zone,
+ price: mid,
+ mid,
+ zoneWidth,
+ zoneLow: Math.max(0, mid - halfWidth),
+ zoneHigh: Math.max(0, mid + halfWidth),
+ lower: Math.max(0, mid - halfWidth),
+ upper: Math.max(0, mid + halfWidth),
+ };
+ const reaction = buildKeyLevelReactionData(zoneForChart, keyLevelCandles, referencePrice);
+ const state = keyLevelState(zoneForChart, keyLevelCandles, referencePrice);
+ const distanceAbs = Math.abs(mid - referencePrice);
  const distancePct = keyLevelDistancePct(zone, referencePrice);
  return {
- ...zone,
+ ...zoneForChart,
  ...reaction,
  ...state,
  distanceAbs,
  distancePct,
  distanceLabel: `${formatPrice(distanceAbs)} / ${(distancePct * 100).toFixed(2)}%`,
  isFar: reaction.isFar && state.state !== 'near',
+ strength: sahiKeyLevelStrength(reaction.reactionClusterCount),
  };
  });
+ const majorKeyZoneCandidates = keyZoneCandidates.filter(zone => Number(zone.reactionClusterCount || zone.touch_count || 0) >= 4);
+ const enrichedKeyZones = selectReadableSahiKeyZones((majorKeyZoneCandidates.length >= 4 ? majorKeyZoneCandidates : keyZoneCandidates)
+ .sort((a, b) => {
+ const clusterDiff = Number(b.reactionClusterCount || b.touch_count || 0) - Number(a.reactionClusterCount || a.touch_count || 0);
+ if (clusterDiff) return clusterDiff;
+ const scoreDiff = Number(b.smartScore || b.score || 0) - Number(a.smartScore || a.score || 0);
+ if (scoreDiff) return scoreDiff;
+ return Math.abs(Number(a.price || 0) - referencePrice) - Math.abs(Number(b.price || 0) - referencePrice);
+ })
+ .slice(0, 12), referencePrice, keyLevelAtr);
  const nearestKeyLevel = enrichedKeyZones.length
  ? enrichedKeyZones.slice().sort((a, b) => Number(a.distancePct || 1) - Number(b.distancePct || 1))[0]
  : null;
- const overlayLines = state.showOrders && orderContext?.lines
+ const overlayLines = !isSyntheticIndex && state.showOrders && orderContext?.lines
  ? orderContext.lines.map(normalizeOrderLine).filter(Boolean)
  : [];
- const draftLines = buildChartDraftLines(state.chartTradingDraft);
+ const draftLines = isSyntheticIndex ? [] : buildChartDraftLines(state.chartTradingDraft);
  const chartLines = [...overlayLines, ...draftLines];
  const replayMode = normalizeReplayMode(state.replayMode);
  const replayCursorTime = replayMode?.active ? Number(visibleCandles[visibleCandles.length - 1]?.time || 0) : 0;
- const replayMarkers = (Array.isArray(state.replaySeed?.markers) ? state.replaySeed.markers : [])
+ const replayMarkers = isSyntheticIndex ? [] : (Array.isArray(state.replaySeed?.markers) ? state.replaySeed.markers : [])
  .map(normalizeReplayMarker)
  .filter(marker => !replayCursorTime || Number(marker.ts || 0) <= replayCursorTime)
  .filter(Boolean);
@@ -2890,8 +3846,7 @@
  const centerY = priceToY(zone.price);
  const topY = priceToY(zone.zoneHigh);
  const bottomY = priceToY(zone.zoneLow);
- const tfClass = String(zone.tf || '').toUpperCase() === '1D' ? 'day' : 'm15';
- const badgeLabel = `${zone.tf} ${zone.kind === 'resistance' ? 'R' : 'S'} ${formatStrength(zone, settings.displayStrengthAs)}`;
+ const badgeLabel = `${zone.label || (zone.kind === 'resistance' ? 'Strong Resistance' : 'Support Zone')} ${formatStrength(zone, settings.displayStrengthAs)}`;
  return {
  ...zone,
  key: `zone_${zone.tf}_${zone.kind}_${zoneIndex}_${zone.price}`,
@@ -2901,10 +3856,10 @@
  badgeY: centerY,
  topY: Math.min(topY, bottomY),
  bottomY: Math.max(topY, bottomY),
- className: `${tfClass}-${zone.kind}`,
+ className: zone.colorRole || (zone.kind === 'resistance' ? 'resistance-minor' : 'support-near'),
  badgeLabel,
  thickness: settings.thickness,
- detailLabel: `${badgeLabel} | ${formatPrice(zone.price)} | ${zone.label || 'Key level'} | Quality ${zone.reactionQuality || 0}% | Distance ${zone.distanceLabel}`,
+ detailLabel: `${zone.label || 'Key level'} | ${formatPrice(zone.price)} | ${zone.strength || 'Developing'} | ${zone.reactionClusterCount || zone.touch_count || 0} reactions | Distance ${zone.distanceLabel}`,
  pivotCircles: settings.showPivotCircles
  ? (zone.sourcePivots || []).map((pivot, pivotIndex) => {
  const visibleIndex = findNearestCandleIndex(visibleCandles, pivot.ts);
@@ -2932,8 +3887,11 @@
  label: `$${formatPrice(line.value)}`,
  }));
  const axis = buildAxisLabels(visibleCandles, timeframe, visibleWindow.startIndex);
+ const draftForAmounts = normalizeChartTradingDraft(state.chartTradingDraft);
  const orderTags = chartLines.map((line, index) => ({
  ...line,
+ displayRole: chartOrderTagRole(line),
+ amountLabel: chartOrderAmountLabel(line, orderContext, draftForAmounts),
  key: `order_tag_${line.key}_${index}`,
  topPct: ((priceToY(line.price) - chartTop) / Math.max(1, chartHeight)) * 100,
  }));
@@ -3010,10 +3968,16 @@
  };
  }
 
+ function compactPresetLabel(label = '') {
+ const value = String(label || '').trim();
+ if (value === 'Key Levels') return 'Key';
+ return value || 'Preset';
+ }
+
  function buildPresetMenu(state = {}) {
  const active = getPresetMeta(state.preset);
  return `<details class="ds-preset-menu">
- <summary class="bsm">Presets <span>${escapeHtml(active.label)}</span></summary>
+ <summary class="bsm">${escapeHtml(compactPresetLabel(active.label))}</summary>
  <div class="ds-preset-menu-panel">
  ${PRESET_GROUPS.map(group => `<div class="ds-preset-menu-group">
  <div class="ds-preset-menu-title">${escapeHtml(group.label)}</div>
@@ -3022,15 +3986,21 @@
  </div>
  </div>`).join('')}
  </div>
- </details>
- <span class="ds-active-preset-chip">${escapeHtml(active.label)}</span>`;
+ </details>`;
  }
 
  function buildQuickReviewControls(state = {}) {
- const currentTf = normalizeTimeframe(state.timeframe || '15m');
- const tfButton = (tf, label) => `<button class="bsm ds-chart-review-tf ${currentTf === tf ? 'active' : ''}" type="button" data-ds-chart-tf="${escapeHtml(tf)}" data-ds-chart-all-candles="1">${escapeHtml(label)}</button>`;
- const navButton = (action, label, title) => `<button class="bsm ds-chart-review-nav" type="button" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}" data-ds-chart-nav="${escapeHtml(action)}" data-ds-chart-nav-target="${SURFACE_REVIEW}">${escapeHtml(label)}</button>`;
- return `<div class="ds-chart-review-controls">
+  const currentTf = normalizeTimeframe(state.timeframe || '15m');
+  const reviewTabs = sanitizeChartReviewTabs(state.chartReviewTabs || []);
+  const activeReviewId = String(state.activeChartReviewTabId || '').trim();
+  const activeReviewTab = reviewTabs.find(tab => tab.id === activeReviewId) || reviewTabs[0] || null;
+  const closeTitle = state.chartReviewOverlayOpen ? 'Close chart review' : 'Close chart and return to Strategy Lab';
+  const tfButton = (tf, label) => `<button class="bsm ds-chart-review-tf ${currentTf === tf ? 'active' : ''}" type="button" data-ds-chart-tf="${escapeHtml(tf)}" data-ds-chart-all-candles="1">${escapeHtml(label)}</button>`;
+  const navButton = (action, label, title) => `<button class="bsm ds-chart-review-nav" type="button" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}" data-ds-chart-nav="${escapeHtml(action)}" data-ds-chart-nav-target="${SURFACE_REVIEW}">${escapeHtml(label)}</button>`;
+  const closeButton = activeReviewTab
+  ? `<button class="bsm ds-chart-review-close" type="button" title="${escapeHtml(closeTitle)}" aria-label="${escapeHtml(closeTitle)}" data-ds-review-tab-close="${escapeHtml(activeReviewTab.id)}">Close Review</button>`
+  : '';
+  return `<div class="ds-chart-review-controls">
  <div class="ds-chart-review-tfs" aria-label="Quick View timeframe">
  ${tfButton('15m', '15m')}
  ${tfButton('4h', '4H')}
@@ -3041,10 +4011,11 @@
  ${navButton('zoom-in', '+', 'Zoom in')}
  ${navButton('scroll-left', '\u2039', 'Scroll left')}
  ${navButton('scroll-right', '\u203a', 'Scroll right')}
- </div>
- <button class="bsm ds-chart-review-detach" type="button" title="Open detached chart" aria-label="Open detached chart" data-ds-chart-open="1"><span aria-hidden="true"></span></button>
- </div>`;
- }
+  </div>
+  <button class="bsm ds-chart-review-detach" type="button" title="Open detached chart" aria-label="Open detached chart" data-ds-chart-open="1">Detach</button>
+  ${closeButton}
+  </div>`;
+  }
 
  function buildChartSettingsMenu(state = {}, strategy = {}) {
  const chartType = normalizeChartType(state.chartType);
@@ -3053,10 +4024,9 @@
  const legendOn = state.showIndicatorLegend !== false;
  const gridOn = state.showGrid === true;
  const hideEventsOn = state.hideEventCandles === true;
- const keySettings = sanitizeKeyLevelSettings(strategy.keyLevelSettings || {});
- const keyButton = (key, value, label, active = false) => `<button class="bsm ${active ? 'active' : ''}" type="button" data-ds-key-level-setting="${escapeHtml(key)}" data-ds-key-level-value="${escapeHtml(value)}">${escapeHtml(label)}</button>`;
+ const ordersOn = state.showOrders === true;
  return `<details class="ds-chart-settings-menu">
- <summary class="bsm">Settings <span>${chartType === 'bars' ? 'Bars' : 'Candles'}</span></summary>
+ <summary class="bsm">Settings</summary>
  <div class="ds-chart-settings-panel">
  <div class="ds-chart-settings-section">
  <div class="ds-chart-settings-title">Chart Type</div>
@@ -3066,6 +4036,10 @@
  </div>
  </div>
  <div class="ds-chart-settings-section">
+ <div class="ds-chart-settings-title">Chart Range</div>
+ ${buildChartRangeControls(state)}
+ </div>
+ <div class="ds-chart-settings-section">
  <div class="ds-chart-settings-title">Indicator Display</div>
  <div class="ds-chart-settings-options">
  <button class="bsm ${indicatorStyle === 'tradingview' ? 'active' : ''}" type="button" data-ds-chart-setting="indicatorStyle" data-ds-chart-setting-value="tradingview">TV Style</button>
@@ -3073,108 +4047,41 @@
  </div>
  <button class="bsm ${legendOn ? 'active' : ''}" type="button" data-ds-chart-setting-toggle="showIndicatorLegend">Indicator Legend</button>
  <button class="bsm ${readoutOn ? 'active' : ''}" type="button" data-ds-chart-setting-toggle="showReadout">OHLC Readout</button>
+ <button class="bsm ${ordersOn ? 'active' : ''}" type="button" data-ds-chart-toggle="orders">Orders</button>
  <button class="bsm ${gridOn ? 'active' : ''}" type="button" data-ds-chart-setting-toggle="showGrid">Grid Lines</button>
  <button class="bsm ${hideEventsOn ? 'active' : ''}" type="button" data-ds-chart-setting-toggle="hideEventCandles">Hide Event Candles</button>
  </div>
- <div class="ds-chart-settings-section">
- <div class="ds-chart-settings-title">Key Levels</div>
- <div class="ds-chart-settings-options">
- ${[2, 4, 6, 8].map(value => keyButton('numberOfLevels', value, `${value} levels`, keySettings.numberOfLevels === value)).join('')}
- </div>
- <div class="ds-chart-settings-options">
- ${[4, 6, 8, 10].map(value => keyButton('pivotLength', value, `Pivot ${value}`, keySettings.pivotLength === value)).join('')}
- </div>
- <div class="ds-chart-settings-options">
- ${[25, 50, 100].map(value => keyButton('pivotMemory', value, `Memory ${value}`, keySettings.pivotMemory === value)).join('')}
- </div>
- <div class="ds-chart-settings-options">
- ${keyButton('displayStrengthAs', 'count', 'Count', keySettings.displayStrengthAs === 'count')}
- ${keyButton('displayStrengthAs', 'percent', 'Percent', keySettings.displayStrengthAs === 'percent')}
- ${keyButton('thickness', 1, '1px', keySettings.thickness === 1)}
- ${keyButton('thickness', 3, '3px', keySettings.thickness === 3)}
- ${keyButton('thickness', 5, '5px', keySettings.thickness === 5)}
- </div>
- <button class="bsm ${keySettings.showPivotCircles ? 'active' : ''}" type="button" data-ds-key-level-toggle="showPivotCircles">Pivot Circles</button>
- <button class="bsm ${keySettings.showLevelGlow ? 'active' : ''}" type="button" data-ds-key-level-toggle="showLevelGlow">Level Glow</button>
- </div>
  </div>
  </details>`;
  }
 
- function buildChartToolsMenu(state = {}, options = {}) {
- const density = normalizeOverlayDensity(state.overlayDensity);
- const isDesk = options.desk === true;
- const isPreview = options.preview === true;
- const isAdvanced = options.advanced === true;
- const openLabel = options.openLabel || (options.isTab ? 'Detach' : 'Open Full Chart');
- const sections = [];
- if (isDesk) {
- sections.push(`<div class="ds-chart-tools-section">
- <div class="ds-chart-tools-title">View Density</div>
- <div class="ds-chart-tools-options">
- ${OVERLAY_DENSITIES.map(item => `<button class="bsm ${density === item ? 'active' : ''}" type="button" data-ds-overlay-density="${item}">${escapeHtml(item[0].toUpperCase() + item.slice(1))}</button>`).join('')}
- </div>
- </div>`);
- }
- const workspaceButtons = [];
- if (isDesk) {
- workspaceButtons.push(`<button class="bsm ${state.syncCharts !== false ? 'active' : ''}" type="button" data-ds-desk-sync="1">Sync</button>`);
- workspaceButtons.push(`<button class="bsm ${state.deskLayoutMode === 'single' ? 'active' : ''}" type="button" data-ds-layout-mode="${state.deskLayoutMode === 'single' ? 'threePart' : 'single'}">${state.deskLayoutMode === 'single' ? 'Desk' : 'Single'}</button>`);
- } else if (!isPreview && isAdvanced) {
- workspaceButtons.push(`<button class="bsm ${state.rightPanelOpen !== false ? 'active' : ''}" type="button" data-ds-chart-toggle="right-panel">Trade Read</button>`);
- }
- if (!isDesk && (isAdvanced || isPreview)) {
- workspaceButtons.push(`<button class="bsm" type="button" data-ds-chart-open="1">${escapeHtml(openLabel)}</button>`);
- }
- if (workspaceButtons.length) {
- sections.push(`<div class="ds-chart-tools-section">
- <div class="ds-chart-tools-title">Workspace</div>
- <div class="ds-chart-tools-options">${workspaceButtons.join('')}</div>
- </div>`);
- }
- const overlayButtons = [];
- overlayButtons.push(`<button class="bsm ${state.showVwap ? 'active' : ''}" type="button" data-ds-chart-toggle="vwap">VWAP</button>`);
- overlayButtons.push(`<button class="bsm ${state.showOrders ? 'active' : ''}" type="button" data-ds-chart-toggle="orders">Orders</button>`);
- if (isDesk || isAdvanced) overlayButtons.push(`<button class="bsm ${state.intelligenceOverlays !== false ? 'active' : ''}" type="button" data-ds-chart-toggle="intel-overlays">Smart Marks</button>`);
- sections.push(`<div class="ds-chart-tools-section">
- <div class="ds-chart-tools-title">Overlays</div>
- <div class="ds-chart-tools-options">${overlayButtons.join('')}</div>
- </div>`);
- const navigationButtons = [
- `<button class="bsm" type="button" data-ds-chart-zoom="in">Zoom In</button>`,
- `<button class="bsm" type="button" data-ds-chart-zoom="out">Zoom Out</button>`,
- `<button class="bsm" type="button" data-ds-chart-nav="scroll-left" data-ds-chart-nav-target="${escapeHtml(options.navTarget || '')}">Left</button>`,
- `<button class="bsm" type="button" data-ds-chart-nav="scroll-right" data-ds-chart-nav-target="${escapeHtml(options.navTarget || '')}">Right</button>`,
- `<button class="bsm" type="button" data-ds-chart-fit="1">Fit</button>`,
- ];
- if (!isDesk) {
- sections.push(`<div class="ds-chart-tools-section">
- <div class="ds-chart-tools-title">Navigation</div>
- <div class="ds-chart-tools-options">${navigationButtons.join('')}</div>
- </div>`);
- }
- return `<details class="ds-chart-tools-menu">
- <summary class="bsm">Tools</summary>
- <div class="ds-chart-tools-panel">${sections.join('')}</div>
- </details>`;
- }
-
- function buildChartTabPicker(state = {}) {
+function buildChartTabPicker(state = {}, options = {}) {
  const reviewTabs = sanitizeChartReviewTabs(state.chartReviewTabs || []);
  const activeReviewId = String(state.activeChartReviewTabId || '').trim();
  const activeReviewTab = reviewTabs.find(tab => tab.id === activeReviewId) || reviewTabs[0] || null;
+ const compact = options.compact === true;
  const closeTitle = state.chartReviewOverlayOpen ? 'Close chart review' : 'Close chart and return to Strategy Lab';
  const reviewClose = activeReviewTab
- ? `<button class="bsm ds-chart-review-close" type="button" title="${escapeHtml(closeTitle)}" aria-label="${escapeHtml(closeTitle)}" data-ds-review-tab-close="${escapeHtml(activeReviewTab.id)}">x</button>`
+ ? `<button class="bsm ds-chart-review-close" type="button" title="${escapeHtml(closeTitle)}" aria-label="${escapeHtml(closeTitle)}" data-ds-review-tab-close="${escapeHtml(activeReviewTab.id)}">Close Review</button>`
  : '';
- if (state.chartReviewOverlayOpen) {
- return `<div class="ds-chart-review-close-slot ${state.symbol ? 'is-loaded' : ''}">
- ${reviewClose}
- </div>`;
- }
- return `<div class="ds-chart-tab-picker ${state.symbol ? 'is-loaded' : ''}">
+ if (state.chartReviewOverlayOpen) return reviewClose;
+ if (compact) {
+ return `<details class="ds-symbol-menu ds-chart-tab-picker ${state.symbol ? 'is-loaded' : ''} is-compact">
+ <summary class="bsm ds-symbol-summary">${escapeHtml(state.symbol || 'Coin')}</summary>
+ <div class="ds-symbol-menu-panel">
  <form class="ds-chart-symbol-form" data-ds-chart-symbol-form>
- <input class="si" type="search" data-ds-chart-symbol-input list="dsChartSymbolList" placeholder="Search coin or index, e.g. FWD10, BTC, ETH..." autocomplete="off" value="${escapeHtml(state.symbol || '')}" />
+ <label>Coin</label>
+ <input class="si" type="search" data-ds-chart-symbol-input list="dsChartSymbolList" placeholder="Search coin or index..." autocomplete="off" value="${escapeHtml(state.symbol || '')}" />
+ <datalist id="dsChartSymbolList" data-ds-chart-symbol-list></datalist>
+ <button class="bsm primary" type="submit">Load</button>
+ </form>
+ ${reviewClose}
+ </div>
+ </details>`;
+ }
+ return `<div class="ds-chart-tab-picker ${state.symbol ? 'is-loaded' : ''} ${compact ? 'is-compact' : ''}">
+ <form class="ds-chart-symbol-form" data-ds-chart-symbol-form>
+ <input class="si" type="search" data-ds-chart-symbol-input list="dsChartSymbolList" placeholder="Search coin or index, e.g. FWD100, BTC, ETH..." autocomplete="off" value="${escapeHtml(state.symbol || '')}" />
  <datalist id="dsChartSymbolList" data-ds-chart-symbol-list></datalist>
  <button class="bsm primary" type="submit">Search</button>
  </form>
@@ -3182,24 +4089,41 @@
  </div>`;
  }
 
- function buildDeskControls(state = {}, strategy = {}) {
+ function buildDeskControls(state = {}, strategy = {}, options = {}) {
+ const reviewClose = state.chartReviewOverlayOpen ? buildChartTabPicker(state, { compact: true }) : '';
+ const symbolPicker = state.chartReviewOverlayOpen ? '' : `<div class="live-order-chart-timeframes ds-chart-command-symbol">
+ ${buildChartTabPicker(state, { compact: true })}
+ </div>`;
+ const collapsed = sanitizeCollapsedPanels(state.collapsedPanels);
+ const contextButton = state.chartReviewOverlayOpen || state.deskLayoutMode === 'single' || (collapsed.context !== true && state.rightPanelOpen !== false)
+ ? ''
+ : '<button type="button" class="bsm" data-ds-desk-collapse="context">Show Context</button>';
  return `<div class="ds-chart-command-strip ${state.chartFullscreen ? 'is-fullscreen' : ''}">
+ ${symbolPicker}
+ ${contextButton}
  <div class="live-order-chart-timeframes ds-chart-command-presets">
  ${buildPresetMenu(state)}
  </div>
- <div class="live-order-chart-timeframes ds-fullscreen-control-group">
- <button class="bsm ds-fullscreen-toggle ${state.chartFullscreen ? 'active' : ''}" type="button" data-ds-chart-fullscreen="1">${state.chartFullscreen ? 'Exit Full Screen' : 'Full Screen'}</button>
- </div>
+  <div class="live-order-chart-timeframes ds-fullscreen-control-group">
+  <button class="bsm ds-fullscreen-toggle ${state.chartFullscreen ? 'active' : ''}" type="button" data-ds-chart-fullscreen="1">${state.chartFullscreen ? 'Exit Full Screen' : 'Full Screen'}</button>
+  <button class="bsm ${state.deskLayoutMode !== 'single' && normalizeTimeframe(state.primaryTimeframe || '') === '1d' && normalizeTimeframe(state.executionTimeframe || '') === '15m' ? 'active' : ''}" type="button" title="Compare daily structure with the 15 minute execution chart" data-ds-desk-compare="1d-15m">1D + 15m</button>
+  </div>
  <div class="live-order-chart-timeframes ds-chart-command-tools">
- ${buildChartToolsMenu(state, { desk: true, openLabel: 'Detach' })}
  ${buildChartSettingsMenu(state, strategy)}
  </div>
+ ${options.showTrading ? buildChartTradeButtons(state, options.model || null) : ''}
+ <div class="live-order-chart-timeframes ds-chart-command-tools">
+ ${buildChartIndicatorMenu(state)}
+ </div>
+ ${reviewClose}
+ <button class="bsm ds-chart-refresh-compact" type="button" data-ds-chart-refresh="1">Refresh</button>
  </div>`;
  }
 
  function resolveChartInstrumentDescription(symbol = '') {
  const normalized = String(symbol || '').trim().toUpperCase();
  if (!normalized) return '';
+ if (isFwdIndexSymbol(normalized)) return 'FWD-100 Equal-Weight Index';
  const cached = Array.isArray(chartMarketSymbolsCache) ? chartMarketSymbolsCache : [];
  const product = cached.find(item => String(item?.symbol || '').trim().toUpperCase() === normalized) || null;
  const description = product?.instrumentDescription || product?.description || product?.name || '';
@@ -3210,9 +4134,24 @@
  return normalized;
  }
 
+ function buildIndexCorrelationStrip(indexCorrelation = null) {
+ if (!indexCorrelation || !Number.isFinite(Number(indexCorrelation.primary))) return '';
+ const tone = String(indexCorrelation.tone || 'neutral').replace(/[^a-z0-9_-]/gi, '') || 'neutral';
+ return `<div class="ds-chart-meta-row ds-index-correlation-row">
+ <span class="${escapeHtml(tone)}"><strong>FWD-100 Correlation</strong> ${escapeHtml(formatCorrelationValue(indexCorrelation.primary))}</span>
+ <span>${escapeHtml(indexCorrelation.label || 'Index behavior')}</span>
+ <span>30D ${escapeHtml(formatCorrelationValue(indexCorrelation.c30?.value))}</span>
+ <span>90D ${escapeHtml(formatCorrelationValue(indexCorrelation.c90?.value))}</span>
+ <span>180D ${escapeHtml(formatCorrelationValue(indexCorrelation.c180?.value))}</span>
+ </div>`;
+ }
+
  function buildDeskMarkup(surface = SURFACE_TAB, state = {}, strategy = {}, primaryPayload = {}, executionPayload = {}, signal = null, marketIndex = null, contextData = {}) {
  const isDetached = surface === SURFACE_DETACHED;
- const isSingleChart = state.chartFullscreen === true || state.deskLayoutMode === 'single';
+ const primaryTf = normalizeTimeframe(state.primaryTimeframe || state.timeframe || '15m');
+ const executionTf = normalizeTimeframe(state.executionTimeframe || state.timeframe || '15m');
+ const isCompareLayout = state.deskLayoutMode !== 'single' && primaryTf === '1d' && executionTf === '15m';
+ const isSingleChart = (state.chartFullscreen === true && !isCompareLayout) || state.deskLayoutMode === 'single';
  const collapsed = sanitizeCollapsedPanels(state.collapsedPanels);
  const maximized = normalizeMaximizedPanel(state.maximizedPanel);
  const widths = sanitizePanelWidths(state.panelWidths);
@@ -3224,19 +4163,11 @@
  const contextPanel = isSingleChart || collapsed.context || state.rightPanelOpen === false ? '' : buildDeskContextPanel(state, executionPayload.intelligence || primaryPayload.intelligence, signal, marketIndex, contextData);
  const splitterOne = !isSingleChart && !collapsed.primary && !collapsed.execution && !maximized ? '<div class="ds-desk-splitter" data-ds-desk-splitter="primary-execution"></div>' : '';
  const splitterTwo = !isSingleChart && !collapsed.execution && !collapsed.context && state.rightPanelOpen !== false && !maximized ? '<div class="ds-desk-splitter" data-ds-desk-splitter="execution-context"></div>' : '';
- const statusClass = !state.symbol ? 'account-inline-note' : (primaryPayload.dataset?.ok || executionPayload.dataset?.ok) ? 'account-inline-note good' : 'account-inline-note bad';
- const hiddenDeskEvents = Math.max(Number(primaryPayload.model?.hiddenEventCandleCount || 0), Number(executionPayload.model?.hiddenEventCandleCount || 0));
  const primaryIndex = primaryPayload.dataset?.syntheticIndex || executionPayload.dataset?.syntheticIndex;
- const deskInstrumentDescription = resolveChartInstrumentDescription(state.symbol || '');
- const deskInstrumentNote = state.symbol && deskInstrumentDescription && deskInstrumentDescription.toUpperCase() !== String(state.symbol || '').toUpperCase()
- ? `<div class="account-inline-note ds-instrument-note"><strong>${escapeHtml(state.symbol || '')}</strong> <span>${escapeHtml(deskInstrumentDescription)}</span></div>`
- : '';
- const statusText = !state.symbol
- ? 'Choose a symbol to load the trading desk.'
- : primaryIndex
- ? `${FWD_INDEX_SYMBOL} | Market index chart | ${primaryPayload.model?.totalCount || executionPayload.model?.totalCount || 0} scan bars`
- : `${state.symbol}${deskInstrumentDescription ? ` | ${deskInstrumentDescription}` : ''} | Primary ${RESOLUTION_LABELS[normalizeTimeframe(primaryState.timeframe)]} | Execution ${RESOLUTION_LABELS[normalizeTimeframe(executionState.timeframe)]}${hiddenDeskEvents ? ` | ${hiddenDeskEvents} event candle hidden` : ''}`;
  const restore = maximized ? `<button class="bsm active" type="button" data-ds-desk-restore="1">Restore Layout</button>` : '';
+ const deskTitleBlock = '';
+ const deskStatusBlock = '';
+ const deskInstrumentBlock = '';
  const deskClass = [
  'ds-chart-desk',
  isSingleChart ? 'is-single-clean' : '',
@@ -3247,32 +4178,20 @@
  ].filter(Boolean).join(' ');
  return `<div class="live-order-chart-card chart-only ${isDetached ? 'ds-chart-card-detached' : 'ds-chart-card-tab'} ds-chart-card-desk ${isSingleChart ? 'ds-clean-chart-mode' : ''} ${state.chartFullscreen ? 'ds-chart-fullscreen-mode' : ''}">
  <div class="live-order-chart-head ds-desk-head">
- <div>
- <div class="mo-section">${state.chartFullscreen ? 'CHART FULL SCREEN' : isSingleChart ? (normalizePreset(state.preset) === 'key' ? 'KEY LEVEL CHART' : 'CLEAN CHART') : (isDetached ? 'DETACHED TRADING DESK' : 'MULTI-PANEL TRADING DESK')}</div>
- <div class="live-order-chart-copy">${state.chartFullscreen ? 'Chart-only focus mode.' : isSingleChart ? 'Fast 15 minute chart with key levels by default. Switch to Desk for execution and context panels.' : 'Primary chart, execution chart, and tabbed context. Resize panels or maximize any section.'}</div>
- </div>
+ ${deskTitleBlock}
  <div class="live-order-chart-actions">
- ${buildDeskControls(state, strategy)}
- ${state.symbol ? buildChartTradeButtons(state, primaryPayload.model || executionPayload.model) : ''}
+ ${buildDeskControls(state, strategy, { showTrading: !!(state.symbol && !primaryIndex), model: primaryPayload.model || executionPayload.model })}
  ${restore}
- <details class="ds-indicator-menu">
- <summary class="bsm">Indicators</summary>
- <div class="ds-indicator-grid">
- ${INDICATOR_DEFS.map(definition => `<button class="bsm ${sanitizeIndicatorState(state.indicators || {})[definition.key] ? 'active' : ''}" type="button" data-ds-chart-indicator="${escapeHtml(definition.key)}">${escapeHtml(definition.label)}</button>`).join('')}
- </div>
- </details>
- <button class="bsm" type="button" data-ds-chart-refresh="1">Refresh</button>
  </div>
  </div>
- <div class="${statusClass}" id="dsChartStatus">${escapeHtml(statusText)}</div>
- ${deskInstrumentNote}
- ${surface === SURFACE_TAB ? buildChartTabPicker(state) : ''}
+ ${deskStatusBlock}
+ ${deskInstrumentBlock}
+ ${!primaryIndex ? buildIndexCorrelationStrip(primaryPayload.indexCorrelation || executionPayload.indexCorrelation) : ''}
  ${isSingleChart ? '' : buildDecisionBadges(executionPayload.intelligence || primaryPayload.intelligence)}
- <div class="ds-desk-collapsed-bar">
+ ${collapsed.primary || (!isSingleChart && collapsed.execution) ? `<div class="ds-desk-collapsed-bar">
  ${collapsed.primary ? '<button type="button" data-ds-desk-collapse="primary">Show Primary</button>' : ''}
  ${!isSingleChart && collapsed.execution ? '<button type="button" data-ds-desk-collapse="execution">Show Execution</button>' : ''}
- ${!isSingleChart && (collapsed.context || state.rightPanelOpen === false) ? '<button type="button" data-ds-desk-collapse="context">Show Context</button>' : ''}
- </div>
+ </div>` : ''}
  <div class="${escapeHtml(deskClass)}" style="${escapeHtml(panelStyle)}">
  ${maximized && maximized !== 'primary' ? '' : primaryPanel}
  ${splitterOne}
@@ -3283,7 +4202,7 @@
  </div>`;
  }
 
- function buildChartMarkup(surface = SURFACE_PREVIEW, state = {}, strategy = {}, dataset = {}, model = null, signal = null, marketIndex = null, uiMode = 'default', intelligence = null, calculatedIndicators = {}) {
+ function buildChartMarkup(surface = SURFACE_PREVIEW, state = {}, strategy = {}, dataset = {}, model = null, signal = null, marketIndex = null, uiMode = 'default', intelligence = null, calculatedIndicators = {}, indexCorrelation = null) {
  const presetMeta = getPresetMeta(state.preset);
  const keyLevelSettings = sanitizeKeyLevelSettings(dataset?.keyLevels?.config || strategy.keyLevelSettings || {});
  const isJournalMode = String(uiMode || '').trim().toLowerCase() === 'journal';
@@ -3291,43 +4210,40 @@
  const isReview = surface === SURFACE_REVIEW;
  const isTab = surface === SURFACE_TAB || isReview;
  const isAdvancedSurface = isDetached || isTab;
+ const isFwdIndex = dataset?.syntheticIndex === true;
+ const chartResolutions = isFwdIndex ? ['1d'] : RESOLUTIONS;
  const statusClass = !state.symbol
  ? 'account-inline-note'
  : dataset?.ok
  ? (dataset?.stale ? 'account-inline-note warn' : 'account-inline-note good')
  : 'account-inline-note bad';
- const chartInstrumentDescription = resolveChartInstrumentDescription(state.symbol || '');
- const chartInstrumentNote = !isReview && state.symbol && chartInstrumentDescription && chartInstrumentDescription.toUpperCase() !== String(state.symbol || '').toUpperCase()
- ? `<div class="account-inline-note ds-instrument-note"><strong>${escapeHtml(state.symbol || '')}</strong> <span>${escapeHtml(chartInstrumentDescription)}</span></div>`
- : '';
+ const chartInstrumentDescription = isFwdIndex ? (dataset?.displayName || fwdIndexDisplayName(dataset?.marketIndex || marketIndex || null)) : resolveChartInstrumentDescription(state.symbol || '');
+ const chartInstrumentNote = '';
  const statusText = isReview
  ? ''
  : !state.symbol
  ? 'Choose a symbol to load the chart.'
  : dataset?.ok
  ? (dataset?.syntheticIndex
- ? `${FWD_INDEX_SYMBOL} | market index | showing ${model?.visibleCount || 0}/${model?.totalCount || 0} scan bars${dataset?.marketIndex?.regime ? ` | ${String(dataset.marketIndex.regime).replace(/_/g, ' ')}` : ''}`
- : `${state.symbol}${chartInstrumentDescription ? ` | ${chartInstrumentDescription}` : ''} | ${RESOLUTION_LABELS[normalizeTimeframe(state.timeframe)]} | loaded ${model?.totalCount || 0} candles${dataset?.candles?.[0]?.time ? ` from ${formatChartDate(dataset.candles[0].time)}` : ''}${dataset?.candles?.length ? ` to ${formatChartDate(dataset.candles[dataset.candles.length - 1].time)}` : ''} | visible ${model?.visibleCount || 0}${model?.hiddenEventCandleCount ? ` | ${model.hiddenEventCandleCount} event candle hidden` : ''}${dataset?.stale ? ' | using cached data' : ''}`)
+ ? `${FWD_INDEX_SYMBOL} | ${chartInstrumentDescription} | ${model?.totalCount || dataset?.candles?.length || 0} bars | ${String(dataset?.historyMode || 'daily index history').replace(/_/g, ' ')}${dataset?.marketIndex?.regime ? ` | ${String(dataset.marketIndex.regime).replace(/_/g, ' ')}` : ''}`
+ : `${RESOLUTION_LABELS[normalizeTimeframe(state.timeframe)]} | loaded ${model?.totalCount || 0} candles${dataset?.candles?.[0]?.time ? ` from ${formatChartDate(dataset.candles[0].time)}` : ''}${dataset?.candles?.length ? ` to ${formatChartDate(dataset.candles[dataset.candles.length - 1].time)}` : ''} | visible ${model?.visibleCount || 0}${dataset?.stale ? ' | using cached data' : ''}`)
  : (dataset?.error || 'Failed to load chart data.');
  const hasReplay = !!state.replaySeed || !!normalizeReplayMode(state.replayMode);
  const replayControls = !isReview && model && isAdvancedSurface && state.symbol ? buildReplayControls(state, model) : '';
  const controls = isJournalMode
  ? `
  <div class="live-order-chart-timeframes ds-chart-journal-timeframes">
- ${RESOLUTIONS.map(tf => `<button class="bsm ${normalizeTimeframe(state.timeframe) === tf ? 'active' : ''}" type="button" data-ds-chart-tf="${tf}">${escapeHtml(RESOLUTION_LABELS[tf])}</button>`).join('')}
+ ${chartResolutions.map(tf => `<button class="bsm ${normalizeTimeframe(state.timeframe) === tf ? 'active' : ''}" type="button" data-ds-chart-tf="${tf}">${escapeHtml(RESOLUTION_LABELS[tf])}</button>`).join('')}
  </div>
- ${buildChartRangeControls(state)}
  <div class="live-order-chart-timeframes ds-chart-journal-actions">
  ${surface === SURFACE_PREVIEW ? '<button class="bsm" type="button" data-ds-chart-open="1">Open Full Chart</button>' : ''}
  </div>`
  : surface === SURFACE_PREVIEW
  ? `
  <div class="live-order-chart-timeframes">
- ${RESOLUTIONS.map(tf => `<button class="bsm ${normalizeTimeframe(state.timeframe) === tf ? 'active' : ''}" type="button" data-ds-chart-tf="${tf}">${escapeHtml(RESOLUTION_LABELS[tf])}</button>`).join('')}
+ ${chartResolutions.map(tf => `<button class="bsm ${normalizeTimeframe(state.timeframe) === tf ? 'active' : ''}" type="button" data-ds-chart-tf="${tf}">${escapeHtml(RESOLUTION_LABELS[tf])}</button>`).join('')}
  </div>
- ${buildChartRangeControls(state)}
  <div class="live-order-chart-timeframes">
- ${buildChartToolsMenu(state, { preview: true, navTarget: surface, openLabel: 'Open Full Chart' })}
  ${buildChartSettingsMenu(state, strategy)}
  </div>`
  : isReview
@@ -3337,27 +4253,19 @@
  </div>`
  : ` 
  <div class="live-order-chart-timeframes">
- ${RESOLUTIONS.map(tf => `<button class="bsm ${normalizeTimeframe(state.timeframe) === tf ? 'active' : ''}" type="button" data-ds-chart-tf="${tf}">${escapeHtml(RESOLUTION_LABELS[tf])}</button>`).join('')}
+ ${chartResolutions.map(tf => `<button class="bsm ${normalizeTimeframe(state.timeframe) === tf ? 'active' : ''}" type="button" data-ds-chart-tf="${tf}">${escapeHtml(RESOLUTION_LABELS[tf])}</button>`).join('')}
  </div>
- ${buildChartRangeControls(state)}
  <div class="live-order-chart-timeframes">
  ${buildPresetMenu(state)}
  </div>
  <div class="live-order-chart-timeframes">
- ${buildChartToolsMenu(state, { advanced: true, isTab, navTarget: surface, openLabel: isTab ? 'Detach' : 'Open Full Chart' })}
  ${buildChartSettingsMenu(state, strategy)}
  </div>`;
- const indicatorState = sanitizeIndicatorState(state.indicators || {});
- const indicatorControls = !isReview && !isJournalMode && model
- ? `<details class="ds-indicator-menu">
- <summary class="bsm">Indicators</summary>
- <div class="ds-indicator-grid">
- ${INDICATOR_DEFS.map(definition => `<button class="bsm ${indicatorState[definition.key] ? 'active' : ''}" type="button" data-ds-chart-indicator="${escapeHtml(definition.key)}">${escapeHtml(definition.label)}</button>`).join('')}
- </div>
- </details>`
+ const indicatorControls = !isFwdIndex && !isReview && !isJournalMode && model
+ ? buildChartIndicatorMenu(state)
  : '';
  const advancedControls = '';
- const signalBadgeRow = !isReview && !isJournalMode && signal
+ const signalBadgeRow = !isFwdIndex && !isReview && !isJournalMode && signal
  ? `<div class="ds-chart-meta-row">
  <span>${escapeHtml(String(signal.marketRegime || marketIndex?.regime || 'UNKNOWN').replace(/_/g, ' '))}</span>
  <span>${escapeHtml(signal.setupFamilyLabel || 'Mixed')}</span>
@@ -3366,15 +4274,15 @@
  <span>${escapeHtml(`TQ ${signal.tradeQuality?.score || 0}`)}</span>
  </div>`
  : '';
- const intelligenceBadges = !isReview && !isJournalMode && intelligence?.badges?.length
+ const intelligenceBadges = !isFwdIndex && !isReview && !isJournalMode && intelligence?.badges?.length
  ? `<div class="ds-chart-meta-row ds-intel-badge-row">
  ${intelligence.badges.map(badge => `<span class="${escapeHtml(badge.tone || 'neutral')}">${escapeHtml(badge.label || '')}</span>`).join('')}
  </div>`
  : '';
- const indicatorLegend = !isReview && !isJournalMode && model
+ const indicatorLegend = !isFwdIndex && !isReview && !isJournalMode && model
  ? buildChartIndicatorLegend(state, presetMeta, calculatedIndicators, model)
  : '';
- const signalContextTags = !isReview && !isJournalMode && signal
+ const signalContextTags = !isFwdIndex && !isReview && !isJournalMode && signal
  ? `
  <div class="live-order-study-legend">
  <span class="live-order-study-pill key"><strong>Setup</strong> ${escapeHtml(signal.setupFamilyLabel || 'Mixed')}</span>
@@ -3383,7 +4291,7 @@
  <span class="live-order-study-pill key"><strong>Persistence</strong> ${escapeHtml(signal.signalPersistence?.label || 'Fresh')}</span>
  </div>`
  : '';
- const studyLegend = !isReview && !isJournalMode && model
+ const studyLegend = !isFwdIndex && !isReview && !isJournalMode && model
  ? `
  <div class="live-order-study-legend">
  ${isIndicatorGroupActive(state, presetMeta, 'ema') ? model.studyLines.filter(line => line.key !== 'vwap').map(line => `<span class="live-order-study-pill ${escapeHtml(line.className)}"><strong>${escapeHtml(line.label)}</strong> $${escapeHtml(formatPrice(line.latestValue))}</span>`).join('') : ''}
@@ -3407,12 +4315,12 @@
  ${presetMeta.showKeyLevels ? buildKeyLevelVisualLayer(model, keyLevelSettings) : ''}
  ${isReview ? '' : buildIntelligenceOverlay(model, intelligence, state)}
  <div class="live-order-chart-tags">
- ${isReview ? '' : model.orderTags.map(tag => `<div class="live-order-chart-tag ${escapeHtml(tag.tone)} ${escapeHtml(tag.source || '')}" style="top:${Math.max(0, Math.min(100, tag.topPct)).toFixed(2)}%"><strong>${escapeHtml(tag.label)}</strong><em>$${escapeHtml(formatPrice(tag.price))}${tag.meta ? ` | ${escapeHtml(tag.meta)}` : ''}</em></div>`).join('')}
+ ${isReview ? '' : model.orderTags.map(tag => `<div class="live-order-chart-tag ${escapeHtml(tag.tone)} ${escapeHtml(tag.source || '')}" data-ds-chart-line-role="${escapeHtml(tag.displayRole || tag.role || tag.kind || tag.tone || '')}" data-ds-chart-line-source="${escapeHtml(tag.source || '')}" data-ds-chart-line-order-id="${escapeHtml(tag.orderId || '')}" data-ds-chart-line-price="${escapeHtml(tag.price || '')}" data-ds-chart-line-top="${Math.max(0, Math.min(100, tag.topPct)).toFixed(2)}" title="${escapeHtml((tag.displayRole === 'stop' || tag.displayRole === 'target') ? (tag.source === 'linked' ? `Drag to modify ${tag.label || tag.displayRole || 'order'}` : `Drag to adjust ${tag.label || 'draft line'}`) : `${tag.label || 'Order line'} is read only on chart`)}" style="top:${Math.max(0, Math.min(100, tag.topPct)).toFixed(2)}%"><strong>${escapeHtml(tag.label)}</strong><em>$${escapeHtml(formatPrice(tag.price))}${tag.amountLabel ? ` | ${escapeHtml(tag.amountLabel)}` : ''}${tag.meta ? ` | ${escapeHtml(tag.meta)}` : ''}</em></div>`).join('')}
  ${!isReview && model.lastPrice ? `<div class="live-order-chart-tag ds-last-price-tag ${escapeHtml(model.lastPrice.tone)}" style="top:${Math.max(0, Math.min(100, model.lastPrice.topPct)).toFixed(2)}%"><strong>Last</strong><em>$${escapeHtml(formatPrice(model.lastPrice.price))}</em></div>` : ''}
  ${model.replayCursor ? `<div class="live-order-chart-tag replay-cursor" style="top:4%"><strong>Replay Cursor</strong><em>${escapeHtml(new Date(model.replayCursor.time).toLocaleString())}</em></div>` : ''}
  </div>
  </div>`;
- const tradeReadPanel = !isReview && !isJournalMode && isAdvancedSurface && model ? buildTradeReadPanel(intelligence, state) : '';
+ const tradeReadPanel = !isFwdIndex && !isReview && !isJournalMode && isAdvancedSurface && model ? buildTradeReadPanel(intelligence, state) : '';
  const chartStage = tradeReadPanel
  ? `<div class="ds-advanced-chart-stage">
  <div class="ds-advanced-chart-main">${chartMarkup}</div>
@@ -3440,20 +4348,21 @@
  </div>
  <div class="live-order-chart-actions">
  ${controls}
- ${!isReview && !isJournalMode && isAdvancedSurface && state.symbol ? buildChartTradeButtons(state, model) : ''}
+ ${!isFwdIndex && !isReview && !isJournalMode && isAdvancedSurface && state.symbol ? buildChartTradeButtons(state, model) : ''}
  ${advancedControls}
  ${indicatorControls}
  ${isReview ? '' : '<button class="bsm" type="button" data-ds-chart-refresh="1">Refresh</button>'}
  </div>
  </div>
- ${isReview ? buildChartTabPicker(state) : `<div class="${statusClass}" id="dsChartStatus">${escapeHtml(statusText)}</div>`}
+ ${isReview ? '' : `<div class="${statusClass}" id="dsChartStatus">${escapeHtml(statusText)}</div>`}
  ${chartInstrumentNote}
+ ${!isFwdIndex && !isReview && !isJournalMode ? buildIndexCorrelationStrip(indexCorrelation) : ''}
  ${!isReview && isTab ? buildChartTabPicker(state) : ''}
  ${replayControls}
- ${!isReview && !isJournalMode && isAdvancedSurface ? buildDraftSummary(state, model) : ''}
- ${!isReview && !isJournalMode && isAdvancedSurface ? buildDecisionBadges(intelligence) : ''}
- ${!isReview && !isJournalMode && isAdvancedSurface ? buildExecutionPulse(intelligence) : ''}
- ${!isReview && !isJournalMode ? buildNearestKeyLevelStrip(model) : ''}
+ ${!isFwdIndex && !isReview && !isJournalMode && isAdvancedSurface ? buildDraftSummary(state, model) : ''}
+ ${!isFwdIndex && !isReview && !isJournalMode && isAdvancedSurface ? buildDecisionBadges(intelligence) : ''}
+ ${!isFwdIndex && !isReview && !isJournalMode && isAdvancedSurface ? buildExecutionPulse(intelligence) : ''}
+ ${!isFwdIndex && !isReview && !isJournalMode ? buildNearestKeyLevelStrip(model) : ''}
  ${intelligenceBadges}
  ${signalBadgeRow}
  ${signalContextTags}
@@ -3581,13 +4490,22 @@
  presetMeta,
  })
  : null;
- return { state, dataset, model, indicators, intelligence };
+ const shouldLoadIndexContext = dataset?.ok && !dataset?.syntheticIndex && state.compareWithIndex !== false;
+ const indexDataset = shouldLoadIndexContext
+ ? await loadFwdIndexChartDataset({ symbol: FWD_INDEX_SYMBOL, timeframe: '1d' }, strategy).catch(() => null)
+ : null;
+ const indexCorrelation = shouldLoadIndexContext
+ ? await buildIndexCorrelation(state.symbol, marketIndex, indexDataset).catch(() => null)
+ : null;
+ const indexComparison = shouldLoadIndexContext ? buildIndexComparison(state.symbol, marketIndex, indexDataset) : null;
+ return { state, dataset, model, indicators, intelligence, indexCorrelation, indexComparison };
  }
 
  async function renderDeskSurface(surface = SURFACE_TAB, surfaceRef, state = {}, strategy = {}, orderContext = null, signalState = {}, activeSignal = null, force = false) {
- const fastSingle = state.chartFullscreen === true || state.deskLayoutMode === 'single';
  const primaryTimeframe = normalizeTimeframe(state.primaryTimeframe || state.timeframe || '15m');
  const executionTimeframe = normalizeTimeframe(state.executionTimeframe || state.timeframe || '15m');
+ const isCompareLayout = state.deskLayoutMode !== 'single' && primaryTimeframe === '1d' && executionTimeframe === '15m';
+ const fastSingle = (state.chartFullscreen === true && !isCompareLayout) || state.deskLayoutMode === 'single';
  const primaryState = {
  ...state,
  timeframe: primaryTimeframe,
@@ -3632,6 +4550,7 @@
  model: item.payload.model,
  intelligence: item.payload.intelligence,
  indicators: item.payload.indicators,
+ indexComparison: item.payload.indexComparison,
  presetMeta: getPresetMeta(state.preset),
  });
  if (typeof globalThis.recordPopupPerformanceMetric === 'function') {
@@ -3703,6 +4622,14 @@
  presetMeta,
  })
  : null;
+ const shouldLoadIndexContext = dataset?.ok && !dataset?.syntheticIndex && state.compareWithIndex !== false;
+ const indexDataset = shouldLoadIndexContext
+ ? await loadFwdIndexChartDataset({ symbol: FWD_INDEX_SYMBOL, timeframe: '1d' }, strategy).catch(() => null)
+ : null;
+ const indexCorrelation = shouldLoadIndexContext
+ ? await buildIndexCorrelation(state.symbol, signalState?.marketIndex || null, indexDataset).catch(() => null)
+ : null;
+ const indexComparison = shouldLoadIndexContext ? buildIndexComparison(state.symbol, signalState?.marketIndex || null, indexDataset) : null;
  const markup = buildChartMarkup(
  surface,
  state,
@@ -3713,7 +4640,8 @@
  signalState?.marketIndex || null,
  uiMode,
  intelligence,
- calculatedIndicators
+ calculatedIndicators,
+ indexCorrelation
  );
  if (!force && markup === surfaceRef.lastMarkup) return;
  surfaceRef.lastMarkup = markup;
@@ -3731,6 +4659,7 @@
  model,
  intelligence,
  indicators: calculatedIndicators,
+ indexComparison,
  presetMeta,
  });
  if (typeof globalThis.recordPopupPerformanceMetric === 'function') {
@@ -3781,6 +4710,205 @@
  ['target', normalized.takeProfit],
  ].filter(([, value]) => Number(value) > 0)
  .sort((a, b) => Math.abs(Number(a[1]) - Number(price)) - Math.abs(Number(b[1]) - Number(price)))[0]?.[0] || '';
+ }
+
+ function chartLineRole(line = {}) {
+ const role = String(line.role || line.kind || line.tone || '').trim().toLowerCase();
+ if (role === 'stop_loss' || role === 'stop') return 'stop';
+ if (role === 'take_profit' || role === 'target' || role === 'tp') return 'target';
+ if (role === 'entry' || role === 'limit_entry') return 'entry';
+ const tone = String(line.tone || '').trim().toLowerCase();
+ return ['entry', 'stop', 'target'].includes(tone) ? tone : '';
+ }
+
+ function chartLinkedOrderRole(role = '') {
+ const safeRole = String(role || '').trim().toLowerCase();
+ if (safeRole === 'stop') return 'stop_loss';
+ if (safeRole === 'target') return 'take_profit';
+ return safeRole;
+ }
+
+ function findLinkedOrderForChartRole(orderContext = null, role = '') {
+ const wanted = chartLinkedOrderRole(role);
+ const linked = Array.isArray(orderContext?.linkedOrders) ? orderContext.linkedOrders : [];
+ return linked.find(order => String(order.role || '').trim().toLowerCase() === wanted && (order.orderId || order.clientOrderId))
+ || linked.find(order => String(order.role || '').trim().toLowerCase() === wanted)
+ || null;
+ }
+
+ function collectAdjustableChartLines(state = {}) {
+ const orderContext = normalizeOrderContext(state.orderContext);
+ const draft = normalizeChartTradingDraft(state.chartTradingDraft);
+ const out = [];
+ if (orderContext?.lines?.length) {
+ orderContext.lines.forEach(line => {
+ const role = chartLineRole(line);
+ if (!role || !(Number(line.price || 0) > 0)) return;
+ const linkedOrder = findLinkedOrderForChartRole(orderContext, role);
+ const isLinked = String(line.source || '').toLowerCase() === 'linked' || !!line.orderId || !!line.clientOrderId || !!linkedOrder;
+ const isPositionEntry = role === 'entry' && String(line.source || '').toLowerCase() === 'position' && !linkedOrder;
+ out.push({
+ role,
+ price: Number(line.price || 0),
+ source: isLinked && !isPositionEntry ? 'live' : 'context',
+ line,
+ order: isLinked && !isPositionEntry ? (linkedOrder || line) : null,
+ });
+ });
+ }
+ if (draft) {
+ [
+ ['entry', draft.entry],
+ ['stop', draft.stopLoss],
+ ['target', draft.takeProfit],
+ ].forEach(([role, value]) => {
+ if (Number(value) > 0) out.push({ role, price: Number(value), source: 'draft', line: { role, price: Number(value), source: 'draft' }, order: null });
+ });
+ }
+ return out;
+ }
+
+ function nearestAdjustableChartLine(state = {}, price = 0) {
+ const safePrice = Number(price || 0);
+ if (!(safePrice > 0)) return null;
+ return collectAdjustableChartLines(state)
+ .sort((a, b) => {
+ const liveRank = source => source === 'live' ? 0 : source === 'draft' ? 1 : 2;
+ return Math.abs(Number(a.price || 0) - safePrice) - Math.abs(Number(b.price || 0) - safePrice)
+ || liveRank(a.source) - liveRank(b.source);
+ })[0] || null;
+ }
+
+ function findChartDragLineFromEvent(hitRoot = null, event = null, state = {}, chartContainer = null) {
+ if (!hitRoot || !event) return null;
+ const tags = Array.from(hitRoot.querySelectorAll('.live-order-chart-tag[data-ds-chart-line-role]'));
+ if (!tags.length) return null;
+ const directTag = event.target?.closest?.('.live-order-chart-tag[data-ds-chart-line-role]') || null;
+ const rect = (chartContainer || hitRoot).getBoundingClientRect?.();
+ const pointerY = Number(event.clientY || 0);
+ const tolerancePx = directTag ? 30 : 18;
+ const candidates = tags.map(tag => {
+ const role = chartLineRole({
+ role: tag.dataset.dsChartLineRole,
+ tone: tag.dataset.dsChartLineRole,
+ });
+ if (role !== 'stop' && role !== 'target') return null;
+ const topPct = Number(tag.dataset.dsChartLineTop || parseFloat(String(tag.style.top || '').replace('%', '')) || 0);
+ const y = rect ? rect.top + (rect.height * topPct / 100) : 0;
+ const distance = tag === directTag ? 0 : Math.abs(pointerY - y);
+ if (distance > tolerancePx) return null;
+ const source = String(tag.dataset.dsChartLineSource || '').toLowerCase() === 'linked' ? 'live' : String(tag.dataset.dsChartLineSource || '').toLowerCase();
+ const orderId = String(tag.dataset.dsChartLineOrderId || '').trim();
+ const price = Number(tag.dataset.dsChartLinePrice || 0);
+ return { role, source, orderId, price, distance };
+ }).filter(Boolean).sort((a, b) => a.distance - b.distance)[0] || null;
+ if (!candidates) return null;
+ const lines = collectAdjustableChartLines(state).filter(line => line.role === candidates.role);
+ const matched = lines.find(line => candidates.orderId && String(line.order?.orderId || line.line?.orderId || '').trim() === candidates.orderId)
+ || lines.find(line => candidates.source && line.source === candidates.source && Math.abs(Number(line.price || 0) - Number(candidates.price || 0)) <= Math.max(Number(candidates.price || 0) * 0.0002, 0.0000001))
+ || lines.sort((a, b) => Math.abs(Number(a.price || 0) - Number(candidates.price || 0)) - Math.abs(Number(b.price || 0) - Number(candidates.price || 0)))[0];
+ return matched || null;
+ }
+
+ function validateChartDragPrice(state = {}, role = '', price = 0) {
+ const safePrice = Number(price || 0);
+ if (!(safePrice > 0)) return 'Price must be above zero.';
+ const draft = normalizeChartTradingDraft(state.chartTradingDraft);
+ const orderContext = normalizeOrderContext(state.orderContext);
+ const position = orderContext?.position || null;
+ const side = String(position?.side || draft?.side || '').trim().toLowerCase();
+ const entry = Number(draft?.entry || position?.entry || findChartOrderLine(orderContext, 'entry')?.price || 0);
+ if (!entry || !['long', 'short', 'buy', 'sell'].includes(side)) return '';
+ const isLong = side === 'long' || side === 'buy';
+ if (role === 'stop' && isLong && safePrice >= entry) return `Stop must stay below entry ${formatPrice(entry)} for a long trade.`;
+ if (role === 'target' && isLong && safePrice <= entry) return `Target must stay above entry ${formatPrice(entry)} for a long trade.`;
+ if (role === 'stop' && !isLong && safePrice <= entry) return `Stop must stay above entry ${formatPrice(entry)} for a short trade.`;
+ if (role === 'target' && !isLong && safePrice >= entry) return `Target must stay below entry ${formatPrice(entry)} for a short trade.`;
+ return '';
+ }
+
+ function chartDragRoleLabel(role = '') {
+ if (role === 'entry') return 'Entry';
+ if (role === 'stop') return 'Stop';
+ if (role === 'target') return 'Target';
+ return 'Line';
+ }
+
+ function requestChartDragConfirmation(change = {}) {
+ const label = chartDragRoleLabel(change.role);
+ const from = Number(change.fromPrice || 0) > 0 ? formatPrice(change.fromPrice) : 'not set';
+ const to = Number(change.toPrice || 0) > 0 ? formatPrice(change.toPrice) : 'not set';
+ const isLive = change.source === 'live';
+ const existing = document.querySelector('.ds-chart-confirm-layer');
+ existing?.remove?.();
+ return new Promise(resolve => {
+ const layer = document.createElement('div');
+ layer.className = 'ds-chart-confirm-layer';
+ layer.innerHTML = `
+ <div class="ds-chart-confirm-card" role="dialog" aria-modal="true" aria-labelledby="dsChartConfirmTitle">
+  <div class="ds-chart-confirm-bar"></div>
+  <div class="ds-chart-confirm-head">
+   <span>${escapeHtml(isLive ? 'Live Order Modify' : 'Chart Draft')}</span>
+   <button type="button" class="ds-chart-confirm-close" data-chart-confirm="cancel" aria-label="Close">x</button>
+  </div>
+  <div class="ds-chart-confirm-body">
+   <strong id="dsChartConfirmTitle">${escapeHtml(isLive ? `Modify ${label}` : `Set ${label}`)}</strong>
+   <p>${escapeHtml(isLive ? 'Review the new level before opening the broker order editor.' : 'Keep this as a chart draft level. No live order will be placed.')}</p>
+   <div class="ds-chart-confirm-prices">
+    <span><em>Current</em><b>${escapeHtml(from)}</b></span>
+    <span><em>New</em><b>${escapeHtml(to)}</b></span>
+   </div>
+   <small>${escapeHtml(isLive ? 'Next step: opens the Delta order edit/protection window. API changes require final confirmation there.' : 'This is only a planning line on the chart.')}</small>
+  </div>
+  <div class="ds-chart-confirm-actions">
+   <button type="button" class="bsm" data-chart-confirm="cancel">Cancel</button>
+   <button type="button" class="bsm primary" data-chart-confirm="confirm">${escapeHtml(isLive ? 'Open Order Edit' : 'Keep Draft')}</button>
+  </div>
+ </div>`;
+ const cleanup = value => {
+ document.removeEventListener('keydown', onKey);
+ layer.remove();
+ resolve(value);
+ };
+ const onKey = event => {
+ if (event.key === 'Escape') cleanup(false);
+ };
+ layer.addEventListener('click', event => {
+ const action = event.target?.dataset?.chartConfirm;
+ if (action === 'confirm') cleanup(true);
+ if (action === 'cancel' || event.target === layer) cleanup(false);
+ });
+ document.addEventListener('keydown', onKey);
+ document.body.appendChild(layer);
+ layer.querySelector('[data-chart-confirm="confirm"]')?.focus?.();
+ });
+ }
+
+ async function confirmChartDragChange(change = {}) {
+ return requestChartDragConfirmation(change);
+ }
+
+ async function openChartLiveModifyAfterDrag(state = {}, role = '', price = 0, order = null, surface = SURFACE_PREVIEW) {
+ const orderContext = normalizeOrderContext(state.orderContext);
+ const linked = order || findLinkedOrderForChartRole(orderContext, role);
+ const kind = role === 'target' ? 'target' : role === 'stop' ? 'stop' : 'entry';
+ if (linked && typeof globalThis.openV16OpenOrderEditor === 'function') {
+ const linkedRole = String(linked.role || '').trim().toLowerCase();
+ const overrideDraft = kind === 'target'
+ ? { limitPrice: Number(linked.limitPrice || 0) > 0 ? price : 0, stopPrice: Number(linked.stopPrice || 0) > 0 || linkedRole === 'take_profit' ? price : 0 }
+ : kind === 'stop'
+ ? { stopPrice: price }
+ : { limitPrice: price };
+ await globalThis.openV16OpenOrderEditor(linked, overrideDraft);
+ return true;
+ }
+ if ((kind === 'stop' || kind === 'target') && orderContext?.position && typeof globalThis.openV16ProtectionOrderPreview === 'function') {
+ await globalThis.openV16ProtectionOrderPreview(orderContext.position, kind, { triggerPrice: price });
+ return true;
+ }
+ await updateChartState(surface, current => buildDraftPatchForPrice(current, role, price), { forceRender: true });
+ globalThis.showSystemToast?.('Draft updated', `${chartDragRoleLabel(role)} moved to ${formatPrice(price)}. No linked live order was found.`, 'warn', 3200);
+ return false;
  }
 
  async function openChartProtectionPreview(kind = 'stop', preferredSurface = '') {
@@ -3851,40 +4979,108 @@
 
  function bindChartTradingSurface(root = document, surface = SURFACE_PREVIEW, state = {}) {
  root.querySelectorAll('[data-ds-lwc-chart]').forEach(chartContainer => {
- let dragRole = '';
+ const hitRoot = chartContainer.closest('[data-ds-chart-shell]') || chartContainer;
+ let dragSession = null;
  const readPrice = event => globalThis.FWDTradeDeskChartEngine?.readPoint?.(chartContainer, event)?.price || 0;
  const updateDraftAtEvent = async (event, forcedRole = '') => {
  const mode = normalizeChartTradingMode((await getChartState()).chartTradingMode || state.chartTradingMode);
  const price = readPrice(event);
  const currentState = await getChartState();
- const role = forcedRole || (mode === 'adjust' ? nearestDraftRole(currentState.chartTradingDraft, price) : mode);
+ const role = forcedRole || (mode === 'adjust' ? '' : mode);
  if (!['entry', 'stop', 'target'].includes(role)) return;
  await updateChartState(surface, current => buildDraftPatchForPrice(current, role, price), { forceRender: true });
  };
- chartContainer.addEventListener('click', event => {
+ hitRoot.addEventListener('click', event => {
  const mode = normalizeChartTradingMode(state.chartTradingMode);
- if (!['entry', 'stop', 'target', 'adjust'].includes(mode)) return;
+ if (!['entry', 'stop', 'target'].includes(mode)) return;
  event.preventDefault();
  void updateDraftAtEvent(event);
  });
- chartContainer.addEventListener('pointerdown', async event => {
+ hitRoot.addEventListener('pointerdown', async event => {
  const currentState = await getChartState();
  if (normalizeChartTradingMode(currentState.chartTradingMode) !== 'adjust') return;
  const price = readPrice(event);
- dragRole = nearestDraftRole(currentState.chartTradingDraft, price);
- });
- chartContainer.addEventListener('pointermove', event => {
- if (!dragRole) return;
+ const line = findChartDragLineFromEvent(hitRoot, event, currentState, chartContainer);
+ if (!line?.role) return;
+ dragSession = {
+  role: line.role,
+  source: line.source,
+  fromPrice: Number(line.price || 0),
+  latestPrice: price,
+  order: line.order,
+  originalDraft: currentState.chartTradingDraft || null,
+  moved: false,
+ };
+ hitRoot.setPointerCapture?.(event.pointerId);
+ hitRoot.classList.add('ds-chart-dragging-order');
  event.preventDefault();
- void updateDraftAtEvent(event, dragRole);
  });
- const clearDrag = () => { dragRole = ''; };
- chartContainer.addEventListener('pointerup', clearDrag);
- chartContainer.addEventListener('pointerleave', clearDrag);
+ hitRoot.addEventListener('pointermove', event => {
+ if (!dragSession?.role) return;
+ event.preventDefault();
+ const price = readPrice(event);
+ if (!(price > 0)) return;
+ dragSession.latestPrice = price;
+ dragSession.moved = true;
+ void updateDraftAtEvent(event, dragSession.role);
+ });
+ const finishDrag = async event => {
+ const session = dragSession;
+ dragSession = null;
+ hitRoot.classList.remove('ds-chart-dragging-order');
+ if (event?.pointerId != null) hitRoot.releasePointerCapture?.(event.pointerId);
+ if (!session?.role || !session.moved) return;
+ const currentState = await getChartState();
+ const nextPrice = Number(session.latestPrice || 0);
+ const validation = validateChartDragPrice(currentState, session.role, nextPrice);
+ if (validation) {
+  await updateChartState(surface, { chartTradingDraft: session.originalDraft || null }, { forceRender: true });
+  globalThis.showSystemToast?.('Chart drag blocked', validation, 'warn', 3600);
+  return;
+ }
+ if (!await confirmChartDragChange({ ...session, toPrice: nextPrice })) {
+  await updateChartState(surface, { chartTradingDraft: session.originalDraft || null }, { forceRender: true });
+  globalThis.showSystemToast?.('Chart drag cancelled', `${chartDragRoleLabel(session.role)} restored to ${formatPrice(session.fromPrice)}.`, 'info', 2200);
+  return;
+ }
+ if (session.source === 'live') {
+  await openChartLiveModifyAfterDrag(currentState, session.role, nextPrice, session.order, surface);
+  await updateChartState(surface, { chartTradingDraft: session.originalDraft || null }, { forceRender: true });
+ } else {
+  globalThis.showSystemToast?.('Draft updated', `${chartDragRoleLabel(session.role)} moved to ${formatPrice(nextPrice)}.`, 'success', 2200);
+ }
+ };
+ const cancelDrag = async event => {
+ const session = dragSession;
+ dragSession = null;
+ hitRoot.classList.remove('ds-chart-dragging-order');
+ if (event?.pointerId != null) hitRoot.releasePointerCapture?.(event.pointerId);
+ if (session?.role && session.moved) {
+  await updateChartState(surface, { chartTradingDraft: session.originalDraft || null }, { forceRender: true });
+ }
+ };
+ hitRoot.addEventListener('pointerup', event => { void finishDrag(event); });
+ hitRoot.addEventListener('pointercancel', event => { void cancelDrag(event); });
+ hitRoot.addEventListener('lostpointercapture', event => { if (dragSession) void cancelDrag(event); });
  });
  }
 
- function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel = null) {
+async function setNativeChartFullscreen(enabled = false) {
+ document.body?.classList?.toggle?.('ds-chart-native-fullscreen', enabled === true);
+ const api = globalThis.fwdDesktopNative;
+ if (!api || typeof api.sendNativeMessage !== 'function') return;
+ try {
+  const request = api.sendNativeMessage({ type: 'set_window_fullscreen', fullscreen: enabled === true });
+  if (request && typeof request.then === 'function') {
+  await Promise.race([
+  request,
+  new Promise(resolve => setTimeout(resolve, 350)),
+  ]);
+  }
+ } catch (_) {}
+}
+
+function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel = null) {
  const surfaceRef = getSurfaceRef(surface);
  const root = surfaceRef.root;
  if (!root) return;
@@ -3904,6 +5100,7 @@
  if (currentState.chartFullscreen !== true) return;
  event.preventDefault();
  const activeSurface = currentState.chartViewMode === 'detached' ? SURFACE_DETACHED : SURFACE_TAB;
+ void setNativeChartFullscreen(false);
  await updateChartState(activeSurface, { chartFullscreen: false }, { forceRender: true });
  });
  }
@@ -3950,9 +5147,12 @@
  root.querySelectorAll('[data-ds-chart-preset]').forEach(button => {
  button.addEventListener('click', async () => {
  const preset = normalizePreset(button.dataset.dsChartPreset || 'clean');
+ const meta = getPresetMeta(preset);
  await updateChartState(surface, currentState => ({
  preset,
- showVwap: getPresetMeta(preset).showVwap ? true : currentState.showVwap,
+ showVwap: meta.showVwap ? true : currentState.showVwap,
+ intelligenceOverlays: meta.showDecision === true,
+ overlayDensity: meta.showDecision === true ? 'trade' : 'minimal',
  indicators: presetIndicatorDefaults(preset, currentState.indicators || {}),
  }));
  });
@@ -3988,6 +5188,49 @@
  if (key === 'hideEventCandles') {
  await updateChartState(surface, currentState => ({ hideEventCandles: currentState.hideEventCandles !== true }), { forceRender: true });
  }
+ });
+ });
+ root.querySelectorAll('[data-ds-darvas-toggle]').forEach(button => {
+ button.addEventListener('click', async event => {
+ event.preventDefault();
+ event.stopPropagation();
+ const key = String(button.dataset.dsDarvasToggle || '').trim();
+ if (!['enabled', 'showHistoricalBoxes', 'showScannerDetails', 'showEntryLine', 'showTargetLines', 'showTargets', 'showStopLoss', 'showTooltip', 'showFailedBoxes', 'showWeakBreakoutBoxes', 'showOnlyHighQuality'].includes(key)) return;
+ await updateChartState(surface, currentState => {
+ const currentSettings = sanitizeDarvasBoxSettings(currentState.darvasSettings || {}, currentState.timeframe || '15m');
+ const nextValue = currentSettings[key] !== true;
+ const patch = {
+ darvasSettings: sanitizeDarvasBoxSettings({
+ ...currentSettings,
+ [key]: nextValue,
+ }, currentState.timeframe || '15m'),
+ };
+ if (key === 'enabled') {
+ const currentIndicators = sanitizeIndicatorState(currentState.indicators || {});
+ patch.indicators = applyIndicatorGroup(currentIndicators, 'darvas', nextValue);
+ }
+ return {
+ ...patch,
+ };
+ }, { forceRender: true });
+ });
+ });
+ root.querySelectorAll('[data-ds-darvas-number]').forEach(input => {
+ input.addEventListener('change', async event => {
+ event.preventDefault();
+ event.stopPropagation();
+ const key = String(input.dataset.dsDarvasNumber || '').trim();
+ if (!['lookback', 'confirmationCandles', 'volumeMultiplier', 'atrBreakoutBuffer', 'retestAtrTolerance', 'stopLossAtrBuffer', 'maxBoxesVisible', 'maxIntradayHeightPct', 'maxDailyHeightPct'].includes(key)) return;
+ const value = key === 'lookback' && String(input.value || '').trim() === '' ? 0 : Number(input.value || 0);
+ await updateChartState(surface, currentState => {
+ const currentSettings = sanitizeDarvasBoxSettings(currentState.darvasSettings || {}, currentState.timeframe || '15m');
+ return {
+ darvasSettings: sanitizeDarvasBoxSettings({
+ ...currentSettings,
+ [key]: value,
+ }, currentState.timeframe || '15m'),
+ };
+ }, { forceRender: true });
  });
  });
  root.querySelectorAll('[data-ds-key-level-setting]').forEach(button => {
@@ -4027,6 +5270,10 @@
  await updateChartState(surface, currentState => ({ rightPanelOpen: currentState.rightPanelOpen === false }));
  return;
  }
+ if (toggle === 'index-compare') {
+ await updateChartState(surface, currentState => ({ compareWithIndex: currentState.compareWithIndex === false }), { forceRender: true });
+ return;
+ }
  if (toggle === 'intel-overlays') {
  await updateChartState(surface, currentState => ({ intelligenceOverlays: currentState.intelligenceOverlays === false }));
  }
@@ -4039,15 +5286,21 @@
  const side = String(button.dataset.dsChartTrade || '').trim().toLowerCase() === 'sell' ? 'sell' : 'buy';
  await openChartTradePreview(side, surface);
  });
+ });
  root.querySelectorAll('[data-ds-chart-trading-mode]').forEach(button => {
  button.addEventListener('click', async () => {
  const mode = normalizeChartTradingMode(button.dataset.dsChartTradingMode);
- await updateChartState(surface, { chartTradingMode: mode }, { forceRender: true });
+ await updateChartState(surface, { chartTradingMode: mode, chartTradingToolsOpen: mode !== 'select' }, { forceRender: true });
+ });
+ });
+ root.querySelectorAll('[data-ds-chart-trading-close]').forEach(button => {
+ button.addEventListener('click', async () => {
+ await updateChartState(surface, { chartTradingMode: 'select', chartTradingToolsOpen: false }, { forceRender: true });
  });
  });
  root.querySelectorAll('[data-ds-chart-draft-clear]').forEach(button => {
  button.addEventListener('click', async () => {
- await updateChartState(surface, { chartTradingDraft: null, chartTradingMode: 'select' }, { forceRender: true });
+ await updateChartState(surface, { chartTradingDraft: null, chartTradingMode: 'select', chartTradingToolsOpen: false }, { forceRender: true });
  });
  });
  root.querySelectorAll('[data-ds-chart-preview-protection]').forEach(button => {
@@ -4055,7 +5308,6 @@
  event.preventDefault();
  event.stopPropagation();
  await openChartProtectionPreview(String(button.dataset.dsChartPreviewProtection || 'stop').trim().toLowerCase() === 'target' ? 'target' : 'stop', surface);
- });
  });
  });
  root.querySelectorAll('[data-ds-review-tab]').forEach(button => {
@@ -4085,10 +5337,15 @@
  await updateChartState(surface, currentState => {
  const currentIndicators = sanitizeIndicatorState(currentState.indicators || {});
  const nextValue = !currentIndicators[indicator];
- return {
+ const patch = {
  showVwap: indicator === 'vwap' ? nextValue : currentState.showVwap,
  indicators: applyIndicatorGroup(currentIndicators, indicator, nextValue),
  };
+ if (indicator === 'darvas') {
+ const currentSettings = sanitizeDarvasBoxSettings(currentState.darvasSettings || {}, currentState.timeframe || '15m');
+ patch.darvasSettings = sanitizeDarvasBoxSettings({ ...currentSettings, enabled: nextValue }, currentState.timeframe || '15m');
+ }
+ return patch;
  });
  });
  });
@@ -4104,10 +5361,15 @@
  const currentIndicators = sanitizeIndicatorState(currentState.indicators || {});
  const active = isIndicatorGroupActive(currentState, presetMeta, target);
  const nextValue = action === 'remove' ? false : !active;
- return {
+ const patch = {
  showVwap: target === 'vwap' ? nextValue : currentState.showVwap,
  indicators: applyIndicatorGroup(currentIndicators, target, nextValue),
  };
+ if (target === 'darvas') {
+ const currentSettings = sanitizeDarvasBoxSettings(currentState.darvasSettings || {}, currentState.timeframe || '15m');
+ patch.darvasSettings = sanitizeDarvasBoxSettings({ ...currentSettings, enabled: nextValue }, currentState.timeframe || '15m');
+ }
+ return patch;
  });
  });
  });
@@ -4154,8 +5416,9 @@
  const chartContainer = target
  ? Array.from(root.querySelectorAll('[data-ds-lwc-chart]')).find(node => node.dataset.dsLwcChart === target)
  : button.closest('[data-ds-chart-shell]')?.querySelector('[data-ds-lwc-chart]');
- if (chartContainer && globalThis.FWDTradeDeskChartEngine?.navigate) {
- globalThis.FWDTradeDeskChartEngine.navigate(chartContainer, action);
+ const fallbackContainer = chartContainer || root.querySelector('[data-ds-lwc-chart]');
+ if (fallbackContainer && globalThis.FWDTradeDeskChartEngine?.navigate) {
+ globalThis.FWDTradeDeskChartEngine.navigate(fallbackContainer, action);
  }
  });
  });
@@ -4218,9 +5481,32 @@
  await updateChartState(surface, currentState => ({ syncCharts: currentState.syncCharts === false }), { forceRender: true });
  });
  });
+ root.querySelectorAll('[data-ds-desk-compare]').forEach(button => {
+ button.addEventListener('click', async () => {
+ const mode = String(button.dataset.dsDeskCompare || '').trim().toLowerCase();
+ if (mode !== '1d-15m') return;
+ void setNativeChartFullscreen(false);
+ await updateChartState(surface, currentState => ({
+ chartFullscreen: false,
+ deskLayoutMode: 'threePart',
+ primaryTimeframe: '1d',
+ executionTimeframe: '15m',
+ timeframe: '15m',
+ visibleCandleCount: defaultVisibleCount('15m'),
+ preset: normalizePreset(currentState.preset || 'key'),
+ rightPanelOpen: false,
+ intelligenceOverlays: currentState.intelligenceOverlays !== false,
+ overlayDensity: normalizeOverlayDensity(currentState.overlayDensity || 'trade'),
+ collapsedPanels: { primary: false, execution: false, context: true },
+ maximizedPanel: null,
+ syncCharts: false,
+ }), { forceRender: true });
+ });
+ });
  root.querySelectorAll('[data-ds-layout-mode]').forEach(button => {
  button.addEventListener('click', async () => {
  const mode = String(button.dataset.dsLayoutMode || '').trim() === 'threePart' ? 'threePart' : 'single';
+ void setNativeChartFullscreen(false);
  await updateChartState(surface, currentState => ({
  deskLayoutMode: mode,
  chartFullscreen: false,
@@ -4237,17 +5523,22 @@
  });
  root.querySelectorAll('[data-ds-chart-fullscreen]').forEach(button => {
  button.addEventListener('click', async () => {
+ const beforeState = await getChartState();
+ const nextFullscreen = beforeState.chartFullscreen !== true;
+ void setNativeChartFullscreen(nextFullscreen);
  await updateChartState(surface, currentState => {
- const nextFullscreen = currentState.chartFullscreen !== true;
  const currentPreset = normalizePreset(currentState.preset || 'key');
+ const primaryTimeframe = normalizeTimeframe(currentState.primaryTimeframe || currentState.timeframe || '15m');
+ const executionTimeframe = normalizeTimeframe(currentState.executionTimeframe || currentState.timeframe || '15m');
+ const keepComparison = currentState.deskLayoutMode !== 'single' && primaryTimeframe === '1d' && executionTimeframe === '15m';
  return {
  chartFullscreen: nextFullscreen,
- deskLayoutMode: nextFullscreen ? 'single' : (currentState.deskLayoutMode || 'single'),
+ deskLayoutMode: nextFullscreen ? (keepComparison ? 'threePart' : 'single') : (currentState.deskLayoutMode || 'single'),
  preset: currentPreset,
  rightPanelOpen: nextFullscreen ? false : currentState.rightPanelOpen,
- intelligenceOverlays: nextFullscreen ? false : currentState.intelligenceOverlays,
- overlayDensity: nextFullscreen ? 'minimal' : normalizeOverlayDensity(currentState.overlayDensity || 'minimal'),
- collapsedPanels: nextFullscreen ? { execution: true, context: true } : sanitizeCollapsedPanels(currentState.collapsedPanels),
+ intelligenceOverlays: nextFullscreen ? (keepComparison ? currentState.intelligenceOverlays !== false : false) : currentState.intelligenceOverlays,
+ overlayDensity: nextFullscreen ? (keepComparison ? normalizeOverlayDensity(currentState.overlayDensity || 'trade') : 'minimal') : normalizeOverlayDensity(currentState.overlayDensity || 'minimal'),
+ collapsedPanels: nextFullscreen ? (keepComparison ? { primary: false, execution: false, context: true } : { execution: true, context: true }) : sanitizeCollapsedPanels(currentState.collapsedPanels),
  maximizedPanel: null,
  };
  }, { forceRender: true });
@@ -4672,6 +5963,7 @@
  chartReviewOverlayOpen: false,
  chartTradingDraft: null,
  chartTradingMode: 'select',
+ chartTradingToolsOpen: false,
  };
  if (options.clearTabs !== false) {
  patch.chartReviewTabs = [];
@@ -4685,27 +5977,33 @@
  async function openDetachedChart(options = {}) {
  const strategy = await getStrategy();
  const current = await getChartState();
+ const hasOption = key => Object.prototype.hasOwnProperty.call(options, key);
+ const requestedUiMode = String(hasOption('uiMode') ? options.uiMode : 'default').trim().toLowerCase() || 'default';
+ const isJournalOpen = requestedUiMode === 'journal';
  const next = sanitizeDetachedChartState({
  ...current,
  ...options,
  symbol: String(options.symbol || current.symbol || previewSurface.getDisplaySymbol?.() || '').trim().toUpperCase(),
  orderContext: normalizeOrderContext(options.orderContext || current.orderContext || (typeof previewSurface.getOrderContext === 'function' ? previewSurface.getOrderContext() : null)),
- preset: normalizePreset(options.preset || current.preset || (String(options.uiMode || current.uiMode || '').toLowerCase() === 'journal' ? current.preset : 'clean')),
- showOrders: Object.prototype.hasOwnProperty.call(options, 'showOrders') ? !!options.showOrders : !!current.showOrders,
+ preset: normalizePreset(options.preset || current.preset || (isJournalOpen ? current.preset : 'clean')),
+ showOrders: hasOption('showOrders') ? !!options.showOrders : !!current.showOrders,
+ replaySeed: isJournalOpen ? (hasOption('replaySeed') ? options.replaySeed : current.replaySeed) : (hasOption('replaySeed') ? options.replaySeed : null),
+ replayMode: isJournalOpen ? (hasOption('replayMode') ? options.replayMode : current.replayMode) : (hasOption('replayMode') ? options.replayMode : null),
+ uiMode: requestedUiMode,
  chartViewMode: 'detached',
- rightPanelOpen: Object.prototype.hasOwnProperty.call(options, 'rightPanelOpen') ? options.rightPanelOpen !== false : current.rightPanelOpen !== false,
- intelligenceOverlays: Object.prototype.hasOwnProperty.call(options, 'intelligenceOverlays') ? options.intelligenceOverlays !== false : current.intelligenceOverlays !== false,
+ rightPanelOpen: hasOption('rightPanelOpen') ? options.rightPanelOpen !== false : current.rightPanelOpen !== false,
+ intelligenceOverlays: hasOption('intelligenceOverlays') ? options.intelligenceOverlays !== false : current.intelligenceOverlays !== false,
  deskLayoutMode: options.deskLayoutMode || current.deskLayoutMode || 'single',
  primaryTimeframe: options.primaryTimeframe || current.primaryTimeframe || current.timeframe || '15m',
  executionTimeframe: options.executionTimeframe || current.executionTimeframe || current.timeframe || '15m',
- syncCharts: Object.prototype.hasOwnProperty.call(options, 'syncCharts') ? options.syncCharts !== false : current.syncCharts !== false,
+ syncCharts: hasOption('syncCharts') ? options.syncCharts !== false : current.syncCharts !== false,
  contextTab: options.contextTab || current.contextTab || 'watchlist',
  watchlistTab: options.watchlistTab || current.watchlistTab || '1',
  overlayDensity: options.overlayDensity || current.overlayDensity || 'minimal',
  panelWidths: options.panelWidths || current.panelWidths || { ...DEFAULT_PANEL_WIDTHS },
  collapsedPanels: options.collapsedPanels || current.collapsedPanels || {},
  maximizedPanel: options.maximizedPanel || current.maximizedPanel || null,
- chartFullscreen: Object.prototype.hasOwnProperty.call(options, 'chartFullscreen') ? options.chartFullscreen === true : current.chartFullscreen === true,
+ chartFullscreen: hasOption('chartFullscreen') ? options.chartFullscreen === true : current.chartFullscreen === true,
  }, strategy.chartDefaults || {});
  detachedSurface.uiMode = String(next.uiMode || 'default').trim().toLowerCase() || 'default';
  await localSet({ [DS_V17_CHART_STATE_KEY]: next });

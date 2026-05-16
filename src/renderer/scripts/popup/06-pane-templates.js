@@ -63,6 +63,7 @@ const PANE_TEMPLATES = {
  <option value="Infra">Infra</option>
  <option value="Exchange">Exchange</option>
  <option value="Privacy">Privacy</option>
+ <option value="RWA">RWA</option>
  <option value="Commodity">Commodity</option>
  <option value="Stock">Stock</option>
  <option value="New">New</option>
@@ -85,6 +86,7 @@ const PANE_TEMPLATES = {
  <button class="preset-btn" data-session="closed">Late</button>
  </div>
  <div class="scanner-insights-shell" id="scannerInsightsRail"></div>
+ <div class="native-straddle-scanner-rail" id="nativeStraddleScannerRail"></div>
  <div class="market-feed-strip" id="scannerFeedStatus"></div>
  <div class="trade-tape" id="tradeTape"></div>
  <div class="scanner-spotlight" id="scannerSpotlight"></div>
@@ -241,10 +243,6 @@ const PANE_TEMPLATES = {
  <small>Closed live trades in the selected range.</small>
  </div>
  </div>
- <div id="liveAnalyticsReliabilityPanel"></div>
- <div id="liveAnalyticsDailyControlPanel"></div>
- <div id="liveAnalyticsSetupBreakdown"></div>
- <div id="liveAnalyticsPaperLedger"></div>
  <div id="liveAnalyticsRDistribution"></div>
  <div class="live-analytics-main-grid">
  <article class="live-equity-card live-analytics-equity-card">
@@ -306,6 +304,46 @@ const PANE_TEMPLATES = {
  <div class="live-analytics-mini-chart" id="liveAnalyticsFundingChart"></div>
  </article>
  </div>
+ </div>`,
+
+ 'tradecheck': ` <div class="phdr positions-pane-header analytics-pane-header trade-check-pane-header">
+ <div>
+ <span>Trade Check &amp; Paper Lab</span>
+ <small class="phdr-sub">Search a coin, compare scanner agreement, and review paper-trade learning without loading live reports.</small>
+ </div>
+ <div class="phdr-btns">
+ <button class="bsm" id="btnTradeCheckRefresh">Refresh Check</button>
+ <button class="bsm" id="btnTradeCheckOpenAnalytics">Actual Reports</button>
+ </div>
+ </div>
+ <div class="live-positions-shell live-analytics-shell trade-check-shell">
+ <section class="live-analytics-trade-check trade-check-standalone" id="liveAnalyticsTradeCheck">
+ <div class="live-card-head">
+ <div>
+ <div class="live-card-kicker">COIN TRADE CHECK</div>
+ <div class="live-card-title">Manual Trade Read</div>
+ </div>
+ <div class="live-card-meta" id="liveAnalyticsTradeCheckMeta">Search a coin before taking a manual trade.</div>
+ </div>
+ <div class="live-analytics-trade-form">
+ <label class="account-field"><span>Coin</span><input class="si" type="search" id="liveAnalyticsTradeSymbol" placeholder="BTCUSD or BTC" autocomplete="off"/></label>
+ <label class="account-field"><span>Side</span><select class="si" id="liveAnalyticsTradeSide"><option value="long">Long / Buy</option><option value="short">Short / Sell</option></select></label>
+ <label class="account-field"><span>Entry</span><input class="si" type="number" step="any" id="liveAnalyticsTradeEntry" placeholder="optional"/></label>
+ <label class="account-field"><span>Stop</span><input class="si" type="number" step="any" id="liveAnalyticsTradeStop" placeholder="optional"/></label>
+ <label class="account-field"><span>Target</span><input class="si" type="number" step="any" id="liveAnalyticsTradeTarget" placeholder="optional"/></label>
+ <div class="live-analytics-trade-actions">
+ <button class="bsm primary" type="button" id="btnLiveAnalyticsCheckTrade">Check</button>
+ <button class="bsm" type="button" id="btnLiveAnalyticsOpenChart">Open Chart</button>
+ </div>
+ </div>
+ <div class="live-analytics-trade-result" id="liveAnalyticsTradeCheckResult">
+ <div class="account-inline-note">Enter a coin to compare scanner signals, paper history, and closed journal results.</div>
+ </div>
+ </section>
+ <div id="liveAnalyticsReliabilityPanel"></div>
+ <div id="liveAnalyticsDailyControlPanel"></div>
+ <div id="liveAnalyticsSetupBreakdown"></div>
+ <div id="liveAnalyticsPaperLedger"></div>
  </div>`,
 
  'funds': ` <div class="phdr positions-pane-header funds-pane-header">
@@ -379,10 +417,10 @@ const PANE_TEMPLATES = {
  </div>
  </div>`,
 
- 'positions': ` <div class="phdr positions-pane-header">
+ 'positions': ` <div class="phdr positions-pane-header trading-positions-header">
  <div>
- <span>Live Delta Positions</span>
- <small class="phdr-sub">Real account exposure, live P&amp;L, and the post-trade journal loop.</small>
+ <span>Positions</span>
+ <small class="phdr-sub">Exposure, live P&amp;L, and post-trade review.</small>
  </div>
  <div class="phdr-btns">
  <button class="bsm" type="button" data-live-account-sync-toggle>Auto Sync On</button>
@@ -788,56 +826,13 @@ const PANE_TEMPLATES = {
  </div>
 `,
 
- 'backtest': ` <div class="bt-top bt-top-stage research-pane-head research-pane-head--backtest">
- <div class="bt-launcher">
- <div class="bt-launch-copy">
- <div class="research-detail-kicker">Backtest Launcher</div>
- <strong>Replay a setup before promoting it</strong>
- <small>Run scanner-style backtests with score, lookback, fees, slippage, direction, and strategy context.</small>
- </div>
- <div class="bt-row bt-control-row">
- <label class="bt-field"><span>Symbol</span><input type="text" class="fi" id="btSymbol" placeholder="BTCUSD" value="BTCUSD"/></label>
- <label class="bt-field"><span>Strategy</span><select class="fi" id="btStrategyPreset"><option value="scanner">Current scanner setup</option><option value="funding">Funding contrarian</option><option value="breakout">Breakout validation</option><option value="mean_reversion">Mean reversion</option></select></label>
- <label class="bt-field"><span>Direction</span><select class="fi" id="btDirection"><option value="both">Both</option><option value="long">Long only</option><option value="short">Short only</option></select></label>
- <label class="bt-field"><span>Lookback</span><input type="number" class="fi" id="btLookbackDays" min="100" max="500" step="10" value="500"/></label>
- <label class="bt-field"><span>Min Score</span><input type="number" class="fi" id="btMinScore" min="0" max="100" step="1" placeholder="Auto"/></label>
- <label class="bt-field"><span>Fees %</span><input type="number" class="fi" id="btFeesPct" min="0" max="2" step="0.001" value="0.059"/></label>
- <label class="bt-field"><span>Slippage %</span><input type="number" class="fi" id="btSlippagePct" min="0" max="5" step="0.01" value="0.10"/></label>
- <div class="bt-launch-actions">
- <button class="btn-bt" id="btnRunBT">RUN TEST</button>
- <button class="bsm" id="btnExportBT">DOWNLOAD CSV</button>
- </div>
- </div>
- <div class="bt-preset-row">
- <button class="bt-preset active" type="button" data-bt-preset="scanner">Scanner setup</button>
- <button class="bt-preset" type="button" data-bt-preset="funding">Funding contrarian</button>
- <button class="bt-preset" type="button" data-bt-preset="breakout">Breakout validation</button>
- <button class="bt-preset" type="button" data-bt-preset="mean_reversion">Mean reversion</button>
- </div>
- </div>
- </div>
- <div id="btResult" class="bt-result">
- <div class="bt-empty-launch">
- <div>
- <span>Ready</span>
- <strong>No backtest yet</strong>
- <small>Choose a symbol and preset. The result will show verdict, equity curve, drawdown, trade log, stop sweep, and setup/regime audit.</small>
- </div>
- <div class="bt-empty-grid">
- <div><span>Verdict</span><strong>Waiting</strong></div>
- <div><span>Charts</span><strong>Equity + DD</strong></div>
- <div><span>Replay</span><strong>Trade rows</strong></div>
- </div>
- </div>
- </div>
-`,
 
  'riskcalc': ` <div class="rc-wrap risk-cockpit">
  <div class="risk-cockpit-head">
  <div>
  <div class="risk-cockpit-kicker">Risk &amp; Automation</div>
- <div class="rc-title">Sizing, Guards &amp; Value at Risk</div>
- <div class="rc-sub">One place for live risk state, API safety, automation rules, position sizing, slot capacity, and sector exposure.</div>
+ <div class="rc-title">Execution Safety Cockpit</div>
+ <div class="rc-sub">Live permission, paper mode, API health, daily loss, trade slots, and sizing in one decision-first view.</div>
  </div>
  <div class="risk-cockpit-actions">
  <button class="bsm" type="button" data-settings-tab="strategy" data-settings-target-jump="api-keys">API Safety</button>
@@ -854,20 +849,12 @@ const PANE_TEMPLATES = {
  </div>
  <div class="risk-auto-tabs" role="tablist" aria-label="Risk and automation cockpit modes">
  <button class="risk-auto-tab active" type="button" data-risk-auto-tab="cockpit" role="tab" aria-selected="true">Risk Cockpit</button>
- <button class="risk-auto-tab" type="button" data-risk-auto-tab="api" role="tab" aria-selected="false">API &amp; Safety Integration</button>
+ <button class="risk-auto-tab" type="button" data-risk-auto-tab="api" role="tab" aria-selected="false">API Safety</button>
  <button class="risk-auto-tab" type="button" data-risk-auto-tab="automation" role="tab" aria-selected="false">Automation Rules</button>
  </div>
  <div class="risk-bridge-banner" id="riskBridgeBanner" hidden></div>
  <div class="risk-manage-board" id="riskManageBoard"></div>
  <section class="risk-auto-panel active" data-risk-auto-panel="cockpit">
- <div class="risk-auto-decision" id="riskAutomationDecision">
- <div class="risk-auto-decision-main">
- <span>Decision Engine</span>
- <strong>Loading current gate result</strong>
- <small>The cockpit checks profile, API, kill switch, daily loss, slots, symbol blocks, and automation mode before allowing live action.</small>
- </div>
- <div class="risk-auto-checks" id="riskAutomationChecks"></div>
- </div>
  <div class="risk-cockpit-grid">
  <section class="risk-cockpit-panel risk-cockpit-panel--sizing">
  <div class="risk-cockpit-panel-head">
@@ -1048,39 +1035,43 @@ const PANE_TEMPLATES = {
  <div class="account-profiles-layout">
  <div class="account-profile-sidebar">
  <nav class="settings-left-rail" aria-label="Settings sections">
+ <label class="settings-rail-search">
+ <span>Find setting</span>
+ <input type="search" id="settingsRailSearch" placeholder="Search settings..." autocomplete="off"/>
+ </label>
  <div class="settings-rail-group">
  <div class="settings-rail-group-title">Basic scanner settings</div>
- <button class="settings-rail-item active" type="button" data-settings-target="display"><span>Display &amp; Currency</span><small>Report currency and symbols</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="scanner-rules"><span>Scanner Rules</span><small>Signals, filters, and FWD-10</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="strategy-profiles"><span>Strategy Profiles</span><small>Presets for risk and scanning</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="charts"><span>Charts &amp; Key Levels</span><small>Default chart view and levels</small></button>
+ <button class="settings-rail-item active" type="button" data-settings-target="display"><span>Display</span><small>Currency and symbols</small></button>
+ <button class="settings-rail-item" type="button" data-settings-target="scanner-rules"><span>Scanner</span><small>Signals, filters, FWD-100</small></button>
+ <button class="settings-rail-item" type="button" data-settings-target="strategy-profiles"><span>Profiles</span><small>Risk and scan presets</small></button>
+ <button class="settings-rail-item" type="button" data-settings-target="charts"><span>Charts</span><small>Default view and levels</small></button>
  </div>
  <div class="settings-rail-group">
  <div class="settings-rail-group-title">Live trading profile</div>
  <button class="settings-rail-item" type="button" data-settings-target="profile"><span>Profile</span><small>User, venue, and mode</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="paper-mode"><span>Paper Trading</span><small>Forward test without live orders</small></button>
+ <button class="settings-rail-item" type="button" data-settings-target="paper-mode"><span>Paper</span><small>Forward test ledger</small></button>
  <button class="settings-rail-item" type="button" data-settings-target="api-keys"><span>API Keys</span><small>Credentials and kill switch</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="connection"><span>Connection Check</span><small>Market-data readiness</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="security"><span>Login Security</span><small>Password and Authenticator</small></button>
+ <button class="settings-rail-item" type="button" data-settings-target="connection"><span>Connection</span><small>Market-data readiness</small></button>
+ <button class="settings-rail-item" type="button" data-settings-target="security"><span>Security</span><small>Password and Authenticator</small></button>
  </div>
  <div class="settings-rail-group">
  <div class="settings-rail-group-title">Risk rules</div>
- <button class="settings-rail-item" type="button" data-settings-target="risk"><span>Risk Defaults</span><small>Balance and day loss</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="guards"><span>Live Guards</span><small>Order size and blocks</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="var"><span>VaR Planning</span><small>Slots and drawdown cycle</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="risk-templates"><span>Scanner Risk Templates</span><small>ATR stop and target R:R</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="futures-auto"><span>Futures Gates</span><small>Risk quality and auto-trade</small></button>
+ <button class="settings-rail-item" type="button" data-settings-target="risk"><span>Risk</span><small>Balance and day loss</small></button>
+ <button class="settings-rail-item" type="button" data-settings-target="guards"><span>Guards</span><small>Order size and blocks</small></button>
+ <button class="settings-rail-item" type="button" data-settings-target="var"><span>VaR</span><small>Slots and drawdown cycle</small></button>
+ <button class="settings-rail-item" type="button" data-settings-target="risk-templates"><span>Templates</span><small>ATR stop and target R:R</small></button>
+ <button class="settings-rail-item" type="button" data-settings-target="futures-auto"><span>Futures</span><small>Live execution gates</small></button>
  </div>
  <div class="settings-rail-group">
  <div class="settings-rail-group-title">Integrations</div>
- <button class="settings-rail-item" type="button" data-settings-tab="webhooks"><span>Telegram &amp; Webhooks</span><small>External alerts and POSTs</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="backup"><span>Notifications &amp; Backup</span><small>Browser alerts and archive</small></button>
+ <button class="settings-rail-item" type="button" data-settings-tab="webhooks"><span>Webhooks</span><small>External alerts and POSTs</small></button>
+ <button class="settings-rail-item" type="button" data-settings-target="backup"><span>Backup</span><small>Alerts and archive</small></button>
  </div>
  <div class="settings-rail-group">
  <div class="settings-rail-group-title">Developer/debug</div>
- <button class="settings-rail-item" type="button" data-settings-target="recovery"><span>Recovery Center</span><small>Fix blocked runtime state</small></button>
+ <button class="settings-rail-item" type="button" data-settings-target="recovery"><span>Recovery</span><small>Fix blocked runtime state</small></button>
  <button class="settings-rail-item" type="button" data-settings-target="api"><span>API Health</span><small>Quota and candle cache</small></button>
- <button class="settings-rail-item" type="button" data-settings-tab="debug"><span>Debug Log</span><small>Raw scan diagnostics</small></button>
+ <button class="settings-rail-item" type="button" data-settings-tab="debug"><span>Debug</span><small>Raw scan diagnostics</small></button>
  </div>
  <details class="settings-rail-more">
  <summary>Advanced automation</summary>
@@ -1363,18 +1354,26 @@ const PANE_TEMPLATES = {
  <div class="settings-stage-title">Scanner Rules</div>
  <div class="settings-stage-copy">Signal filters, automation defaults, chart settings, and backup controls.</div>
  </div>
+ <div class="settings-panel-tabs" data-settings-panel-tabs="scanner-rules">
+ <button type="button" class="active" data-settings-subfilter="all">All</button>
+ <button type="button" data-settings-subfilter="signals">Signals</button>
+ <button type="button" data-settings-subfilter="timeframes">Timeframes</button>
+ <button type="button" data-settings-subfilter="universe">Universe</button>
+ <button type="button" data-settings-subfilter="data">Data</button>
+ <button type="button" data-settings-subfilter="index">FWD-100</button>
+ </div>
  <div class="sform">
  <div class="settings-stage-divider" data-settings-panel="scanner-rules">
  <span>Scanner &amp; Market Data</span>
  <small>Signal logic, timeframe behavior, market-data mode, and baseline scanner preferences.</small>
  </div>
- <div class="sg sg-core" data-settings-panel="scanner-rules">
+ <div class="sg sg-core" data-settings-panel="scanner-rules" data-settings-subsection="signals timeframes">
  <div class="sgt">EMA Periods</div>
  <div class="srow"><label>EMA Fast</label><input type="number" class="si" id="sE1" value="9" min="1" max="200"/></div>
  <div class="srow"><label>EMA Mid</label><input type="number" class="si" id="sE2" value="30" min="1" max="200"/></div>
  <div class="srow"><label>EMA Slow</label><input type="number" class="si" id="sE3" value="100" min="1" max="200"/></div>
  </div>
- <div class="sg sg-core" data-settings-panel="scanner-rules">
+ <div class="sg sg-core" data-settings-panel="scanner-rules" data-settings-subsection="timeframes signals">
  <div class="sgt">OBV + Timeframes</div>
  <div class="srow"><label>OBV SMA Period</label><input type="number" class="si" id="sOBV" value="50"/></div>
  <div class="srow"><label>Primary TF</label>
@@ -1391,7 +1390,7 @@ const PANE_TEMPLATES = {
  </select>
  </div>
  </div>
- <div class="sg sg-core" data-settings-panel="scanner-rules">
+ <div class="sg sg-core" data-settings-panel="scanner-rules" data-settings-subsection="signals universe">
  <div class="sgt">Scan Filters</div>
  <div class="srow"><label>Min Display Score</label><input type="number" class="si" id="sMinScore" value="15" min="0" max="100"/></div>
  <div class="srow"><label>Alert Threshold</label><input type="number" class="si" id="sAlertScore" value="65" min="0" max="100"/></div>
@@ -1399,7 +1398,7 @@ const PANE_TEMPLATES = {
  <div class="srow"><label>Min Volume Filter ($)</label><input type="number" class="si" id="sMinVol" value="0" min="0"/></div>
  <div class="srow"><label>Funding Min Volume ($)</label><input type="number" class="si" id="sFundingMinVol" value="100000" min="0" step="1000"/></div>
  </div>
- <div class="sg sg-core" data-settings-panel="scanner-rules">
+ <div class="sg sg-core" data-settings-panel="scanner-rules" data-settings-subsection="data">
  <div class="sgt">Auto-Scan</div>
  <div class="srow">
  <label>Auto-scan interval (min)</label>
@@ -1423,11 +1422,13 @@ const PANE_TEMPLATES = {
  </select>
  </div>
  </div>
- <div class="sg sg-core" data-settings-panel="scanner-rules">
- <div class="sgt">FWD-10 Basket</div>
-<div class="srow"><label>Index Max Coins</label><input type="number" class="si" id="sMarketIndexMaxConstituents" value="10" min="3" max="100" step="1" title="House FWD-10 uses the top liquid names up to this count."/></div>
- <div class="srow"><label>Exclude Coins</label><input type="text" class="si" id="sMarketIndexExcludedSymbols" value="" placeholder="BTCUSD, ETHUSD" title="Comma-separated symbols to remove from the FWD-10 basket."/></div>
- <div class="account-inline-note">The house FWD-10 basket uses equal weight across the selected liquid names. Benchmarks stay separate for comparison.</div>
+ <div class="sg sg-core" data-settings-panel="scanner-rules" data-settings-subsection="index universe">
+ <div class="sgt">FWD-100 Basket</div>
+<div class="srow"><label>Index Max Coins</label><input type="number" class="si" id="sMarketIndexMaxConstituents" value="100" min="3" max="100" step="1" title="House FWD-100 uses the top liquid names up to this count."/></div>
+ <div class="srow"><label>Rebalance Days</label><input type="number" class="si" id="sMarketIndexRebalanceDays" value="7" min="1" max="90" step="1" title="How often FWD-100 restores equal weights and refreshes the retained liquid basket."/></div>
+ <div class="srow"><label>Exclude Coins</label><input type="text" class="si" id="sMarketIndexExcludedSymbols" value="" placeholder="BTCUSD, ETHUSD" title="Comma-separated symbols to remove from the FWD-100 basket."/></div>
+ <button type="button" class="bsm" id="sMarketIndexRebuildNow" title="Force FWD-100 to rebuild and rebalance on the next scan.">Rebuild FWD-100 Next Scan</button>
+ <div class="account-inline-note">FWD-100 is a cumulative equal-weight index. Sentiment tape stays separate for market mood.</div>
  </div>
  <div class="settings-stage-divider settings-stage-divider-danger" data-settings-panel="futures-auto">
  <span>Live Automation Controls</span>
@@ -1485,35 +1486,6 @@ const PANE_TEMPLATES = {
  <div class="srow"><label>Max Stop Distance %</label><input type="number" class="si" id="sAutoTradeRiskMaxStopDistancePct" value="3.5" min="0.05" max="50" step="0.05" title="Skip entries where the stop is too far from entry."/></div>
  <div class="srow"><label>Max Entry Drift %</label><input type="number" class="si" id="sAutoTradeRiskMaxEntryDistancePct" value="1.8" min="0.05" max="50" step="0.05" title="Skip entries where current price has drifted too far from the planned entry."/></div>
  <div class="account-inline-note">Paper tracking never places orders. It records qualified forward signals after entry trigger and risk quality checks; setup performance stays advisory until you choose to use it manually.</div>
- <div class="srow"><label>Backtest Signal Min Score</label><input type="number" class="si" id="sAutoTradeBacktestSignalMinScore" value="75" min="0" max="100" step="1" title="Manual backtest and auto-trade gate both use this signal-score floor. Keep it aligned with your trade style."/></div>
- <div class="account-inline-note">Backtest remains manual/advisory here. Futures auto-trade no longer waits for a backtest pass before placing a live entry.</div>
- <div class="srow"><label>Backtest Lookback Days</label><input type="number" class="si" id="sAutoTradeBacktestLookbackDays" value="500" min="100" max="500" step="10" title="How many closed daily candles to replay in backtest. Higher means more history; lower makes it more recent."/></div>
- <div class="srow"><label>Backtest Min Trades</label><input type="number" class="si" id="sAutoTradeBacktestMinTrades" value="6" min="1" max="100" step="1" title="Require at least this many backtest trades before auto-trade is allowed."/></div>
- <div class="srow"><label>Backtest Min PF</label><input type="number" class="si" id="sAutoTradeBacktestMinProfitFactor" value="1.1" min="0.1" max="10" step="0.1" title="Require backtest profit factor at or above this level."/></div>
- <div class="srow"><label>Backtest Min Expectancy</label><input type="number" class="si" id="sAutoTradeBacktestMinExpectancy" value="0.05" min="-100" max="100" step="0.01" title="Require backtest expectancy at or above this level."/></div>
- <div class="srow"><label>Backtest Max DD (%)</label><input type="number" class="si" id="sAutoTradeBacktestMaxDrawdownPct" value="12" min="0.1" max="100" step="0.1" title="Block auto-trade if backtest drawdown exceeds this level."/></div>
- <div class="srow"><label>Backtest Cache (hours)</label><input type="number" class="si" id="sAutoTradeBacktestCacheHours" value="6" min="1" max="72" step="1" title="Reuse recent backtest results for this many hours before refreshing."/></div>
- <div class="settings-structured-card">
- <div class="settings-structured-title">Setup family gate override</div>
- <div class="account-editor-grid">
- <label class="account-field"><span>Setup Family</span>
- <select class="si" id="sAutoTradeSetupFamilyKey">
- <option value="">Use global thresholds</option>
- <option value="continuation">Continuation</option>
- <option value="pullback">Pullback</option>
- <option value="breakout_retest">Breakout Retest</option>
- <option value="reclaim">Reclaim</option>
- <option value="mean_reversion">Mean Reversion</option>
- </select>
- </label>
- <label class="account-field"><span>Min Trades</span><input type="number" class="si" id="sAutoTradeSetupFamilyMinTrades" min="1" max="100" step="1" placeholder="8"/></label>
- <label class="account-field"><span>Min Profit Factor</span><input type="number" class="si" id="sAutoTradeSetupFamilyMinProfitFactor" min="0.1" max="10" step="0.1" placeholder="1.2"/></label>
- <label class="account-field"><span>Min Expectancy</span><input type="number" class="si" id="sAutoTradeSetupFamilyMinExpectancy" min="-100" max="100" step="0.01" placeholder="0.10"/></label>
- <label class="account-field"><span>Max Drawdown %</span><input type="number" class="si" id="sAutoTradeSetupFamilyMaxDrawdownPct" min="0.1" max="100" step="0.1" placeholder="10"/></label>
- </div>
- <div class="account-inline-note">Pick one family to override. Existing extra family overrides are preserved when you save.</div>
- <input type="hidden" id="sAutoTradeSetupFamilyOverrides"/>
- </div>
  <div class="scheck"><label><input type="checkbox" id="sAutoTradeNotifyBrowser" checked/> Notify browser on futures auto-trade events</label></div>
  <div class="scheck"><label><input type="checkbox" id="sAutoTradeNotifyTelegram" checked/> Notify Telegram on futures auto-trade events</label></div>
  <div class="scheck"><label><input type="checkbox" id="sAutoTradeEnabled"/> Enable futures auto-trade on startup <span style="color:#ff8080;font-weight:700;">(places real orders!)</span></label></div>
@@ -1587,8 +1559,6 @@ const PANE_TEMPLATES = {
  <div class="srow" style="margin-top:8px;padding:4px 0;border-top:1px solid rgba(126,145,182,0.08);font-size:9px;color:var(--od-muted);text-transform:uppercase;letter-spacing:0.5px;">Entry Filters</div>
  <div class="srow"><label>Min Premium / Ct (USD)</label><input type="number" class="si" id="sStraddleMinPremiumPerContractUSD" value="0.25" min="0" max="10000" step="0.05" title="Reject native straddles whose credit per contract is too small"/></div>
  <div class="srow"><label>Min Theta / Margin %</label><input type="number" class="si" id="sStraddleMinThetaMarginRatioPct" value="0.35" min="0" max="100" step="0.05" title="Require daily theta yield to clear this % of estimated margin"/></div>
- <div class="scheck"><label><input type="checkbox" id="sStraddleSkewVetoEnabled" checked/> Block entries when downside skew is too aggressive</label></div>
- <div class="srow"><label>Bearish Skew Veto (25D RR)</label><input type="number" class="si" id="sStraddleMaxBearishSkewRR" value="-6" min="-50" max="50" step="0.5" title="Reject entries when 25-delta risk reversal is below this level"/></div>
  <div class="srow"><label>Same-Day Min Score</label><input type="number" class="si" id="sStraddleSameDayMinScore" value="82" min="0" max="100" step="1" title="Require a higher score for same-day expiries"/></div>
  <div class="srow"><label>Same-Day Max Spread %</label><input type="number" class="si" id="sStraddleSameDayMaxSpreadPct" value="1.2" min="0.05" max="100" step="0.05" title="Reject same-day entries with wider spreads than this"/></div>
  <div class="srow"><label>Premium Capture Exit %</label><input type="number" class="si" id="sStraddlePremiumCapturePct" value="60" min="0" max="100" step="1" title="Close the straddle when this % of premium has been captured"/></div>
@@ -1696,6 +1666,7 @@ const PANE_TEMPLATES = {
  <div class="save-ok" id="backupSaveOK"></div>
  </div>
  <div class="settings-save-rail" data-settings-library-actions>
+ <div class="settings-save-state"><strong id="settingsSaveStateLabel">No visible changes</strong><span>Changes apply after save.</span></div>
  <button class="btn-save" id="btnSave">SAVE STRATEGY</button>
  <div class="save-ok" id="saveOK"></div>
  </div>

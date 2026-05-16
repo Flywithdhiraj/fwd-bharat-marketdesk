@@ -42,7 +42,6 @@ let desktopPaneRevealRequested = false;
 let lastScanRecoveryAt = 0;
 let lastWatchlistClickedSymbol = '';
 
-let lastBacktestResult = null;
 
 let analyticsRenderInFlight = false;
 
@@ -113,7 +112,7 @@ const WORKSPACE_GROUP_META = {
 
  tabs: ['scanner', 'strategies', 'watchlist', 'options', 'chart'],
  title: 'Scanner',
- copy: 'Scan symbols, review watchlists, inspect options, and open a clean chart from one market workspace.',
+ copy: 'Scan symbols, review watchlists, inspect native straddles, and open a clean chart from one market workspace.',
  },
 
  trading: {
@@ -138,11 +137,11 @@ const WORKSPACE_GROUP_META = {
 
  label: 'Reports',
 
- tabs: ['liveanalytics', 'funding', 'corr', 'backtest'],
+ tabs: ['liveanalytics', 'tradecheck', 'funding', 'corr'],
 
  title: 'Funding',
 
- copy: 'Review journal, P&L, funding, correlation, and backtest evidence before changing risk.',
+ copy: 'Review journal, P&L, funding, and correlation evidence before changing risk.',
 
  },
 
@@ -168,9 +167,10 @@ const TAB_TITLES = {
  strategies: 'Strategy Lab',
 
  watchlist: 'Watchlist',
- options: 'Options Desk',
+ options: 'Native Straddle',
  chart: 'Chart',
  liveanalytics: 'Analytics',
+ tradecheck: 'Trade Check & Paper',
  funds: 'Funds',
  positions: 'Positions',
  orders: 'Orders',
@@ -179,7 +179,6 @@ const TAB_TITLES = {
 
  corr: 'Correlation Matrix',
 
- backtest: 'Backtest',
 
  strategy: 'Settings',
 
@@ -193,7 +192,7 @@ const TAB_TITLES = {
 
 // -- Sector Map -------------------------------------------------
 
-const { SECTORS, normalizeBaseSymbol, isStockToken, getSector, classifyDeltaInstrument, describeDeltaInstrument, sanitizeAutoScanInterval, sanitizeAlertTone, sanitizeBacktestMinScore } = globalThis.FWDTradeDeskShared;
+const { SECTORS, normalizeBaseSymbol, isStockToken, getSector, classifyDeltaInstrument, describeDeltaInstrument, sanitizeAutoScanInterval, sanitizeAlertTone } = globalThis.FWDTradeDeskShared;
 
 
 
@@ -979,7 +978,7 @@ function getWorkspaceGroupForTab(tab) {
 
 
 
-function renderActiveWorkspaceTab(tab) {
+function renderActiveWorkspaceTab(tab, preloaded = null) {
  workspaceVisitedTabs.add(tab);
  clearWorkspaceTabDirty?.(tab);
  ensurePaneRendered?.(tab);
@@ -991,19 +990,20 @@ function renderActiveWorkspaceTab(tab) {
 
  if (tab === 'home') updateWorkspaceInsights();
 
- if (tab === 'scanner') renderScanner();
+ if (tab === 'scanner') renderScanner(preloaded);
 
  if (tab === 'strategies') globalThis.renderStrategyLab?.();
 
- if (tab === 'watchlist') renderWatchlist();
+ if (tab === 'watchlist') renderWatchlist(preloaded);
 
  if (tab === 'options') renderOptionsWorkspace?.();
  if (tab === 'chart') globalThis.renderChartWorkspacePane?.();
- if (tab === 'liveanalytics') globalThis.renderV16LiveAnalyticsPane?.(null, false);
- if (tab === 'funds') globalThis.renderV16FundsPane?.(null, false);
+ if (tab === 'liveanalytics') globalThis.renderV16LiveAnalyticsPane?.(preloaded, false);
+ if (tab === 'tradecheck') globalThis.renderV16TradeCheckPane?.(null, false);
+ if (tab === 'funds') globalThis.renderV16FundsPane?.(preloaded, false);
 
- if (tab === 'positions') globalThis.renderV16PositionsPane?.(null, false);
- if (tab === 'orders') globalThis.renderV16OrdersPane?.(null, false);
+ if (tab === 'positions') globalThis.renderV16PositionsPane?.(preloaded, false);
+ if (tab === 'orders') globalThis.renderV16OrdersPane?.(preloaded, false);
  if (tab === 'riskcalc') {
  globalThis.renderV16RiskBridgeBanner?.();
  globalThis.renderV16RiskManageBoard?.();
@@ -1177,7 +1177,7 @@ function setWorkspaceGroup(group, persist = true, revealPane = false) {
  Promise.resolve(globalThis.ensurePopupFeatureModulesForTab?.(activeWorkspaceTab))
  .catch(error => reportUiError('Workspace failed to load', error, { timeoutMs: 7000 }))
  .finally(() => {
- renderActiveWorkspaceTab(activeWorkspaceTab);
+ (globalThis.scheduleWorkspaceTabRender || renderActiveWorkspaceTab)(activeWorkspaceTab);
  });
 
  ensureDesktopActivePaneVisible(revealPane);
@@ -1205,13 +1205,14 @@ function setActiveWorkspaceTab(tab, persist = true, revealPane = false) {
  Promise.resolve(globalThis.ensurePopupFeatureModulesForTab?.(safeTab))
  .catch(error => reportUiError('Workspace failed to load', error, { timeoutMs: 7000 }))
  .finally(() => {
- renderActiveWorkspaceTab(safeTab);
+ (globalThis.scheduleWorkspaceTabRender || renderActiveWorkspaceTab)(safeTab);
  });
  syncWorkspaceScrollState();
 
  ensureDesktopActivePaneVisible(revealPane);
  if (persist) chrome.storage.local.set({ activeWorkspaceTab: safeTab, workspaceGroup: nextGroup });
 }
+globalThis.setActiveWorkspaceTab = setActiveWorkspaceTab;
 
 function escapeHtml(value) {
  return String(value == null ? '' : value)
@@ -1382,6 +1383,17 @@ function buildCommandMetricCard(key, label, value, detail, tone = '', tab = '') 
  </button>`;
 }
 
+function commandBucketMeta(action = {}) {
+ const bucket = String(action?.bucket || '').trim().toLowerCase();
+ const tone = String(action?.tone || '').trim().toLowerCase();
+ if (bucket === 'do_now' || tone === 'hot') return { label: 'Do now', tone: 'hot' };
+ if (bucket === 'protect' || tone === 'danger') return { label: 'Protect first', tone: 'danger' };
+ if (bucket === 'wait' || tone === 'waiting') return { label: 'Wait', tone: 'waiting' };
+ if (bucket === 'paper' || /paper/i.test(String(action?.title || ''))) return { label: 'Paper only', tone: 'paper' };
+ if (bucket === 'review' || tone === 'warn') return { label: 'Review', tone: 'warn' };
+ return { label: bucket ? bucket.replace(/_/g, ' ') : 'Review', tone: tone || 'info' };
+}
+
 function buildCommandAction(label, detail, tab, tone = '') {
  return `<button class="command-action ${escapeHtml(tone)}" data-tab="${escapeHtml(tab)}" type="button">
  <span class="command-action-route">${escapeHtml(String(tab || '').toUpperCase())}</span>
@@ -1394,15 +1406,15 @@ function buildBrainActionCard(action = {}) {
  const tab = action.targetTab || 'scanner';
  const actionAttr = action.targetAction ? ` data-setup-action="${escapeHtml(action.targetAction)}"` : '';
  const confidence = Number(action.confidence || 0);
- const bucket = String(action.bucket || 'review').replace(/_/g, ' ');
+ const bucketMeta = commandBucketMeta(action);
  const evidence = action.evidence || {};
  const stats = [
  evidence.score != null ? `Score ${Number(evidence.score || 0)}` : '',
  evidence.tradeQuality != null ? `TQ ${Number(evidence.tradeQuality || 0)}` : '',
  evidence.edge || '',
  ].filter(Boolean).join(' | ');
- return `<button class="command-action command-brain-action ${escapeHtml(action.tone || '')}" data-tab="${escapeHtml(tab)}"${actionAttr} type="button">
- <span class="command-action-route">${escapeHtml(bucket.toUpperCase())}</span>
+ return `<button class="command-action command-brain-action ${escapeHtml(bucketMeta.tone)}" data-tab="${escapeHtml(tab)}"${actionAttr} type="button">
+ <span class="command-action-route">${escapeHtml(bucketMeta.label)}</span>
  <span>${escapeHtml(action.title || 'Review action')}</span>
  <small>${escapeHtml(action.what || '')}</small>
  <small class="command-brain-when">When: ${escapeHtml(action.when || 'Review context.')}</small>
@@ -1411,6 +1423,63 @@ function buildBrainActionCard(action = {}) {
  <em>${escapeHtml(stats || action.source || 'Action Brain')}</em>
  </div>
  </button>`;
+}
+
+function resolveCommandNextStep(model = {}, topAction = null) {
+ if (model.killValue === 'On') {
+  return {
+   label: 'Blocked',
+   title: 'Kill switch is on',
+   detail: model.killDetail || 'New live orders are blocked until safety settings are cleared.',
+   tab: 'strategy',
+   tone: 'danger',
+  };
+ }
+ if (Number(model.ordersValue || 0) > 0) {
+  return {
+   label: 'Order review',
+   title: 'Review pending orders before new action',
+   detail: model.ordersDetail || 'Open order cache has pending orders.',
+   tab: 'orders',
+   tone: 'warn',
+  };
+ }
+ if (topAction) {
+  const bucketMeta = commandBucketMeta(topAction);
+  return {
+   label: bucketMeta.label,
+   title: topAction.title || 'Review best action',
+   detail: topAction.what || topAction.when || 'Open the target workspace for the next decision.',
+   tab: topAction.targetTab || 'scanner',
+   action: topAction.targetAction || '',
+   tone: bucketMeta.tone,
+  };
+ }
+ if (!model.scanResults.length) {
+  return {
+   label: 'Start',
+   title: 'Run a fresh scan',
+   detail: 'No scan results are loaded yet. Start with the scanner before reviewing risk or execution.',
+   tab: 'scanner',
+   tone: 'info',
+  };
+ }
+ if (model.executeCount > 0) {
+  return {
+   label: 'Do now',
+   title: 'Review execute alerts',
+   detail: `${model.executeCount} execute alert${model.executeCount === 1 ? '' : 's'} ready for decision.`,
+   tab: 'scanner',
+   tone: 'hot',
+  };
+ }
+ return {
+  label: 'Wait',
+  title: 'No urgent action',
+  detail: 'Scanner, API, and risk state are visible. Wait for a stronger setup or refresh the scan.',
+  tab: 'scanner',
+  tone: 'waiting',
+ };
 }
 
 function resolveSetupProfile(metadata = {}) {
@@ -1642,7 +1711,7 @@ function buildCommandPaletteCommands() {
  { id: 'scanner', title: 'Scanner', subtitle: 'Review signals and alerts', keywords: 'signals alerts execute setup scanner', tab: 'scanner' },
  { id: 'watchlist', title: 'Watchlist', subtitle: 'Open pinned symbols and custom alerts', keywords: 'watchlist pinned custom alert', tab: 'watchlist' },
  { id: 'chart', title: 'Chart Workspace', subtitle: 'Open clean key-level chart workspace', keywords: 'chart key levels candle tradingview', tab: 'chart' },
- { id: 'options', title: 'Options Desk', subtitle: 'Open chain, builder, analyzer, straddle, skew', keywords: 'options straddle skew chain builder analyzer', tab: 'options' },
+ { id: 'options', title: 'Native Straddle', subtitle: 'Open lightweight MV straddle scanner view', keywords: 'options native straddle scanner mv', tab: 'options' },
  { id: 'analytics', title: 'Analytics', subtitle: 'Open live analytics and journal', keywords: 'analytics journal pnl history', tab: 'liveanalytics' },
  { id: 'funds', title: 'Funds', subtitle: 'Open wallet and cash movement view', keywords: 'funds wallet balance cash', tab: 'funds' },
  { id: 'positions', title: 'Positions', subtitle: 'Manage exposure, stops, targets, journal', keywords: 'positions exposure stop target close flatten', tab: 'positions' },
@@ -1650,7 +1719,6 @@ function buildCommandPaletteCommands() {
  { id: 'riskcalc', title: 'Risk Cockpit', subtitle: 'Position sizing, guards, VAR', keywords: 'risk var sizing leverage loss guard', tab: 'riskcalc' },
  { id: 'funding', title: 'Funding Map', subtitle: 'Crowding and funding research', keywords: 'funding crowding heatmap arbitrage', tab: 'funding' },
  { id: 'corr', title: 'Correlation Matrix', subtitle: 'Cluster risk and hedges', keywords: 'correlation matrix cluster hedge', tab: 'corr' },
- { id: 'backtest', title: 'Backtest', subtitle: 'Run symbol backtest', keywords: 'backtest strategy test', tab: 'backtest' },
  { id: 'settings-profile', title: 'Profile Settings', subtitle: 'User profile, mode, venue', keywords: 'profile mode user venue read trade', action: () => runSetupAction('profile') },
  { id: 'settings-paper', title: 'Paper Trading', subtitle: 'Forward test without live futures orders', keywords: 'paper trading shadow ledger forward test', action: () => runSetupAction('paper-mode') },
  { id: 'settings-presets', title: 'Strategy Profiles', subtitle: 'Apply scanner and risk presets', keywords: 'strategy profile preset risk scanner paper', action: () => runSetupAction('strategy-profiles') },
@@ -1905,6 +1973,9 @@ function resolveCommandCenterModel(d = {}) {
  const brain = globalThis.FWDTradeDeskActionBrain?.buildActionBrain
  ? globalThis.FWDTradeDeskActionBrain.buildActionBrain(brainInput)
  : null;
+ const learning = brain?.learning || {};
+ const automationOn = !!d.autoTradeSettings?.enabled || !!d.autoTrade;
+ const executionMode = automationOn ? 'Live rules on' : Number(learning.paperOpen || 0) || Number(learning.paperClosed || 0) ? 'Paper learning' : 'Manual review';
  const actions = [
  executeCount
  ? ['Review execute queue', `${executeCount} execute alert${executeCount === 1 ? '' : 's'} ready`, 'scanner', 'hot']
@@ -1945,6 +2016,8 @@ function resolveCommandCenterModel(d = {}) {
  watchlist,
  actions,
  brain,
+ learning,
+ executionMode,
  };
 }
 
@@ -1968,42 +2041,107 @@ function renderCommandCenter(d = {}) {
  .map(action => buildCommandAction(action[0], action[1], action[2], action[3]))
  .join('');
  const topAction = brain?.top || null;
- const queueState = model.killValue === 'On' ? 'Locked' : topAction?.bucket === 'do_now' ? 'Action ready' : topAction?.bucket === 'protect' ? 'Protect first' : Number(model.ordersValue || 0) > 0 ? 'Order review' : 'Learning';
- const learning = brain?.learning || {};
+ const nextStep = resolveCommandNextStep(model, topAction);
+ const queueState = nextStep.label;
+ const learning = model.learning || {};
+ const emptyDesk = !model.scanResults.length;
+ const nextTabLabel = {
+  riskcalc: 'Risk Cockpit',
+  strategy: 'Settings',
+  scanner: 'Scanner',
+  orders: 'Orders',
+  positions: 'Positions',
+  funds: 'Funds',
+  liveanalytics: 'Journal',
+  watchlist: 'Watchlist',
+ }[nextStep.tab] || nextStep.tab || 'workspace';
+ const blockerTitle = model.killValue === 'On'
+ ? 'Live orders blocked'
+ : Number(model.ordersValue || 0) > 0
+ ? 'Pending order review'
+ : model.apiValue === 'Cooling'
+ ? 'API cooldown active'
+ : emptyDesk
+ ? 'No scan loaded'
+ : 'No hard blocker';
+ const blockerDetail = model.killValue === 'On'
+ ? model.killDetail
+ : Number(model.ordersValue || 0) > 0
+ ? model.ordersDetail
+ : model.apiValue === 'Cooling'
+ ? model.apiDetail
+ : emptyDesk
+ ? 'Run one scan so the desk can rank candidates and risk.'
+ : 'Risk, API, and queue state are clear enough for review.';
+ const emptyHtml = emptyDesk ? `<div class="command-empty-panel">
+ <div>
+ <span>Getting started state</span>
+ <strong>Run one scan to fill the decision queue</strong>
+ <small>The Command Center becomes useful after it has current scanner rows, alert tiers, and account state.</small>
+ </div>
+ <div class="command-empty-actions">
+ <button type="button" data-tab="scanner" data-scan-now="1">Run scan</button>
+ <button type="button" data-tab="strategy">Check setup</button>
+ <button type="button" data-tab="riskcalc">Review risk</button>
+ </div>
+ </div>` : '';
  root.innerHTML = `
  <div class="command-center-head">
- <div>
- <div class="command-eyebrow">Daily operating dashboard</div>
- <h2>Command Center</h2>
- <p>${topAction ? escapeHtml(`${topAction.title}: ${topAction.what}`) : `${escapeHtml(model.executeCount)} execute alerts, ${escapeHtml(model.setupCount)} setup alerts, ${escapeHtml(model.scanResults.length)} scan results, ${escapeHtml(model.watchlist.length)} watchlist symbols.`}</p>
+ <section class="command-next-card ${escapeHtml(nextStep.tone)}">
+ <div class="command-next-main">
+ <div class="command-next-label-row">
+ <span class="command-live-pill ${escapeHtml(nextStep.tone)}">${escapeHtml(queueState)}</span>
+ <div class="command-eyebrow">Decision-first cockpit</div>
  </div>
+ <h2>${escapeHtml(nextStep.title)}</h2>
+ <p>${escapeHtml(nextStep.detail)}</p>
  <div class="command-head-actions">
- <span class="command-live-pill">${escapeHtml(queueState)}</span>
- <button class="command-primary" data-tab="scanner" type="button">Scan Now</button>
+ <button class="command-secondary" data-tab="${escapeHtml(nextStep.tab)}"${nextStep.action ? ` data-setup-action="${escapeHtml(nextStep.action)}"` : ''} type="button">Open ${escapeHtml(nextTabLabel)}</button>
+ <button class="command-primary" data-tab="scanner" data-scan-now="1" type="button">Scan Now</button>
  </div>
+ </div>
+ <aside class="command-next-support" aria-label="Decision support">
+ <div class="command-next-stat">
+ <span>Blocker</span>
+ <strong>${escapeHtml(blockerTitle)}</strong>
+ <small>${escapeHtml(blockerDetail)}</small>
+ </div>
+ <div class="command-next-stat">
+ <span>Execution</span>
+ <strong>${model.killValue === 'On' ? 'Locked' : model.ordersValue !== '0' ? 'Review orders' : model.executionMode}</strong>
+ <small>${escapeHtml(model.executeCount)} execute alert${model.executeCount === 1 ? '' : 's'} / ${escapeHtml(model.ordersValue)} pending order${model.ordersValue === '1' ? '' : 's'}</small>
+ </div>
+ <div class="command-next-why">
+ <span>Why this is first</span>
+ <strong>${escapeHtml(emptyDesk ? 'The desk has no current market ranking.' : topAction?.source || 'Risk state and queue state are highest priority.')}</strong>
+ <small>${escapeHtml(emptyDesk ? 'Scan first, then confirm risk before acting.' : topAction?.when || 'The supporting metrics below explain whether to act, wait, or protect first.')}</small>
+ </div>
+ </aside>
+ </section>
  </div>
  <div class="command-day-strip">
  <button type="button" data-tab="scanner"><span>Market scan</span><strong>${escapeHtml(model.scanLabel)}</strong></button>
- <button type="button" data-tab="analytics"><span>Paper learning</span><strong>${escapeHtml(String(learning.paperClosed || 0))} closed</strong></button>
- <button type="button" data-tab="analytics"><span>Open paper</span><strong>${escapeHtml(String(learning.paperOpen || 0))}</strong></button>
+ <button type="button" data-tab="liveanalytics"><span>Paper learning</span><strong>${escapeHtml(String(learning.paperClosed || 0))} closed</strong></button>
+ <button type="button" data-tab="liveanalytics"><span>Open paper</span><strong>${escapeHtml(String(learning.paperOpen || 0))}</strong></button>
  <button type="button" data-tab="funds"><span>API</span><strong>${escapeHtml(model.apiValue)}</strong></button>
  </div>
  <div class="command-metric-grid">${metricsHtml}</div>
  <div class="command-lower-grid">
  <section class="command-panel">
  <div class="command-panel-title">Action Brain Queue</div>
- <div class="command-action-list">${actionsHtml}</div>
+ <div class="command-action-list">${actionsHtml}${emptyHtml}</div>
  </section>
  <section class="command-panel command-snapshot-panel">
- <div class="command-panel-title">Operating Snapshot</div>
- <div class="command-snapshot-status ${escapeHtml(model.apiTone)}">
- <strong>${escapeHtml(queueState)}</strong>
- <span>${escapeHtml(model.riskValue)} risk | ${escapeHtml(model.ordersValue)} pending orders</span>
+ <div class="command-panel-title">Decision Snapshot</div>
+ <div class="command-snapshot-status ${escapeHtml(nextStep.tone)}">
+ <strong>${escapeHtml(nextStep.title)}</strong>
+ <span>${escapeHtml(nextStep.detail)}</span>
  </div>
  <div class="command-snapshot-row"><span>Trade desk</span><strong>${escapeHtml(model.scanLabel)}</strong></div>
+ <div class="command-snapshot-row"><span>Mode</span><strong>${escapeHtml(model.executionMode)}</strong></div>
  <div class="command-snapshot-row"><span>Paper edge</span><strong>${escapeHtml(String(learning.setupRows || 0))} setup rows</strong></div>
  <div class="command-snapshot-row"><span>Min sample</span><strong>${escapeHtml(String(learning.minSample || '--'))}</strong></div>
- <div class="command-snapshot-row"><span>Execution</span><strong>${model.killValue === 'On' ? 'Locked' : 'Ready'}</strong></div>
+ <div class="command-snapshot-row"><span>Execution</span><strong>${model.killValue === 'On' ? 'Locked' : model.ordersValue !== '0' ? 'Review orders' : 'Ready'}</strong></div>
  <div class="command-snapshot-row"><span>Private API</span><strong>${escapeHtml(model.apiValue)}</strong></div>
  <div class="command-snapshot-row"><span>Queue</span><strong>${escapeHtml(model.executeCount)} execute / ${escapeHtml(model.ordersValue)} orders</strong></div>
  </section>
@@ -2017,7 +2155,7 @@ function renderCommandCenter(d = {}) {
     return;
    }
    const tab = button.dataset.tab;
- if (button.classList.contains('command-primary')) {
+ if (button.classList.contains('command-primary') || button.dataset.scanNow === '1') {
  document.getElementById('btnScan')?.click();
  }
  if (tab) setActiveWorkspaceTab(tab, true, true);
@@ -2050,8 +2188,10 @@ async function updateWorkspaceInsights(snapshot = null) {
  const watchAlertCount = alerts.filter(a => String(a.alertTier || '').toLowerCase() === 'watch').length;
  const marketIndex = d.marketIndex || null;
  const regimeValue = marketIndex?.regime ? String(marketIndex.regime).replace(/_/g, ' ') : 'READY';
- const regimeDelta = Number.isFinite(Number(marketIndex?.value))
- ? `${marketIndex.value >= 0 ? '+' : ''}${Number(marketIndex.value).toFixed(2)}%`
+ const sentimentValue = Number(marketIndex?.sentiment?.value ?? marketIndex?.value ?? NaN);
+ const indexMove = Number(marketIndex?.indexChangePct ?? NaN);
+ const regimeDelta = Number.isFinite(sentimentValue)
+ ? `Sent ${sentimentValue >= 0 ? '+' : ''}${sentimentValue.toFixed(2)}% | Index ${Number.isFinite(indexMove) ? `${indexMove >= 0 ? '+' : ''}${indexMove.toFixed(2)}%` : '-'}`
  : 'No index yet';
  const leadershipLabel = marketIndex?.leadership?.label || 'Mixed Leadership';
  const thresholdSummary = marketIndex?.thresholdSummary || 'Execute >= 65 | Setup >= 60 | Watch >= 45';
@@ -2096,7 +2236,7 @@ async function updateWorkspaceInsights(snapshot = null) {
  buildOverviewCard('watch', 'Watchlist', String(watchlist.length), `${watchlist.length ? 'Pinned ideas ready for refresh' : 'No pinned coins yet'}`, 'watchlist'),
  buildOverviewCard('portfolio', 'Portfolio', String(positions.length), `${positions.length ? 'Tracked positions ready in Position Desk' : 'Use Position Desk for live exposure and review'}`, 'positions'),
  buildOverviewCard('review', 'Review', 'Live Journal', 'Trade history and journal now live in Analytics', 'liveanalytics'),
- buildOverviewCard('research', 'Research', String(scanResults.length), 'Funding, matrix, and backtest use the latest scan snapshot', 'funding'),
+ buildOverviewCard('research', 'Research', String(scanResults.length), 'Funding and matrix use the latest scan snapshot', 'funding'),
  ].join('');
  const overviewEl = document.getElementById('overviewGrid');
  if (overviewEl) {
@@ -2932,10 +3072,10 @@ async function refreshCurrentModalSignal() {
  currentModal = resp.result;
  openModal(resp.result);
  if (document.getElementById('pane-watchlist')?.classList.contains('active')) {
- await renderWatchlist();
+ await (globalThis.scheduleWorkspaceTabRender?.('watchlist') || renderWatchlist());
  }
  if (document.getElementById('pane-scanner')?.classList.contains('active')) {
- await renderScanner();
+ await (globalThis.scheduleWorkspaceTabRender?.('scanner') || renderScanner());
  }
  }
  });
@@ -3337,8 +3477,8 @@ function showPreTradeChecklist(signal) {
  },
  {
  key: 'delta10',
- label: `FWD-10 Index ${isLong ? 'positive' : 'negative'} (${marketIndex ? `${Number(marketIndex.value || 0) >= 0 ? '+' : ''}${Number(marketIndex.value || 0)}%` : 'no data'})`,
- ok: marketIndex ? (isLong ? Number(marketIndex.value || 0) > 0 : Number(marketIndex.value || 0) < 0) : null,
+ label: `FWD Sentiment ${isLong ? 'positive' : 'negative'} (${marketIndex ? `${Number((marketIndex.sentiment?.value ?? marketIndex.value) || 0) >= 0 ? '+' : ''}${Number((marketIndex.sentiment?.value ?? marketIndex.value) || 0)}%` : 'no data'})`,
+ ok: marketIndex ? (isLong ? Number((marketIndex.sentiment?.value ?? marketIndex.value) || 0) > 0 : Number((marketIndex.sentiment?.value ?? marketIndex.value) || 0) < 0) : null,
  required: false,
  category: 'Macro',
  },
@@ -3564,7 +3704,6 @@ async function openModal(signal) {
  const openBtn = document.getElementById('btnOpenInDelta');
  const previewBtn = document.getElementById('btnLiveTradePreview');
  const checklistBtn = document.getElementById('btnToJrnl');
- const backtestBtn = document.getElementById('btnBTModal');
  if (!overlay || !title || !body) return;
 
  title.textContent = `${String(signal.symbol || '').toUpperCase()} ${String(signal.direction || '').toUpperCase()}`;
@@ -3601,14 +3740,6 @@ async function openModal(signal) {
  showPreTradeChecklist(signal);
  } catch (error) {
  reportUiError('Checklist unavailable', error);
- }
- };
- backtestBtn.onclick = async () => {
- try {
- closeModal();
- await globalThis.prepareBacktestPane?.(signal.symbol, signal.tradeQuality?.score ?? signal.score ?? null);
- } catch (error) {
- reportUiError('Backtest unavailable', error);
  }
  };
 

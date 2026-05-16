@@ -181,6 +181,7 @@ function loadStrategy() {
  setReportDisplayUsdInrRate(reportDisplayUsdInrRate);
  const marketIndexSettings = settingsSanitizeMarketIndexSettings(s.marketIndexSettings || {});
  document.getElementById('sMarketIndexMaxConstituents').value = marketIndexSettings.maxConstituents;
+ document.getElementById('sMarketIndexRebalanceDays').value = marketIndexSettings.rebalanceDays;
  document.getElementById('sMarketIndexExcludedSymbols').value = marketIndexSettings.excludedSymbols.join(', ');
  document.getElementById('sAutoInterval').value = String(autoScanInterval);
  document.getElementById('sAutoScan').checked = autoScan;
@@ -217,24 +218,6 @@ function loadStrategy() {
  document.getElementById('sAutoTradeRiskMinRewardRisk').value = ats.riskQualityMinRewardRisk;
  document.getElementById('sAutoTradeRiskMaxStopDistancePct').value = ats.riskQualityMaxStopDistancePct;
  document.getElementById('sAutoTradeRiskMaxEntryDistancePct').value = ats.riskQualityMaxEntryDistancePct;
- document.getElementById('sAutoTradeBacktestSignalMinScore').value = ats.backtestSignalMinScore;
- document.getElementById('sAutoTradeBacktestLookbackDays').value = ats.backtestLookbackDays;
- document.getElementById('sAutoTradeBacktestMinTrades').value = ats.backtestMinTrades;
- document.getElementById('sAutoTradeBacktestMinProfitFactor').value = ats.backtestMinProfitFactor;
- document.getElementById('sAutoTradeBacktestMinExpectancy').value = ats.backtestMinExpectancy;
- document.getElementById('sAutoTradeBacktestMaxDrawdownPct').value = ats.backtestMaxDrawdownPct;
- document.getElementById('sAutoTradeBacktestCacheHours').value = ats.backtestCacheHours;
- const setupOverrides = ats.setupFamilyBacktestOverrides || {};
- const setupOverrideKey = Object.keys(setupOverrides)[0] || '';
- const setupOverride = setupOverrides[setupOverrideKey] || {};
- document.getElementById('sAutoTradeSetupFamilyOverrides').value = Object.keys(setupOverrides).length
- ? JSON.stringify(setupOverrides)
- : '';
- document.getElementById('sAutoTradeSetupFamilyKey').value = setupOverrideKey;
- document.getElementById('sAutoTradeSetupFamilyMinTrades').value = setupOverride.minTrades ?? '';
- document.getElementById('sAutoTradeSetupFamilyMinProfitFactor').value = setupOverride.minProfitFactor ?? '';
- document.getElementById('sAutoTradeSetupFamilyMinExpectancy').value = setupOverride.minExpectancy ?? '';
- document.getElementById('sAutoTradeSetupFamilyMaxDrawdownPct').value = setupOverride.maxDrawdownPct ?? '';
  document.getElementById('sAutoTradeNotifyBrowser').checked = ats.notifyBrowser;
  document.getElementById('sAutoTradeNotifyTelegram').checked = ats.notifyTelegram;
  document.getElementById('sAutoTradeEnabled').checked = d.autoTrade ?? false;
@@ -295,8 +278,6 @@ function loadStrategy() {
  document.getElementById('sNativeStraddlePreferred').checked = oats.nativeStraddlePreferred;
  document.getElementById('sStraddleMinPremiumPerContractUSD').value = oats.minPremiumPerContractUSD;
  document.getElementById('sStraddleMinThetaMarginRatioPct').value = oats.minThetaMarginRatioPct;
- document.getElementById('sStraddleSkewVetoEnabled').checked = oats.skewVetoEnabled;
- document.getElementById('sStraddleMaxBearishSkewRR').value = oats.maxBearishSkewRR;
  document.getElementById('sStraddleSameDayMinScore').value = oats.sameDayMinScore;
  document.getElementById('sStraddleSameDayMaxSpreadPct').value = oats.sameDayMaxSpreadPct;
  document.getElementById('sStraddlePremiumCapturePct').value = oats.premiumCapturePct;
@@ -417,25 +398,6 @@ document.addEventListener('click', async (e) => {
  targetRR: document.getElementById('sRiskOverrideTargetRR')?.value || undefined,
  };
  }
- let setupFamilyBacktestOverrides = {};
- const setupFamilyBacktestOverridesRaw = String(document.getElementById('sAutoTradeSetupFamilyOverrides').value || '').trim();
- if (setupFamilyBacktestOverridesRaw) {
- try {
- setupFamilyBacktestOverrides = JSON.parse(setupFamilyBacktestOverridesRaw);
- } catch (_) {
- alert('Setup Family Gate Overrides must be valid JSON.');
- return;
- }
- }
- const setupFamilyKey = String(document.getElementById('sAutoTradeSetupFamilyKey')?.value || '').trim();
- if (setupFamilyKey) {
- setupFamilyBacktestOverrides[setupFamilyKey] = {
- minTrades: document.getElementById('sAutoTradeSetupFamilyMinTrades')?.value || undefined,
- minProfitFactor: document.getElementById('sAutoTradeSetupFamilyMinProfitFactor')?.value || undefined,
- minExpectancy: document.getElementById('sAutoTradeSetupFamilyMinExpectancy')?.value || undefined,
- maxDrawdownPct: document.getElementById('sAutoTradeSetupFamilyMaxDrawdownPct')?.value || undefined,
- };
- }
  const riskTemplates = settingsSanitizeRiskTemplates({
  default: {
  atrStopMultiplier: document.getElementById('sRiskTemplateAtrStopMultiplier').value,
@@ -451,9 +413,10 @@ document.addEventListener('click', async (e) => {
  minScore: sanitizeTelegramMinScore(document.getElementById('tgMinScore').value, 85),
  hourlySummaryEnabled: document.getElementById('tgHourlySummary').checked,
  };
- const storedSettings = await storeGet(['externalBackup', 'optionsAutoTradeSettings']);
+ const storedSettings = await storeGet(['externalBackup', 'optionsAutoTradeSettings', 'strategy']);
  const existingExternal = sanitizeExternalBackupConfig(storedSettings.externalBackup || {});
  const existingOptionsAutoTradeSettings = settingsSanitizeOptionsAutoTradeSettings(storedSettings.optionsAutoTradeSettings || {});
+ const existingMarketIndexSettings = settingsSanitizeMarketIndexSettings(storedSettings.strategy?.marketIndexSettings || {});
  const externalBackup = {
  enabled: document.getElementById('sExtBackupEnabled').checked,
  autoBackup: document.getElementById('sExtBackupAuto').checked,
@@ -489,6 +452,8 @@ document.addEventListener('click', async (e) => {
  reportDisplayUsdInrRate,
  marketIndexSettings: settingsSanitizeMarketIndexSettings({
  maxConstituents: document.getElementById('sMarketIndexMaxConstituents').value,
+ rebalanceDays: document.getElementById('sMarketIndexRebalanceDays').value,
+ rebuildNonce: existingMarketIndexSettings.rebuildNonce,
  excludedSymbols: document.getElementById('sMarketIndexExcludedSymbols').value,
  }),
  liveAccountSync,
@@ -529,14 +494,6 @@ document.addEventListener('click', async (e) => {
  riskQualityMinRewardRisk: document.getElementById('sAutoTradeRiskMinRewardRisk').value,
  riskQualityMaxStopDistancePct: document.getElementById('sAutoTradeRiskMaxStopDistancePct').value,
  riskQualityMaxEntryDistancePct: document.getElementById('sAutoTradeRiskMaxEntryDistancePct').value,
- backtestSignalMinScore: document.getElementById('sAutoTradeBacktestSignalMinScore').value,
- backtestLookbackDays: document.getElementById('sAutoTradeBacktestLookbackDays').value,
- backtestMinTrades: document.getElementById('sAutoTradeBacktestMinTrades').value,
- backtestMinProfitFactor: document.getElementById('sAutoTradeBacktestMinProfitFactor').value,
- backtestMinExpectancy: document.getElementById('sAutoTradeBacktestMinExpectancy').value,
- backtestMaxDrawdownPct: document.getElementById('sAutoTradeBacktestMaxDrawdownPct').value,
- backtestCacheHours: document.getElementById('sAutoTradeBacktestCacheHours').value,
- setupFamilyBacktestOverrides,
  notifyBrowser: document.getElementById('sAutoTradeNotifyBrowser').checked,
  notifyTelegram: document.getElementById('sAutoTradeNotifyTelegram').checked,
  });
@@ -588,8 +545,6 @@ document.addEventListener('click', async (e) => {
  nativeStraddlePreferred: document.getElementById('sNativeStraddlePreferred').checked,
  minPremiumPerContractUSD: document.getElementById('sStraddleMinPremiumPerContractUSD').value,
  minThetaMarginRatioPct: document.getElementById('sStraddleMinThetaMarginRatioPct').value,
- skewVetoEnabled: document.getElementById('sStraddleSkewVetoEnabled').checked,
- maxBearishSkewRR: document.getElementById('sStraddleMaxBearishSkewRR').value,
  sameDayMinScore: document.getElementById('sStraddleSameDayMinScore').value,
  sameDayMaxSpreadPct: document.getElementById('sStraddleSameDayMaxSpreadPct').value,
  premiumCapturePct: document.getElementById('sStraddlePremiumCapturePct').value,
@@ -669,9 +624,30 @@ document.addEventListener('click', async (e) => {
 
 });
 
+document.addEventListener('click', async (e) => {
+ if (e.target?.id !== 'sMarketIndexRebuildNow' && !e.target?.closest('#sMarketIndexRebuildNow')) return;
+ const stored = await storeGet(['strategy']);
+ const strategy = stored.strategy || {};
+ const current = settingsSanitizeMarketIndexSettings(strategy.marketIndexSettings || {});
+ const nextMarketIndexSettings = settingsSanitizeMarketIndexSettings({
+ ...current,
+ maxConstituents: document.getElementById('sMarketIndexMaxConstituents')?.value || current.maxConstituents,
+ rebalanceDays: document.getElementById('sMarketIndexRebalanceDays')?.value || current.rebalanceDays,
+ excludedSymbols: document.getElementById('sMarketIndexExcludedSymbols')?.value || current.excludedSymbols,
+ rebuildNonce: Date.now(),
+ });
+ await storeSet({
+ strategy: {
+ ...strategy,
+ marketIndexSettings: nextMarketIndexSettings,
+ },
+ });
+ showSystemToast?.('FWD-10 rebuild queued', 'Next scan will rebuild the equal-weight basket.', 'success', 3000);
+});
+
 document.addEventListener('click', (e) => {
  if (e.target?.id !== 'btnClearCandleCache' && !e.target?.closest('#btnClearCandleCache')) return;
- if (!confirm('Clear the local candle cache? The next scan/backtest will re-download missing history.')) return;
+ if (!confirm('Clear the local candle cache? The next scan will re-download missing history.')) return;
  chrome.runtime.sendMessage({ action: 'clearCandleCache' }, () => {
  refreshRuntimeHealthStatus();
  });

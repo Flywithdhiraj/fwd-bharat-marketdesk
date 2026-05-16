@@ -6,84 +6,595 @@ body.app-is-locked {
  position: fixed;
  inset: 0;
  z-index: 9999;
- display: grid;
- align-items: center;
- justify-items: center;
- padding: 28px 18px;
- background:
- linear-gradient(135deg, rgba(0, 213, 255, 0.10), transparent 36%),
- linear-gradient(180deg, rgba(3, 9, 16, 0.98), rgba(1, 6, 12, 0.98));
- backdrop-filter: blur(14px);
+ display: block;
+ background: #06111c;
+ color: #eef8fb;
+ overflow: auto;
+ scrollbar-color: rgba(34, 211, 238, 0.46) rgba(255, 255, 255, 0.06);
 }
 
 .app-lock-overlay[hidden] {
  display: none;
 }
 
-.app-lock-card {
- width: min(560px, 100%);
- max-height: calc(100vh - 56px);
- border: 1px solid rgba(55, 174, 214, 0.42);
- border-radius: 8px;
- background:
- linear-gradient(180deg, rgba(9, 23, 37, 0.98), rgba(5, 13, 24, 0.99));
- box-shadow: 0 28px 90px rgba(0, 0, 0, 0.56), inset 0 1px 0 rgba(255, 255, 255, 0.04);
- color: #eaf7ff;
- overflow-y: auto;
- scrollbar-color: rgba(8, 217, 255, .55) rgba(255,255,255,.06);
+.app-lock-overlay::before,
+.app-lock-overlay::after {
+ content: "";
+ position: fixed;
+ pointer-events: none;
+ z-index: 0;
 }
 
-.app-lock-head {
- padding: 24px 28px 18px;
- border-bottom: 1px solid rgba(95, 179, 213, 0.18);
+.app-lock-overlay::before {
+ inset: 0;
+ background:
+ radial-gradient(circle at 14% 22%, rgba(27, 203, 163, 0.26), transparent 27%),
+ radial-gradient(circle at 82% 18%, rgba(255, 174, 67, 0.24), transparent 24%),
+ radial-gradient(circle at 72% 72%, rgba(28, 144, 255, 0.24), transparent 30%),
+ linear-gradient(135deg, #071523 0%, #0a1b2d 44%, #06111c 100%);
+}
+
+.app-lock-overlay::after {
+ inset: 0;
+ background:
+ linear-gradient(90deg, rgba(140, 225, 255, 0.052) 1px, transparent 1px),
+ linear-gradient(180deg, rgba(140, 225, 255, 0.044) 1px, transparent 1px);
+ background-size: 62px 62px;
+ mask-image: linear-gradient(90deg, transparent 0%, #000 9%, #000 91%, transparent 100%);
+ opacity: 0.72;
+}
+
+.app-lock-shell {
+ position: relative;
+ z-index: 1;
+ min-height: 100dvh;
+ width: min(1440px, 100%);
+ margin: 0 auto;
+ padding: 0 clamp(18px, 4vw, 58px) 54px;
+}
+
+.app-lock-nav {
+ position: sticky;
+ top: 0;
+ z-index: 4;
+ display: grid;
+ grid-template-columns: minmax(220px, 1fr) auto minmax(240px, 340px) auto auto;
+ gap: 18px;
+ align-items: center;
+ min-height: 74px;
+ padding: 12px 0;
+ background: linear-gradient(180deg, rgba(6, 17, 28, 0.96), rgba(6, 17, 28, 0.72));
+ backdrop-filter: blur(18px);
+}
+
+.app-lock-brand-mark {
+ display: inline-flex;
+ align-items: center;
+ gap: 12px;
+ min-width: 0;
+}
+
+.app-lock-brand-mark img {
+ width: 44px;
+ height: 44px;
+ border-radius: 8px;
+ box-shadow: 0 18px 46px rgba(0, 0, 0, 0.42);
+}
+
+.app-lock-brand-mark span {
+ color: #f5fbff;
+ font-size: 22px;
+ font-weight: 950;
+ letter-spacing: 0;
+ white-space: nowrap;
+}
+
+.app-lock-nav-links {
+ display: inline-flex;
+ align-items: center;
+ gap: 22px;
+}
+
+.app-lock-nav-links a {
+ color: #8faabd;
+ font-size: 13px;
+ font-weight: 850;
+ text-decoration: none;
+ transition: color 180ms ease;
+}
+
+.app-lock-nav-links a:hover {
+ color: #f5fbff;
+}
+
+.app-lock-search {
+ display: grid;
+ grid-template-columns: 16px minmax(0, 1fr) auto;
+ gap: 10px;
+ align-items: center;
+ min-height: 38px;
+ padding: 0 11px;
+ border: 1px solid rgba(145, 214, 255, 0.2);
+ border-radius: 8px;
+ background: rgba(255, 255, 255, 0.075);
+ box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+.app-lock-search span {
+ width: 13px;
+ height: 13px;
+ border: 2px solid rgba(234, 247, 255, 0.54);
+ border-radius: 50%;
+ position: relative;
+}
+
+.app-lock-search span::after {
+ content: "";
+ position: absolute;
+ right: -6px;
+ bottom: -5px;
+ width: 7px;
+ height: 2px;
+ border-radius: 999px;
+ background: rgba(234, 247, 255, 0.54);
+ transform: rotate(45deg);
+}
+
+.app-lock-search b {
+ min-width: 0;
+ overflow: hidden;
+ color: #8faabd;
+ font-size: 12px;
+ font-weight: 800;
+ text-overflow: ellipsis;
+ white-space: nowrap;
+}
+
+.app-lock-search kbd {
+ padding: 3px 6px;
+ border: 1px solid rgba(255, 255, 255, 0.12);
+ border-radius: 6px;
+ color: #f7d88d;
+ font-family: Consolas, "SFMono-Regular", monospace;
+ font-size: 10px;
+ font-weight: 900;
+}
+
+.app-lock-nav-login,
+.app-lock-nav-primary {
+ display: inline-grid;
+ place-items: center;
+ min-height: 36px;
+ padding: 0 15px;
+ border-radius: 8px;
+ font-size: 13px;
+ font-weight: 950;
+ text-decoration: none;
+ cursor: pointer;
+ transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.app-lock-nav-login {
+ border: 1px solid rgba(190, 232, 255, 0.42);
+ background: rgba(255, 255, 255, 0.04);
+ color: #eef8fb;
+}
+
+.app-lock-nav-primary {
+ border: 1px solid #ffae43;
+ background: #ffae43;
+ color: #101016;
+}
+
+.app-lock-nav-login:hover,
+.app-lock-nav-primary:hover {
+ transform: translateY(-1px);
+}
+
+.app-lock-main {
+ display: grid;
+ grid-template-columns: minmax(0, 1fr) minmax(318px, 372px);
+ grid-template-areas:
+ "hero login"
+ "rail rail"
+ "bands bands";
+ gap: 22px 26px;
+ align-items: start;
+ padding-top: 28px;
+}
+
+.app-lock-hero {
+ grid-area: hero;
+ display: grid;
+ grid-template-columns: minmax(320px, 0.9fr) minmax(300px, 0.78fr);
+ gap: clamp(18px, 3vw, 38px);
+ min-height: calc(100dvh - 158px);
+ align-items: center;
+}
+
+.app-lock-hero-copy {
+ min-width: 0;
+ padding: 18px 0 42px;
+ animation: appLockRise 680ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .app-lock-kicker {
- color: #08d9ff;
+ color: #ffce7c;
  font-size: 11px;
- font-weight: 800;
- letter-spacing: 1px;
+ font-weight: 950;
+ letter-spacing: 0.1em;
  text-transform: uppercase;
+}
+
+.app-lock-command-kicker {
+ display: inline-flex;
+ align-items: center;
+ gap: 8px;
+}
+
+.app-lock-command-kicker::before {
+ content: "";
+ width: 10px;
+ height: 10px;
+ border-radius: 50%;
+ background: #20d6b6;
+ box-shadow: 0 0 0 6px rgba(32, 214, 182, 0.12);
+ animation: appLockPulse 1800ms ease-in-out infinite;
 }
 
 .app-lock-title {
- margin-top: 6px;
- font-size: 26px;
- line-height: 1.2;
- font-weight: 900;
+ margin: 18px 0 0;
+ max-width: 620px;
+ color: #f6fbff;
+ font-size: clamp(36px, 5vw, 58px);
+ line-height: 1;
+ font-weight: 950;
+ letter-spacing: 0;
+ text-wrap: balance;
 }
 
-.app-lock-copy {
- margin-top: 8px;
- color: #9fc4d8;
- font-size: 13px;
- line-height: 1.55;
+.app-lock-title span {
+ color: #21d5b1;
 }
 
-.app-lock-status-row {
+.app-lock-rotator {
  display: flex;
- gap: 8px;
  flex-wrap: wrap;
- margin-top: 16px;
+ gap: 10px;
+ align-items: center;
+ margin-top: 20px;
+ color: #d8eff8;
 }
 
-.app-lock-status-row span {
- display: inline-flex;
- align-items: center;
- min-height: 28px;
- padding: 6px 9px;
- border: 1px solid rgba(8, 217, 255, 0.16);
- border-radius: 999px;
- background: rgba(8, 217, 255, 0.06);
- color: #b7dcef;
- font-size: 10px;
+.app-lock-rotator strong {
+ position: relative;
+ padding: 7px 10px;
+ border: 1px solid rgba(139, 220, 255, 0.17);
+ border-radius: 8px;
+ background: rgba(255, 255, 255, 0.055);
+ font-size: 13px;
+ font-weight: 950;
+ animation: appLockFloat 4200ms ease-in-out infinite;
+}
+
+.app-lock-rotator strong:nth-of-type(2) {
+ animation-delay: -700ms;
+}
+
+.app-lock-rotator strong:nth-of-type(3) {
+ animation-delay: -1400ms;
+}
+
+.app-lock-rotator strong:nth-of-type(4) {
+ animation-delay: -2100ms;
+}
+
+.app-lock-rotator strong:nth-of-type(5) {
+ animation-delay: -2800ms;
+}
+
+.app-lock-rotator i {
+ width: 5px;
+ height: 5px;
+ border-radius: 50%;
+ background: #ffae43;
+ opacity: 0.85;
+}
+
+.app-lock-hero-copy p {
+ max-width: 560px;
+ margin: 22px 0 0;
+ color: #a6bcc9;
+ font-size: 16px;
+ line-height: 1.62;
+}
+
+.app-lock-built-grid {
+ display: grid;
+ grid-template-columns: repeat(2, minmax(0, 1fr));
+ gap: 12px;
+ max-width: 520px;
+ margin-top: 30px;
+}
+
+.app-lock-built-grid div {
+ min-height: 66px;
+ padding: 7px 0 7px 14px;
+ border-left: 2px solid rgba(32, 214, 182, 0.62);
+}
+
+.app-lock-built-grid small {
+ display: block;
+ color: #7f96a6;
+ font-size: 12px;
  font-weight: 900;
- letter-spacing: .4px;
+}
+
+.app-lock-built-grid strong {
+ display: block;
+ margin-top: 3px;
+ color: #f5fbff;
+ font-size: 17px;
+ line-height: 1.25;
+ font-weight: 950;
+}
+
+.app-lock-trust-row {
+ display: flex;
+ flex-wrap: wrap;
+ gap: 16px 26px;
+ margin-top: 20px;
+}
+
+.app-lock-trust-row div {
+ display: grid;
+ gap: 3px;
+}
+
+.app-lock-trust-row b {
+ color: #f6fbff;
+ font-size: 13px;
+ font-weight: 950;
+}
+
+.app-lock-trust-row span {
+ color: #8299aa;
+ font-size: 12px;
+}
+
+.app-lock-product-stage {
+ position: relative;
+ min-height: 470px;
+ animation: appLockRise 780ms 80ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.app-lock-product-stage::before {
+ content: "";
+ position: absolute;
+ inset: 42px 0 36px 46px;
+ border-radius: 8px;
+ background:
+ linear-gradient(135deg, rgba(25, 213, 177, 0.16), rgba(29, 101, 219, 0.1)),
+ linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
+ border: 1px solid rgba(151, 228, 255, 0.18);
+ transform: skewY(-1.5deg);
+ box-shadow: 0 36px 120px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.app-lock-chart-card,
+.app-lock-queue-card,
+.app-lock-action-card,
+.app-lock-risk-card,
+.app-lock-journal-card {
+ position: absolute;
+ border: 1px solid rgba(151, 228, 255, 0.2);
+ border-radius: 8px;
+ background: rgba(7, 18, 29, 0.84);
+ box-shadow: 0 24px 74px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+ backdrop-filter: blur(16px);
+}
+
+.app-lock-chart-card {
+ top: 22px;
+ left: 8px;
+ width: min(430px, 72%);
+ padding: 14px;
+ animation: appLockFloat 5200ms ease-in-out infinite;
+}
+
+.app-lock-card-top {
+ display: flex;
+ justify-content: space-between;
+ gap: 12px;
+ align-items: center;
+ margin-bottom: 12px;
+}
+
+.app-lock-card-top span,
+.app-lock-action-card span,
+.app-lock-risk-card span,
+.app-lock-journal-card span {
+ color: #91a9ba;
+ font-size: 11px;
+ font-weight: 950;
+ letter-spacing: 0.08em;
  text-transform: uppercase;
 }
 
+.app-lock-card-top strong {
+ color: #22d6b6;
+ font-family: Consolas, "SFMono-Regular", monospace;
+ font-size: 18px;
+ font-weight: 950;
+}
+
+.app-lock-mini-chart {
+ display: grid;
+ grid-template-columns: repeat(10, minmax(0, 1fr));
+ align-items: end;
+ gap: 8px;
+ height: 130px;
+ padding: 13px;
+ border-radius: 8px;
+ background:
+ linear-gradient(180deg, rgba(121, 221, 255, 0.08), rgba(9, 22, 34, 0.24)),
+ repeating-linear-gradient(180deg, rgba(218, 239, 255, 0.08) 0 1px, transparent 1px 32px);
+ overflow: hidden;
+}
+
+.app-lock-mini-chart i {
+ display: block;
+ border-radius: 999px 999px 3px 3px;
+ background: linear-gradient(180deg, #20d6b6, #ffae43);
+ box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+ animation: appLockBars 2400ms ease-in-out infinite;
+}
+
+.app-lock-mini-chart i:nth-child(2n) {
+ background: linear-gradient(180deg, #4cc9ff, #20d6b6);
+ animation-delay: -500ms;
+}
+
+.app-lock-mini-chart i:nth-child(3n) {
+ animation-delay: -1100ms;
+}
+
+.app-lock-queue-card {
+ top: 184px;
+ right: 4px;
+ width: min(300px, 54%);
+ padding: 14px;
+ animation: appLockFloat 5600ms -1800ms ease-in-out infinite;
+}
+
+.app-lock-queue-card p {
+ display: flex;
+ justify-content: space-between;
+ gap: 10px;
+ margin: 0;
+ padding: 9px 0;
+ border-top: 1px solid rgba(255, 255, 255, 0.075);
+ color: #eaf6fb;
+ font-size: 12px;
+}
+
+.app-lock-queue-card p span {
+ color: #ffce7c;
+ font-family: Consolas, "SFMono-Regular", monospace;
+ font-weight: 900;
+}
+
+.app-lock-action-card {
+ top: 326px;
+ left: 52px;
+ width: min(360px, 64%);
+ padding: 17px;
+ animation: appLockFloat 6000ms -900ms ease-in-out infinite;
+}
+
+.app-lock-action-card strong,
+.app-lock-risk-card strong {
+ display: block;
+ margin-top: 8px;
+ color: #f6fbff;
+ font-size: 18px;
+ line-height: 1.2;
+ font-weight: 950;
+}
+
+.app-lock-action-card small,
+.app-lock-risk-card small {
+ display: block;
+ margin-top: 8px;
+ color: #91a9ba;
+ font-size: 12px;
+ line-height: 1.45;
+}
+
+.app-lock-action-card em {
+ display: inline-flex;
+ margin-top: 13px;
+ padding: 6px 9px;
+ border-radius: 8px;
+ background: rgba(32, 214, 182, 0.13);
+ color: #55f4d3;
+ font-style: normal;
+ font-size: 12px;
+ font-weight: 950;
+}
+
+.app-lock-risk-card {
+ top: 70px;
+ right: 34px;
+ width: min(255px, 46%);
+ padding: 15px;
+ border-color: rgba(32, 214, 182, 0.36);
+ animation: appLockFloat 4800ms -2400ms ease-in-out infinite;
+}
+
+.app-lock-journal-card {
+ right: 52px;
+ bottom: 22px;
+ width: min(320px, 56%);
+ padding: 14px;
+ animation: appLockFloat 6200ms -1200ms ease-in-out infinite;
+}
+
+.app-lock-journal-card p {
+ margin: 0;
+ padding: 8px 0 8px 14px;
+ border-left: 2px solid rgba(255, 174, 67, 0.5);
+ color: #cce0ea;
+ font-size: 12px;
+}
+
+body.app-is-locked .app-lock-card {
+ grid-area: login;
+ position: sticky;
+ top: 92px;
+ width: 100%;
+ max-height: calc(100dvh - 112px);
+ overflow-y: auto;
+ border: 1px solid rgba(185, 232, 255, 0.2);
+ border-radius: 8px;
+ background: rgba(8, 20, 32, 0.88);
+ box-shadow: 0 34px 90px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+ backdrop-filter: blur(20px);
+ animation: appLockRise 760ms 130ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+body.app-is-locked .app-lock-head {
+ display: grid;
+ justify-items: start;
+ gap: 8px;
+ padding: 22px 26px 16px;
+ text-align: left;
+}
+
+body.app-is-locked .app-lock-head img {
+ width: 38px;
+ height: 38px;
+ border-radius: 8px;
+ box-shadow: 0 16px 38px rgba(0, 0, 0, 0.34);
+}
+
+.app-lock-form-title {
+ color: #f6fbff;
+ font-size: 24px;
+ line-height: 1.12;
+ font-weight: 950;
+ letter-spacing: 0;
+}
+
+body.app-is-locked .app-lock-card .app-lock-copy {
+ max-width: 340px;
+ color: #9cb2c1;
+ font-size: 13px;
+ line-height: 1.5;
+}
+
 .app-lock-section {
- padding: 18px 28px 22px;
+ padding: 0 26px 24px;
 }
 
 .app-lock-section[hidden] {
@@ -92,45 +603,47 @@ body.app-is-locked {
 
 .app-lock-field {
  display: grid;
- gap: 7px;
- margin-bottom: 10px;
- color: #9fc4d8;
- font-size: 11px;
- font-weight: 800;
- text-transform: uppercase;
- letter-spacing: .7px;
+ gap: 8px;
+ margin-bottom: 15px;
+ color: #a9bfcb;
+ font-size: 12px;
+ font-weight: 850;
+ letter-spacing: 0;
 }
 
 .app-lock-field input {
  width: 100%;
- min-height: 46px;
- border: 1px solid rgba(82, 150, 184, 0.42);
+ min-height: 44px;
+ border: 1px solid rgba(151, 228, 255, 0.25);
  border-radius: 8px;
- background: #081b2b;
+ background: rgba(3, 10, 18, 0.84);
  color: #f4fbff;
- padding: 0 12px;
+ padding: 0 14px;
  font-size: 15px;
- font-weight: 700;
+ font-weight: 750;
  outline: none;
+ box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+ transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
 }
 
 .app-lock-field input:focus {
- border-color: #07d6f2;
- box-shadow: 0 0 0 3px rgba(7, 214, 242, 0.14);
+ border-color: #20d6b6;
+ box-shadow: 0 0 0 4px rgba(32, 214, 182, 0.13);
 }
 
 .app-lock-check {
  display: flex;
  gap: 10px;
  align-items: flex-start;
- margin: 4px 0 12px;
- color: #d9f1ff;
- font-size: 12px;
+ margin: 2px 0 16px;
+ color: #a7bdc9;
+ font-size: 13px;
  line-height: 1.45;
 }
 
 .app-lock-check input {
  margin-top: 2px;
+ accent-color: #20d6b6;
 }
 
 .app-lock-actions {
@@ -138,80 +651,79 @@ body.app-is-locked {
  grid-template-columns: minmax(0, 1fr) auto;
  gap: 10px;
  align-items: center;
+ margin-top: 10px;
 }
 
 .app-lock-primary,
 .app-lock-secondary {
- border: 1px solid rgba(90, 176, 212, 0.38);
- border-radius: 8px;
  min-height: 42px;
- padding: 0 16px;
- font-size: 12px;
- font-weight: 900;
- letter-spacing: .4px;
+ padding: 0 15px;
+ border-radius: 8px;
+ font-size: 13px;
+ font-weight: 950;
+ letter-spacing: 0;
  cursor: pointer;
+ transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease, border-color 160ms ease;
 }
 
 .app-lock-primary {
- background: #05d4eb;
- color: #03121b;
- box-shadow: inset 0 1px 0 rgba(255,255,255,.28);
+ border: 1px solid #20d6b6;
+ background: #20d6b6;
+ color: #06111c;
+ box-shadow: 0 16px 34px rgba(0, 0, 0, 0.3);
 }
 
 .app-lock-secondary {
- background: #10263a;
- color: #d9f4ff;
+ border: 1px solid rgba(151, 228, 255, 0.24);
+ background: rgba(151, 228, 255, 0.08);
+ color: #dcecf4;
+}
+
+.app-lock-primary:hover,
+.app-lock-secondary:hover {
+ transform: translateY(-1px);
+}
+
+.app-lock-primary:active,
+.app-lock-secondary:active {
+ transform: translateY(0) scale(0.99);
 }
 
 .app-lock-message {
- min-height: 18px;
- margin: 0 28px 16px;
- color: #9fc4d8;
+ min-height: 20px;
+ margin: 0 26px 22px;
+ color: #9ab0bd;
  font-size: 12px;
- line-height: 1.4;
-}
-
-@media (max-width: 640px) {
- .app-lock-overlay {
- padding: 14px;
- align-items: stretch;
- }
- .app-lock-card {
- max-height: calc(100vh - 28px);
- }
- .app-lock-actions {
- grid-template-columns: 1fr;
- }
- .app-lock-secondary {
- width: 100%;
- }
+ line-height: 1.45;
+ text-align: left;
 }
 
 .app-lock-message.good {
- color: #27e6a3;
+ color: #55f4d3;
 }
 
 .app-lock-message.bad {
- color: #ff6f8e;
+ color: #ff6e8e;
 }
 
 .app-lock-secret {
- border: 1px solid rgba(6, 214, 242, 0.24);
+ margin-bottom: 12px;
+ padding: 12px 14px;
+ border: 1px solid rgba(32, 214, 182, 0.2);
  border-radius: 8px;
- background: rgba(6, 214, 242, 0.07);
- padding: 10px 12px;
- margin-bottom: 10px;
+ background: rgba(32, 214, 182, 0.07);
 }
 
 .app-lock-qr {
  display: grid;
  place-items: center;
- margin: 0 auto 12px;
  width: 220px;
  height: 220px;
+ margin: 0 auto 18px;
+ padding: 12px;
+ border: 1px solid rgba(32, 214, 182, 0.18);
  border-radius: 8px;
  background: #ffffff;
- padding: 10px;
 }
 
 .app-lock-qr[hidden] {
@@ -228,20 +740,21 @@ body.app-is-locked {
 
 .app-lock-secret span {
  display: block;
- color: #9fc4d8;
- font-size: 10px;
- font-weight: 900;
- letter-spacing: .7px;
- text-transform: uppercase;
  margin-bottom: 8px;
+ color: #94aba8;
+ font-size: 11px;
+ font-weight: 900;
+ letter-spacing: 0.06em;
+ text-transform: uppercase;
 }
 
 .app-lock-secret code {
  display: block;
- color: #ffffff;
- font-size: 15px;
+ color: #f3fbff;
+ font-family: Consolas, "SFMono-Regular", monospace;
+ font-size: 14px;
  font-weight: 900;
- letter-spacing: 1.6px;
+ letter-spacing: 0.08em;
  word-break: break-all;
 }
 
@@ -250,4 +763,350 @@ body.app-is-locked {
  resize: vertical;
  font-size: 11px;
  line-height: 1.45;
+}
+
+.app-lock-product-rail {
+ grid-area: rail;
+ display: grid;
+ grid-template-columns: repeat(7, minmax(120px, 1fr));
+ gap: 10px;
+ padding: 15px 0 26px;
+ border-top: 1px solid rgba(151, 228, 255, 0.12);
+}
+
+.app-lock-product-rail button {
+ min-height: 56px;
+ border: 1px solid rgba(151, 228, 255, 0.18);
+ border-radius: 8px;
+ background: rgba(255, 255, 255, 0.055);
+ color: #dcecf4;
+ text-align: left;
+ padding: 9px 11px;
+ cursor: pointer;
+ transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.app-lock-product-rail button.active,
+.app-lock-product-rail button:hover {
+ border-color: rgba(32, 214, 182, 0.54);
+ background: rgba(32, 214, 182, 0.11);
+ transform: translateY(-1px);
+}
+
+.app-lock-product-rail strong,
+.app-lock-product-rail span {
+ display: block;
+}
+
+.app-lock-product-rail strong {
+ font-size: 13px;
+ font-weight: 950;
+}
+
+.app-lock-product-rail span {
+ margin-top: 3px;
+ color: #91a9ba;
+ font-size: 11px;
+ line-height: 1.25;
+}
+
+.app-lock-feature-bands {
+ grid-area: bands;
+ display: grid;
+ gap: 18px;
+ padding-bottom: 36px;
+}
+
+.app-lock-feature-band {
+ display: grid;
+ grid-template-columns: minmax(260px, 0.55fr) minmax(0, 1fr);
+ gap: 28px;
+ align-items: center;
+ min-height: 220px;
+ padding: clamp(22px, 4vw, 44px);
+ border: 1px solid rgba(151, 228, 255, 0.15);
+ border-radius: 8px;
+ background:
+ linear-gradient(135deg, rgba(255, 255, 255, 0.085), rgba(255, 255, 255, 0.025)),
+ linear-gradient(90deg, rgba(32, 214, 182, 0.14), rgba(255, 174, 67, 0.08));
+ box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.app-lock-feature-band--risk {
+ background:
+ linear-gradient(135deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.022)),
+ linear-gradient(90deg, rgba(255, 174, 67, 0.13), rgba(76, 201, 255, 0.1));
+}
+
+.app-lock-feature-band--reports {
+ background:
+ linear-gradient(135deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.022)),
+ linear-gradient(90deg, rgba(76, 201, 255, 0.13), rgba(32, 214, 182, 0.08));
+}
+
+.app-lock-band-icon {
+ display: grid;
+ place-items: center;
+ width: 42px;
+ height: 42px;
+ border-radius: 8px;
+ background: #20d6b6;
+ color: #06111c;
+ font-size: 22px;
+ font-weight: 950;
+}
+
+.app-lock-feature-band--risk .app-lock-band-icon {
+ background: #ffae43;
+}
+
+.app-lock-feature-band--reports .app-lock-band-icon {
+ background: #4cc9ff;
+}
+
+.app-lock-feature-band h2 {
+ margin: 15px 0 0;
+ color: #f6fbff;
+ font-size: clamp(28px, 4vw, 42px);
+ line-height: 1.04;
+ font-weight: 950;
+ letter-spacing: 0;
+}
+
+.app-lock-feature-band p {
+ max-width: 520px;
+ margin: 12px 0 0;
+ color: #9fb5c4;
+ font-size: 14px;
+ line-height: 1.55;
+}
+
+.app-lock-band-grid {
+ display: grid;
+ grid-template-columns: repeat(3, minmax(0, 1fr));
+ gap: 12px;
+}
+
+.app-lock-band-grid span {
+ display: grid;
+ align-items: center;
+ min-height: 58px;
+ padding: 12px;
+ border: 1px solid rgba(151, 228, 255, 0.16);
+ border-left: 2px solid rgba(32, 214, 182, 0.72);
+ border-radius: 8px;
+ background: rgba(4, 12, 20, 0.48);
+ color: #eaf6fb;
+ font-size: 13px;
+ font-weight: 900;
+}
+
+.app-lock-feature-band--risk .app-lock-band-grid span {
+ border-left-color: rgba(255, 174, 67, 0.76);
+}
+
+.app-lock-feature-band--reports .app-lock-band-grid span {
+ border-left-color: rgba(76, 201, 255, 0.76);
+}
+
+@keyframes appLockRise {
+ from {
+  opacity: 0;
+  transform: translateY(18px);
+ }
+ to {
+  opacity: 1;
+  transform: translateY(0);
+ }
+}
+
+@keyframes appLockFloat {
+ 0%, 100% {
+  transform: translate3d(0, 0, 0);
+ }
+ 50% {
+  transform: translate3d(0, -9px, 0);
+ }
+}
+
+@keyframes appLockPulse {
+ 0%, 100% {
+  opacity: 0.72;
+  transform: scale(0.94);
+ }
+ 50% {
+  opacity: 1;
+  transform: scale(1.12);
+ }
+}
+
+@keyframes appLockBars {
+ 0%, 100% {
+  transform: scaleY(0.92);
+ }
+ 50% {
+  transform: scaleY(1.04);
+ }
+}
+
+@media (prefers-reduced-motion: reduce) {
+ .app-lock-hero-copy,
+ body.app-is-locked .app-lock-card,
+ .app-lock-product-stage,
+ .app-lock-chart-card,
+ .app-lock-queue-card,
+ .app-lock-action-card,
+ .app-lock-risk-card,
+ .app-lock-journal-card,
+ .app-lock-rotator strong,
+ .app-lock-mini-chart i,
+ .app-lock-command-kicker::before {
+  animation: none;
+ }
+}
+
+@media (max-width: 1180px) {
+ .app-lock-nav {
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 330px) auto auto;
+ }
+
+ .app-lock-nav-links {
+  display: none;
+ }
+
+ .app-lock-main {
+  grid-template-columns: 1fr;
+  grid-template-areas:
+  "login"
+  "hero"
+  "rail"
+  "bands";
+ }
+
+ body.app-is-locked .app-lock-card {
+  position: relative;
+  top: auto;
+  max-width: 520px;
+  max-height: none;
+  justify-self: end;
+ }
+
+ .app-lock-hero {
+  min-height: auto;
+ }
+}
+
+@media (max-width: 980px) {
+ .app-lock-shell {
+  padding-left: 18px;
+  padding-right: 18px;
+ }
+
+ .app-lock-nav {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+ }
+
+ .app-lock-search,
+ .app-lock-nav-login {
+  display: none;
+ }
+
+ .app-lock-hero {
+  grid-template-columns: 1fr;
+ }
+
+ .app-lock-product-stage {
+  min-height: 480px;
+ }
+
+ .app-lock-product-rail {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+ }
+
+ .app-lock-feature-band {
+  grid-template-columns: 1fr;
+ }
+
+ .app-lock-band-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+ }
+}
+
+@media (max-width: 640px) {
+ .app-lock-nav-primary {
+  padding: 0 12px;
+ }
+
+ .app-lock-brand-mark span {
+  font-size: 17px;
+ }
+
+ .app-lock-brand-mark img {
+  width: 38px;
+  height: 38px;
+ }
+
+ .app-lock-main {
+  padding-top: 10px;
+ }
+
+ body.app-is-locked .app-lock-card {
+  justify-self: stretch;
+ }
+
+ body.app-is-locked .app-lock-head,
+ .app-lock-section {
+  padding-left: 22px;
+  padding-right: 22px;
+ }
+
+ .app-lock-actions,
+ .app-lock-built-grid,
+ .app-lock-band-grid {
+  grid-template-columns: 1fr;
+ }
+
+ .app-lock-product-stage {
+  min-height: 520px;
+ }
+
+ .app-lock-chart-card,
+ .app-lock-queue-card,
+ .app-lock-action-card,
+ .app-lock-risk-card,
+ .app-lock-journal-card {
+  width: auto;
+  left: 0;
+  right: 0;
+ }
+
+ .app-lock-chart-card {
+  top: 18px;
+ }
+
+ .app-lock-risk-card {
+  top: 178px;
+ }
+
+ .app-lock-queue-card {
+  top: 292px;
+ }
+
+ .app-lock-action-card {
+  top: 410px;
+ }
+
+ .app-lock-journal-card {
+  display: none;
+ }
+
+ .app-lock-product-rail {
+  grid-template-columns: 1fr;
+ }
+
+ .app-lock-message {
+  margin-left: 22px;
+  margin-right: 22px;
+ }
 }

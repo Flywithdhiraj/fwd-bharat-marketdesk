@@ -374,8 +374,23 @@
   const key = `${picked.symbol}:${picked.eventType}:${Math.floor(Number(picked.ts || radarNow()) / 60000)}`;
   if (key === data.strategyLabRadarLastNotificationKey) return;
   await chrome.storage.local.set({ strategyLabRadarLastNotificationKey: key });
-  const title = `${picked.symbol} ${picked.raw?.eventLabel || picked.setupLabel || 'Radar event'}`;
+  const eventLabel = picked.raw?.eventLabel || picked.setupLabel || 'Radar event';
+  const title = `[Radar] ${picked.symbol} ${eventLabel}`;
   const message = `${picked.actionLabel || 'Review'} | Score ${Math.round(Number(picked.score || 0))} | ${picked.raw?.volumeRatio ? `${picked.raw.volumeRatio}x volume` : 'Radar active'}`;
+  if (typeof v16PushNotificationFeed === 'function') {
+   await v16PushNotificationFeed({
+    tone: Number(picked.score || 0) >= 78 ? 'success' : 'info',
+    title,
+    symbol: picked.symbol,
+    sourceScannerId: 'radar',
+    sourceScannerName: 'Live Radar',
+    sourceType: 'scanner',
+    what: `${picked.actionLabel || 'Review'} | Score ${Math.round(Number(picked.score || 0))} | ${eventLabel}`,
+    why: Array.isArray(picked.reasons) && picked.reasons.length ? picked.reasons.slice(0, 3).join(' | ') : 'Radar detected live market activity worth checking.',
+    next: 'Open Strategy Lab or the chart to verify entry, stop, volume, and trend context.',
+    action: 'Use this as an alert, not an automatic live-trade command.',
+   }).catch(() => null);
+  }
   try {
    chrome.notifications?.create?.(`fwd-radar-${Date.now()}`, {
     type: 'basic',
@@ -743,6 +758,88 @@
   return output;
  }
 
+ async function runRadarScanFromContext(context) {
+  if (!global.FWDTradeDeskStrategies?.normalizeStrategyResult) throw new Error('Strategy registry not loaded');
+  if (!context?.scanId) throw new Error('Fresh main scan context is required');
+  await radarSetStatus('Deriving Radar rows from main scan...', { active: true, progress: 5, scanId: context.scanId });
+  await chrome.storage.local.set({ 'strategyResults.radar': [] });
+  const settings = await radarLoadSettings();
+  const tickerMap = context.tickerMap || {};
+  const products = Array.isArray(context.products) ? context.products : [];
+  const symbols = Array.from(new Set([
+   ...Object.keys(tickerMap || {}),
+   ...products.map(item => item.symbol),
+  ].map(symbol => String(symbol || '').toUpperCase()).filter(Boolean)));
+  const stored = await radarLoadStored(['strategyLabRadarFirstSeen']);
+  const replayStored = await radarLoadStored(['strategyLabRadarReplay', 'strategyResults.radar']);
+  const firstSeenMap = radarBuildFirstSeenMap(symbols, stored.strategyLabRadarFirstSeen || {});
+  await chrome.storage.local.set({ strategyLabRadarFirstSeen: firstSeenMap });
+  const universe = radarBuildUniverse(tickerMap, products, firstSeenMap, settings);
+  const skipped = { insufficientIntraday: 0, fetchErrors: 0, reviewOnly: 0, noContextCandles: 0 };
+  const diagnostics = {
+   tickerRows: Object.keys(tickerMap || {}).length,
+   productRows: products.length,
+   universeRows: universe.length,
+   freshRows: universe.filter(item => radarNow() - Number(item.firstSeenTs || radarNow()) <= Number(settings.newCoinFirstSeenHours || 72) * 3600000).length,
+  };
+  const getContextCandles = globalThis.FWDTradeDeskScanContext?.getCandles;
+  const results = [];
+  for (let i = 0; i < universe.length; i += 1) {
+   const item = universe[i];
+   if (i % 10 === 0 || i === universe.length - 1) {
+    await radarSetStatus(`Deriving ${item.symbol} (${i + 1}/${universe.length})`, {
+     active: true,
+     progress: Math.round(6 + (i / Math.max(1, universe.length)) * 88),
+     scanned: i + 1,
+     total: universe.length,
+     scanId: context.scanId,
+    });
+   }
+   try {
+    const safeIntraday = getContextCandles?.(context, item.symbol, '15m', settings.preferredIntradayCandles) || [];
+    if (safeIntraday.length < Math.min(12, Number(settings.minIntradayCandles || 36))) {
+     skipped.insufficientIntraday += 1;
+     if (!safeIntraday.length) skipped.noContextCandles += 1;
+     continue;
+    }
+    const daily = getContextCandles?.(context, item.symbol, '1d', settings.preferredDailyCandles) || [];
+    const result = radarAnalyzeSymbol(item.symbol, safeIntraday, daily, item.ticker, { settings, firstSeenTs: item.firstSeenTs });
+    if (result.eventType === 'review') skipped.reviewOnly += 1;
+    results.push(result);
+   } catch (error) {
+    skipped.fetchErrors += 1;
+    radarLog(`${item.symbol} derive skipped: ${error?.message || error}`);
+   }
+  }
+  const replay = radarUpdateReplayTracker(replayStored['strategyResults.radar'] || [], tickerMap, replayStored.strategyLabRadarReplay || {}, settings);
+  const sorted = radarSortRows(radarAttachReplay(results, replay.tracker));
+  const output = sorted.slice(0, Math.max(20, Number(settings.outputLimit || RADAR_DEFAULT_SETTINGS.outputLimit)));
+  const counts = radarSignalCounts(output);
+  await chrome.storage.local.set({
+   'strategyResults.radar': output,
+   'strategyStatus.radar': {
+    strategyId: 'radar',
+    status: `Derived - ${output.length} Radar rows from main scan | Breakout ${counts.breakout || 0}, EMA+OBV ${counts.ema_obv || 0}, Pressure ${counts.pressure || 0}`,
+    active: false,
+    progress: 100,
+    scanned: results.length,
+    total: universe.length,
+    eventCounts: counts,
+    skipped,
+    diagnostics,
+    replaySummary: replay.summary,
+    source: 'main_scan_context',
+    scanId: context.scanId,
+    lastScanTs: radarNow(),
+    ts: radarNow(),
+   },
+   strategyLabRadarReplay: replay.tracker,
+   radarLastScanTs: radarNow(),
+  });
+  await radarMaybeNotify(output, settings);
+  return output;
+ }
+
  function getRadarSnapshot(callback) {
   chrome.storage.local.get([
    'strategyResults.radar',
@@ -766,7 +863,14 @@
    return false;
   }
   if (msg?.action === 'radar:startScan') {
-   runRadarScan()
+   const context = globalThis.FWDTradeDeskScanContext?.getFresh?.();
+   const runner = context ? () => runRadarScanFromContext(context) : (msg?.forceIndependent === true ? runRadarScan : null);
+   if (!runner) {
+    radarSetStatus('Run main scan first - Radar will derive from shared scan data', { active: false, progress: 0 })
+    .finally(() => sendResponse({ ok: false, error: 'Run main scan first' }));
+    return true;
+   }
+   runner()
    .then(results => sendResponse({ ok: true, count: results.length }))
    .catch(async error => {
     await radarSetStatus(`Radar scan failed - ${error?.message || error}`, { active: false, progress: 0 });
@@ -799,5 +903,6 @@
   radarBuildScoreParts,
   radarUpdateReplayTracker,
   runRadarScan,
+  runRadarScanFromContext,
  });
 })(globalThis);

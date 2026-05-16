@@ -164,17 +164,6 @@ body.desktop-mode .clist {
  white-space: nowrap;
 }
 
-.bt-exp {
- margin-top: 10px;
- padding: 12px 14px;
- border: 1px solid var(--accent-br);
- border-radius: 14px;
- background: rgba(79,209,255,.06);
- color: var(--text-soft);
- font-size: 11px;
- line-height: 1.65;
-}
-
 .corr-search {
  min-width: 130px;
  max-width: 160px;
@@ -1195,8 +1184,25 @@ body.desktop-mode .workspace-shell {
  grid-column: 1 / -1;
  border: 1px solid rgba(118, 155, 196, 0.18);
  border-radius: 22px;
- overflow: visible;
  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+}
+
+body.desktop-mode .hdr,
+body.desktop-mode .sbar {
+ position: relative;
+ overflow: hidden;
+}
+
+body.desktop-mode .hdr {
+ z-index: 3;
+}
+
+body.desktop-mode .sbar {
+ z-index: 2;
+}
+
+body.desktop-mode .workspace-shell {
+ overflow: visible;
 }
 
 body.desktop-mode .hdr {
@@ -1235,14 +1241,15 @@ body.desktop-mode .hdr-btns {
 body.desktop-mode .hdr {
  display: grid;
  grid-template-columns: minmax(260px, 1fr) minmax(0, 2.7fr);
- align-items: center;
+ align-items: stretch;
  gap: 14px;
- min-height: 0;
+ min-height: 66px;
  padding: 10px 16px;
  border-radius: 18px;
 }
 
 body.desktop-mode .hdr-brand {
+ align-self: center;
  flex: none;
  min-width: 0;
 }
@@ -1263,7 +1270,7 @@ body.desktop-mode .hdr-right {
  flex: none;
  display: grid;
  grid-template-columns: minmax(210px, .9fr) minmax(210px, .82fr) minmax(300px, 1.2fr) auto;
- align-items: center;
+ align-items: stretch;
  justify-content: stretch;
  gap: 8px;
  min-width: 0;
@@ -1273,6 +1280,7 @@ body.desktop-mode .hdr-status-group,
 body.desktop-mode .hdr-action-group,
 body.desktop-mode .size-controls {
  min-width: 0;
+ min-height: 0;
  padding: 7px 9px;
  border: 1px solid rgba(148,163,184,.14);
  border-radius: 9px;
@@ -1417,8 +1425,35 @@ body.desktop-mode .auto-trade-safety-reason.warn {
 
 body.desktop-mode .sbar {
  grid-row: 2;
+ grid-template-columns: 7px minmax(160px, .72fr) minmax(280px, 1.4fr) auto max-content;
  background: linear-gradient(180deg, rgba(8,16,27,.98), rgba(6,12,20,.98));
  padding: 8px 14px;
+ min-height: 36px;
+ min-width: 0;
+ border-radius: 18px;
+ align-items: center;
+ isolation: isolate;
+ contain: layout paint;
+}
+
+body.desktop-mode .sbar > * {
+ min-width: 0;
+}
+
+body.desktop-mode .price-change-distribution {
+ width: 100%;
+ min-width: 0;
+ grid-template-columns: max-content minmax(90px, 1fr) max-content max-content;
+ justify-self: stretch;
+}
+
+body.desktop-mode .pcd-track {
+ min-width: 90px;
+}
+
+body.desktop-mode .api-usage-meter,
+body.desktop-mode .slst {
+ white-space: nowrap;
 }
 
 body.desktop-mode .workspace-shell {
@@ -1471,6 +1506,13 @@ body.desktop-mode .sector-bar {
  padding: 8px 14px;
  background: linear-gradient(180deg, rgba(8,16,27,.98), rgba(6,12,20,.98));
  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.22);
+}
+
+body.desktop-mode.workspace-focus-mode .d10-bar,
+body.desktop-mode.workspace-focus-mode .sector-bar,
+body.desktop-mode.workspace-scroll-collapsed .d10-bar,
+body.desktop-mode.workspace-scroll-collapsed .sector-bar {
+ display: none !important;
 }
 
 body.desktop-mode .d10-logo {
@@ -1612,21 +1654,18 @@ body.desktop-mode[data-workspace-group='reports'] .phdr-sub {
 
 body.desktop-mode .clist,
 body.desktop-mode .analytics-rows,
-body.desktop-mode .bt-result,
 body.desktop-mode .corr-wrap,
 body.desktop-mode .debug-output {
  padding: 12px;
 }
 
 body.desktop-mode #pane-funding.active,
-body.desktop-mode #pane-corr.active,
-body.desktop-mode #pane-backtest.active {
+body.desktop-mode #pane-corr.active {
  overflow: hidden;
 }
 
 body.desktop-mode .clist,
 body.desktop-mode .analytics-rows,
-body.desktop-mode .bt-result,
 body.desktop-mode .corr-wrap,
 body.desktop-mode .debug-output,
 body.desktop-mode .sform,
@@ -1664,7 +1703,6 @@ body.desktop-mode #pane-funding > #fundingArbView:not([style*='display:none']) {
  flex-direction: column;
 }
 
-body.desktop-mode #pane-backtest > #btResult,
 body.desktop-mode #pane-corr > #corrWrap {
  flex: 1;
  min-height: 0;

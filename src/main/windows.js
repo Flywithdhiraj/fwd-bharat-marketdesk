@@ -15,7 +15,10 @@ function createWindowManager({ app, auth, errorJournal } = {}) {
   };
  }
 
- function bindCommonWindowEvents(win) {
+function bindCommonWindowEvents(win) {
+  win.setMenu(null);
+  win.setAutoHideMenuBar(true);
+  win.setMenuBarVisibility(false);
   win.webContents.setWindowOpenHandler(({ url }) => {
    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
    return { action: 'deny' };

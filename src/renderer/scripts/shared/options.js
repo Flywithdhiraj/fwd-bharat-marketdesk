@@ -322,8 +322,6 @@
  nativeStraddlePreferred: raw.nativeStraddlePreferred !== false,
  minPremiumPerContractUSD: clampNumber(raw.minPremiumPerContractUSD, 0.25, 0, 100000, 2),
  minThetaMarginRatioPct: clampNumber(raw.minThetaMarginRatioPct, 0.35, 0, 100, 2),
- skewVetoEnabled: raw.skewVetoEnabled !== false,
- maxBearishSkewRR: clampNumber(raw.maxBearishSkewRR, -6, -50, 50, 2),
  sameDayMinScore: clampNumber(raw.sameDayMinScore, 82, 0, 100, 0),
  sameDayMaxSpreadPct: clampNumber(raw.sameDayMaxSpreadPct, 1.2, 0.01, 100, 2),
  premiumCapturePct: clampNumber(raw.premiumCapturePct, 60, 0, 100, 0),
@@ -587,466 +585,8 @@
  return `${bias} ${theta} ${vega} ${risk}`;
  }
 
- function analyzeOptionsStrategy(input = {}) {
- const nowTs = Number(input.nowTs || Date.now());
- const spotPrice = Math.max(0.00000001, Number(input.spotPrice || input.currentPrice || 0));
- const legs = (Array.isArray(input.legs) ? input.legs : [])
- .map(sanitizeOptionsBuilderLeg)
- .filter(leg => leg.symbol && leg.underlying && leg.strike > 0 && leg.expiryTs > 0);
- const riskFreeRate = Number.isFinite(Number(input.riskFreeRate)) ? Number(input.riskFreeRate) : DEFAULT_RISK_FREE_RATE;
- if (!legs.length || spotPrice <= 0) {
- return {
- ok: false,
- summary: {
- netPremium: 0,
- netPremiumLabel: 'No legs',
- maxProfit: 0,
- maxLoss: 0,
- breakevens: [],
- totalTheta: 0,
- totalDelta: 0,
- totalGamma: 0,
- totalVega: 0,
- totalRho: 0,
- bias: 'neutral',
- undefinedRisk: false,
- notes: 'Add one or more valid option legs to analyze the structure.',
- },
- payoffPoints: [],
- pnlTable: [],
- greeksTable: [],
- };
- }
- const nearestExpiryTs = Math.min(...legs.map(leg => leg.expiryTs));
- const targetTs = Number(input.targetTs || (nowTs + Math.max(0, nearestExpiryTs - nowTs) * 0.5));
- const targetPrice = Number(input.targetPrice || spotPrice);
- const priceRange = Array.isArray(input.priceRange) && input.priceRange.length
- ? input.priceRange.map(value => Number(value)).filter(Number.isFinite)
- : buildStrategyPriceRange(legs, spotPrice, OPTION_RANGE_STEPS);
- const netPremium = legs.reduce((sum, leg) => {
- const direction = sanitizeOptionLegSide(leg.side) === 'buy' ? -1 : 1;
- return sum + direction * Number(leg.premium || 0) * getLegQuantity(leg) * getLegContractMultiplier(leg);
- }, 0);
- const greeksTable = legs.map(leg => {
- const greeks = getLegCurrentGreeks(leg, spotPrice, nowTs, riskFreeRate);
- const multiplier = getLegDirectionMultiplier(leg) * getLegQuantity(leg) * getLegContractMultiplier(leg);
- return {
- symbol: leg.symbol,
- side: leg.side,
- optionType: leg.optionType,
- strike: leg.strike,
- expiryKey: leg.expiryKey,
- delta: clampNumber(greeks.delta * multiplier, 0, -1000000, 1000000, 6),
- gamma: clampNumber(greeks.gamma * multiplier, 0, -1000000, 1000000, 6),
- theta: clampNumber(greeks.theta * multiplier, 0, -1000000, 1000000, 6),
- vega: clampNumber(greeks.vega * multiplier, 0, -1000000, 1000000, 6),
- rho: clampNumber(greeks.rho * multiplier, 0, -1000000, 1000000, 6),
- };
- });
- const payoffPoints = priceRange.map(price => {
- const expiryPnl = legs.reduce((sum, leg) => sum + calculateLegPnl(leg, intrinsicValue(leg.optionType, price, leg.strike)), 0);
- const targetPnl = legs.reduce((sum, leg) => sum + calculateLegPnl(leg, estimateOptionMarkAtDate(leg, price, targetTs, riskFreeRate)), 0);
- return {
- price: +Number(price).toFixed(2),
- expiryPnl: +expiryPnl.toFixed(2),
- targetPnl: +targetPnl.toFixed(2),
- };
- });
- const tailProfile = inferTailProfile(legs);
- const finitePnls = payoffPoints.map(point => Number(point.expiryPnl || 0)).filter(Number.isFinite);
- const maxProfit = tailProfile.lowInfiniteProfit || tailProfile.highInfiniteProfit ? Number.POSITIVE_INFINITY : Math.max(...finitePnls);
- const maxLoss = tailProfile.lowInfiniteLoss || tailProfile.highInfiniteLoss ? Number.POSITIVE_INFINITY : Math.abs(Math.min(...finitePnls));
- const breakevens = interpolateBreakevens(payoffPoints);
- const avgIv = legs.reduce((sum, leg) => sum + Number(leg.iv || 0), 0) / Math.max(1, legs.length);
- const yearsToNearestExpiry = toYearFraction(nowTs, nearestExpiryTs);
- const pop = estimateProbabilityOfProfit(payoffPoints, spotPrice, avgIv, yearsToNearestExpiry, riskFreeRate);
- const totals = greeksTable.reduce((accumulator, leg) => {
- accumulator.delta += Number(leg.delta || 0);
- accumulator.gamma += Number(leg.gamma || 0);
- accumulator.theta += Number(leg.theta || 0);
- accumulator.vega += Number(leg.vega || 0);
- accumulator.rho += Number(leg.rho || 0);
- return accumulator;
- }, { delta: 0, gamma: 0, theta: 0, vega: 0, rho: 0 });
- const currentPnl = legs.reduce((sum, leg) => sum + calculateLegPnl(leg, Number(leg.markPrice || leg.premium || 0)), 0);
- const targetPnlAtSpot = legs.reduce((sum, leg) => sum + calculateLegPnl(leg, estimateOptionMarkAtDate(leg, targetPrice, targetTs, riskFreeRate)), 0);
- const bias = Number(totals.delta || 0) > 0.03 ? 'bullish' : Number(totals.delta || 0) < -0.03 ? 'bearish' : 'neutral';
- const undefinedRisk = tailProfile.lowInfiniteLoss || tailProfile.highInfiniteLoss;
- const summary = {
- spotPrice: +spotPrice.toFixed(2),
- targetPrice: +targetPrice.toFixed(2),
- targetTs,
- nearestExpiryTs,
- nearestExpiryKey: formatOptionsExpiryKey(nearestExpiryTs),
- netPremium: +netPremium.toFixed(2),
- netPremiumLabel: netPremium >= 0 ? 'Net Credit' : 'Net Debit',
- maxProfit: Number.isFinite(maxProfit) ? +maxProfit.toFixed(2) : Number.POSITIVE_INFINITY,
- maxLoss: Number.isFinite(maxLoss) ? +maxLoss.toFixed(2) : Number.POSITIVE_INFINITY,
- breakevens,
- currentPnl: +currentPnl.toFixed(2),
- targetPnlAtSpot: +targetPnlAtSpot.toFixed(2),
- totalDelta: +totals.delta.toFixed(4),
- totalGamma: +totals.gamma.toFixed(4),
- totalTheta: +totals.theta.toFixed(4),
- totalVega: +totals.vega.toFixed(4),
- totalRho: +totals.rho.toFixed(4),
- pop,
- bias,
- rewardRiskRatio: Number.isFinite(maxProfit) && Number.isFinite(maxLoss) && maxLoss > 0 ? +(maxProfit / maxLoss).toFixed(2) : null,
- undefinedRisk,
- };
- summary.notes = buildStrategyNarrative(summary);
- const priceTargets = [spotPrice * 0.9, spotPrice * 0.95, spotPrice, spotPrice * 1.05, spotPrice * 1.1].map(value => +value.toFixed(2));
- const pnlTable = priceTargets.map(price => {
- const rowPoint = payoffPoints.reduce((best, point) => !best || Math.abs(Number(point.price) - price) < Math.abs(Number(best.price) - price) ? point : best, null);
- return {
- price,
- expiryPnl: rowPoint ? rowPoint.expiryPnl : 0,
- targetPnl: rowPoint ? rowPoint.targetPnl : 0,
- };
- });
- return { ok: true, summary, payoffPoints, pnlTable, greeksTable };
- }
-
- function getOptionSpreadPct(contract = {}) {
- const bid = Number((contract.bid ?? contract.bidPrice) || 0);
- const ask = Number((contract.ask ?? contract.askPrice) || 0);
- const mark = Number((contract.markPrice ?? contract.premium ?? contract.entryPrice) || 0);
- if (bid <= 0 || ask <= 0 || mark <= 0 || ask < bid) return 1;
- return Math.max(0, (ask - bid) / mark);
- }
-
- function getContractDeltaAbs(contract = {}, optionType = '') {
- const value = Math.abs(Number(contract.delta || 0));
- if (value > 0) return value;
- if (sanitizeOptionType(optionType || contract.optionType) === 'put') return 0.2;
- return 0.2;
- }
-
- function scoreShortPremiumContract(contract = {}, settings = {}) {
- const safeSettings = sanitizeOptionsAutomationSettings(settings || {});
- const deltaAbs = getContractDeltaAbs(contract, contract.optionType);
- const deltaDistance = Math.abs(deltaAbs - safeSettings.targetDelta);
- const deltaFit = Math.max(0, 1 - (deltaDistance / Math.max(0.01, safeSettings.deltaTolerance * 1.5)));
- const oiScore = Math.min(1, Number(contract.oiContracts || 0) / Math.max(1, safeSettings.minOiContracts * 2));
- const spreadPct = getOptionSpreadPct(contract);
- const spreadScore = Math.max(0, 1 - (spreadPct / Math.max(0.01, safeSettings.maxBidAskSpreadPct * 1.2)));
- const thetaValue = Math.max(0, Number(contract.theta || 0) * -1);
- const thetaScore = Math.min(1, thetaValue / Math.max(1, Number(contract.markPrice || 0) || 1));
- const markPrice = Math.max(0.0001, Number(contract.markPrice || 0));
- const premiumYield = Math.min(1, markPrice / Math.max(1, Number(contract.strike || 0) * 0.03));
- return clampNumber((deltaFit * 0.28 + oiScore * 0.24 + spreadScore * 0.22 + thetaScore * 0.16 + premiumYield * 0.10) * 100, 0, 0, 100, 2);
- }
-
- function findNearestContract(contracts = [], predicate = () => true, score = () => Number.POSITIVE_INFINITY) {
- return (Array.isArray(contracts) ? contracts : [])
- .filter(predicate)
- .map(contract => ({ contract, score: Number(score(contract)) }))
- .filter(item => Number.isFinite(item.score))
- .sort((a, b) => a.score - b.score)[0]?.contract || null;
- }
-
- function buildStrategyFromChain(strategyType = '', snapshot = {}, overrides = {}) {
- const presetId = sanitizeText(strategyType, '', 40).toLowerCase();
- const rows = Array.isArray(snapshot.rows) ? snapshot.rows.slice() : [];
- const spotPrice = Math.max(0.00000001, Number(snapshot.spotPrice || 0));
- const safeOverrides = sanitizeOptionsAutomationSettings(overrides || {});
- if (!rows.length || spotPrice <= 0) return [];
- const sortedRows = rows.slice().sort((a, b) => Number(a.strike || 0) - Number(b.strike || 0));
- const atmRow = findNearestContract(sortedRows, row => row.call || row.put, row => Math.abs(Number(row.strike || 0) - spotPrice));
- const allCalls = sortedRows.map(row => row.call).filter(Boolean);
- const allPuts = sortedRows.map(row => row.put).filter(Boolean);
- const preferredCall = findNearestContract(
- allCalls,
- contract => Number(contract.ask || contract.markPrice || 0) > 0,
- contract => Math.abs(getContractDeltaAbs(contract, 'call') - safeOverrides.targetDelta) * 1000 + (100 - Number(contract.shortPremiumScore || scoreShortPremiumContract(contract, safeOverrides) || 0))
- );
- const preferredPut = findNearestContract(
- allPuts,
- contract => Number(contract.ask || contract.markPrice || 0) > 0,
- contract => Math.abs(getContractDeltaAbs(contract, 'put') - safeOverrides.targetDelta) * 1000 + (100 - Number(contract.shortPremiumScore || scoreShortPremiumContract(contract, safeOverrides) || 0))
- );
- const strikeSteps = sortedRows
- .map((row, index) => index > 0 ? Math.abs(Number(row.strike || 0) - Number(sortedRows[index - 1].strike || 0)) : 0)
- .filter(value => value > 0);
- const strikeStep = strikeSteps.length ? Math.max(100, Math.min(...strikeSteps)) : Math.max(100, spotPrice * 0.02);
- const callWing = preferredCall
- ? findNearestContract(
- allCalls,
- contract => Number(contract.strike || 0) > Number(preferredCall.strike || 0),
- contract => Math.abs(Number(contract.strike || 0) - (Number(preferredCall.strike || 0) + strikeStep * 2))
- )
- : null;
- const putWing = preferredPut
- ? findNearestContract(
- allPuts,
- contract => Number(contract.strike || 0) < Number(preferredPut.strike || 0),
- contract => Math.abs(Number(contract.strike || 0) - (Number(preferredPut.strike || 0) - strikeStep * 2))
- )
- : null;
- const atmCall = atmRow?.call || preferredCall;
- const atmPut = atmRow?.put || preferredPut;
- const buildLeg = (contract, side) => contract
- ? sanitizeOptionsBuilderLeg({
- symbol: contract.symbol,
- underlying: contract.underlying,
- optionType: contract.optionType,
- side,
- qty: 1,
- strike: contract.strike,
- expiryTs: contract.expiryTs,
- premium: contract.markPrice,
- markPrice: contract.markPrice,
- bid: contract.bid,
- ask: contract.ask,
- iv: contract.iv,
- contractValue: contract.contractValue,
- delta: contract.delta,
- gamma: contract.gamma,
- theta: contract.theta,
- vega: contract.vega,
- rho: contract.rho,
- oiContracts: contract.oiContracts,
- volumeContracts: contract.volumeContracts,
- entryMode: 'limit',
- })
- : null;
-
- let legs = [];
- if (presetId === 'short_straddle') {
- legs = [buildLeg(atmCall, 'sell'), buildLeg(atmPut, 'sell')];
- } else if (presetId === 'short_strangle') {
- legs = [buildLeg(preferredCall || atmCall, 'sell'), buildLeg(preferredPut || atmPut, 'sell')];
- } else if (presetId === 'iron_condor') {
- legs = [buildLeg(preferredPut || atmPut, 'sell'), buildLeg(putWing, 'buy'), buildLeg(preferredCall || atmCall, 'sell'), buildLeg(callWing, 'buy')];
- } else if (presetId === 'short_call_spread') {
- legs = [buildLeg(preferredCall || atmCall, 'sell'), buildLeg(callWing, 'buy')];
- } else if (presetId === 'short_put_spread') {
- legs = [buildLeg(preferredPut || atmPut, 'sell'), buildLeg(putWing, 'buy')];
- } else if (presetId === 'iron_fly') {
- legs = [
- buildLeg(atmPut, 'sell'),
- buildLeg(preferredPut && Number(preferredPut.strike || 0) < Number(atmPut?.strike || 0) ? preferredPut : putWing, 'buy'),
- buildLeg(atmCall, 'sell'),
- buildLeg(preferredCall && Number(preferredCall.strike || 0) > Number(atmCall?.strike || 0) ? preferredCall : callWing, 'buy'),
- ];
- } else if (presetId === 'jade_lizard') {
- legs = [buildLeg(preferredPut || atmPut, 'sell'), buildLeg(preferredCall || atmCall, 'sell'), buildLeg(callWing, 'buy')];
- }
- return legs.filter(Boolean);
- }
-
- function buildScenarioPriceRange(spotPrice = 0, priceRangePct = 0.18, points = 141) {
- const safeSpot = Math.max(0.00000001, Number(spotPrice || 0));
- const safeRangePct = Math.max(0.05, Math.min(0.8, Number(priceRangePct || 0.18)));
- const safePoints = Math.max(41, Math.min(401, Math.round(Number(points || 141))));
- const floor = safeSpot * (1 - safeRangePct);
- const ceiling = safeSpot * (1 + safeRangePct);
- return Array.from({ length: safePoints }, (_, index) => {
- const ratio = safePoints <= 1 ? 0 : index / (safePoints - 1);
- return +(floor + (ceiling - floor) * ratio).toFixed(2);
- });
- }
-
  function sanitizeOptionLeg(raw = {}) {
  return sanitizeOptionsBuilderLeg(raw || {});
- }
-
- function summarizeOptionStrategy(legs = [], context = {}) {
- const safeLegs = (Array.isArray(legs) ? legs : []).map(sanitizeOptionLeg).filter(leg => leg.symbol && leg.optionType);
- const nowTs = Date.now();
- const spotPrice = Math.max(0.00000001, Number(context.underlyingPrice || context.spotPrice || 0));
- const targetPrice = Math.max(0.00000001, Number(context.targetPrice || spotPrice));
- const targetDays = Math.max(0, Number(context.targetDays || Math.min(Number(context.daysToExpiry || 0), 3) || 0));
- const priceRange = buildScenarioPriceRange(spotPrice, context.priceRangePct || 0.18, context.points || 141);
- const analysis = analyzeOptionsStrategy({
- nowTs,
- spotPrice,
- targetTs: nowTs + (targetDays * 86400000),
- targetPrice,
- priceRange,
- riskFreeRate: Number.isFinite(Number(context.rate)) ? Number(context.rate) : DEFAULT_RISK_FREE_RATE,
- legs: safeLegs,
- });
- const summary = analysis.summary || {};
- return {
- ...summary,
- legs: safeLegs,
- hasUndefinedRisk: !!summary.undefinedRisk,
- greeks: {
- delta: Number(summary.totalDelta || 0),
- gamma: Number(summary.totalGamma || 0),
- theta: Number(summary.totalTheta || 0),
- vega: Number(summary.totalVega || 0),
- rho: Number(summary.totalRho || 0),
- },
- payoffPoints: Array.isArray(analysis.payoffPoints) ? analysis.payoffPoints : [],
- greeksTable: Array.isArray(analysis.greeksTable) ? analysis.greeksTable : [],
- targetDays,
- underlyingPrice: spotPrice,
- };
- }
-
- function buildOptionPnlTable(legs = [], context = {}) {
- const safeLegs = (Array.isArray(legs) ? legs : []).map(sanitizeOptionLeg).filter(leg => leg.symbol && leg.optionType);
- const nowTs = Date.now();
- const spotPrice = Math.max(0.00000001, Number(context.underlyingPrice || context.spotPrice || 0));
- const targetPrice = Math.max(0.00000001, Number(context.targetPrice || spotPrice));
- const targetDays = Math.max(0, Number(context.targetDays || Math.min(Number(context.daysToExpiry || 0), 3) || 0));
- const priceRange = buildScenarioPriceRange(spotPrice, context.priceRangePct || 0.18, context.points || 141);
- const analysis = analyzeOptionsStrategy({
- nowTs,
- spotPrice,
- targetTs: nowTs + (targetDays * 86400000),
- targetPrice,
- priceRange,
- riskFreeRate: Number.isFinite(Number(context.rate)) ? Number(context.rate) : DEFAULT_RISK_FREE_RATE,
- legs: safeLegs,
- });
- return (Array.isArray(analysis.payoffPoints) ? analysis.payoffPoints : []).map(point => ({
- price: Number(point.price || 0),
- movePct: spotPrice > 0 ? +((((Number(point.price || 0) / spotPrice) - 1) * 100).toFixed(2)) : 0,
- targetPnl: Number(point.targetPnl || 0),
- expiryPnl: Number(point.expiryPnl || 0),
- }));
- }
-
- function contractPassesShortPremiumFilters(contract = {}, settings = {}) {
- const safeSettings = sanitizeOptionsAutomationSettings(settings || {});
- const normalized = sanitizeOptionLeg(contract);
- const dte = Number(normalized.daysToExpiry || 0);
- if (dte < safeSettings.minDte || dte > safeSettings.maxDte) return false;
- if (!safeSettings.allowedExpiryBuckets.includes(getOptionsExpiryBucket(dte))) return false;
- if (Number(normalized.oiContracts || 0) < safeSettings.minOiContracts) return false;
- if (getOptionSpreadPct(normalized) > safeSettings.maxBidAskSpreadPct) return false;
- const score = scoreShortPremiumContract(normalized, safeSettings);
- if (score < safeSettings.minPremiumScore) return false;
- return true;
- }
-
- function selectSpreadWing(contracts = [], shortLeg = null, direction = 'bullish') {
- if (!shortLeg) return null;
- const directionKey = String(direction || '').trim().toLowerCase();
- const shortStrike = Number(shortLeg.strike || 0);
- const ordered = (Array.isArray(contracts) ? contracts : []).slice().sort((a, b) => Number(a.strike || 0) - Number(b.strike || 0));
- if (directionKey === 'bullish') {
- return findNearestContract(
- ordered,
- contract => Number(contract.strike || 0) < shortStrike && Number(contract.askPrice || contract.ask || contract.markPrice || 0) > 0,
- contract => Math.abs(Number(contract.strike || 0) - (shortStrike * 0.97))
- );
- }
- return findNearestContract(
- ordered,
- contract => Number(contract.strike || 0) > shortStrike && Number(contract.askPrice || contract.ask || contract.markPrice || 0) > 0,
- contract => Math.abs(Number(contract.strike || 0) - (shortStrike * 1.03))
- );
- }
-
- function buildDirectionalCreditSpreadFromChain(contracts = [], direction = '', settings = {}) {
- const safeSettings = sanitizeOptionsAutomationSettings(settings || {});
- const directionKey = String(direction || '').trim().toLowerCase();
- const normalizedContracts = (Array.isArray(contracts) ? contracts : [])
- .map(sanitizeOptionLeg)
- .filter(contract => contract.symbol && contract.underlying && contract.expiryTs > 0);
- if (!normalizedContracts.length) return null;
- const groupedByExpiry = normalizedContracts.reduce((accumulator, contract) => {
- const key = contract.expiryKey || formatOptionsExpiryKey(contract.expiryTs);
- if (!accumulator.has(key)) accumulator.set(key, []);
- accumulator.get(key).push(contract);
- return accumulator;
- }, new Map());
- const expiryGroups = Array.from(groupedByExpiry.values()).sort((a, b) => Number(a[0]?.expiryTs || 0) - Number(b[0]?.expiryTs || 0));
- const templateId = directionKey === 'bullish' ? 'short_put_spread' : directionKey === 'bearish' ? 'short_call_spread' : '';
- if (!templateId) return null;
- for (const group of expiryGroups) {
- const underlyingPrice = Math.max(...group.map(contract => Number(contract.underlyingPrice || 0)), 0);
- const candidates = group
- .filter(contract => contractPassesShortPremiumFilters(contract, safeSettings))
- .filter(contract => directionKey === 'bullish' ? contract.optionType === 'put' : contract.optionType === 'call')
- .filter(contract => directionKey === 'bullish'
- ? Number(contract.strike || 0) <= underlyingPrice
- : Number(contract.strike || 0) >= underlyingPrice)
- .map(contract => ({
- ...contract,
- shortPremiumScore: scoreShortPremiumContract(contract, safeSettings),
- }))
- .sort((a, b) => Number(b.shortPremiumScore || 0) - Number(a.shortPremiumScore || 0));
- for (const shortLeg of candidates) {
- const sameTypeGroup = group.filter(contract => contract.optionType === shortLeg.optionType);
- const hedge = selectSpreadWing(sameTypeGroup, shortLeg, directionKey);
- if (!hedge) continue;
- const legs = [
- sanitizeOptionLeg({ ...shortLeg, side: 'sell', qty: 1 }),
- sanitizeOptionLeg({ ...hedge, side: 'buy', qty: 1 }),
- ];
- const summary = summarizeOptionStrategy(legs, {
- underlyingPrice: underlyingPrice || Number(shortLeg.underlyingPrice || 0),
- daysToExpiry: Number(shortLeg.daysToExpiry || 0),
- targetDays: Math.min(3, Math.max(0, Number(shortLeg.daysToExpiry || 0))),
- rate: DEFAULT_RISK_FREE_RATE,
- });
- const netPremium = Number(summary.netPremium || 0);
- if (!(netPremium > 0)) continue;
- if (!safeSettings.allowUndefinedRisk && summary.hasUndefinedRisk) continue;
- return {
- templateId,
- direction: directionKey,
- score: Number(shortLeg.shortPremiumScore || 0),
- shortLeg,
- hedgeLeg: hedge,
- legs,
- summary,
- };
- }
- }
- return null;
- }
-
- function buildShortStraddleForAutoTrade(chain = {}, settings = {}) {
- const rows = Array.isArray(chain.rows) ? chain.rows : [];
- const spot = Math.max(0.00000001, Number(chain.underlyingPrice || 0));
- const cfg = sanitizeOptionsAutomationSettings(settings);
- if (!rows.length || spot <= 0) return null;
- const sorted = rows.slice().sort((a, b) => Number(a.strike || 0) - Number(b.strike || 0));
- const atmRow = findNearestContract(sorted, row => row.call && row.put, row => Math.abs(Number(row.strike || 0) - spot));
- if (!atmRow?.call || !atmRow?.put) return null;
- const atmCall = atmRow.call;
- const atmPut = atmRow.put;
- if (!(Number(atmCall.markPrice || 0) > 0) || !(Number(atmPut.markPrice || 0) > 0)) return null;
- const dte = Math.max(Number(atmCall.daysToExpiry || 0), Number(atmPut.daysToExpiry || 0));
- if (dte < cfg.minDte || dte > cfg.maxDte) return null;
- if (cfg.straddleExpiryPreference === 'same_day' && dte > 1) return null;
- const buildLeg = (contract, side) => sanitizeOptionsBuilderLeg({
- symbol: contract.symbol, underlying: contract.underlying, optionType: contract.optionType,
- side, qty: 1, strike: contract.strike, expiryTs: contract.expiryTs,
- premium: contract.markPrice, markPrice: contract.markPrice, bid: contract.bid, ask: contract.ask,
- iv: contract.iv, contractValue: contract.contractValue, delta: contract.delta, gamma: contract.gamma,
- theta: contract.theta, vega: contract.vega, rho: contract.rho,
- contractMultiplier: contract.contractMultiplier, productId: contract.productId,
- impliedVolatility: contract.impliedVolatility || contract.iv,
- openInterest: contract.openInterest, daysToExpiry: contract.daysToExpiry,
- expiryKey: contract.expiryKey, underlyingPrice: spot,
- });
- const callLeg = buildLeg(atmCall, 'sell');
- const putLeg = buildLeg(atmPut, 'sell');
- const legs = [callLeg, putLeg];
- const summary = summarizeOptionStrategy(legs, {
- underlyingPrice: spot, daysToExpiry: dte, targetDays: Math.min(1, dte),
- rate: DEFAULT_RISK_FREE_RATE,
- });
- const netPremium = Number(summary.netPremium || 0);
- if (!(netPremium > 0)) return null;
- return {
- templateId: 'auto_short_straddle',
- underlying: String(chain.underlying || atmCall.underlying || ''),
- legs,
- atmStrike: Number(atmRow.strike || 0),
- expiryTs: Number(atmCall.expiryTs || 0),
- expiryKey: String(atmCall.expiryKey || chain.expiryKey || ''),
- netPremium,
- summary,
- };
  }
 
  /* ===================================================================
@@ -1064,7 +604,6 @@
  }
 
  function resolveNativeStraddleRegime(input = {}) {
- const skew = Number(input.riskReversal25d || 0);
  const iv = Number(input.iv || 0) * 100;
  const atmScore = Number(input.atmScore || 0);
  const thetaMarginPct = Number(input.thetaMarginRatioPct || 0);
@@ -1075,12 +614,6 @@
  }
  if (marketContext.recommendedSide === 'wait') {
  return { key: 'wait_btc', label: 'Wait for BTC', tone: 'warn', summary: marketContext.summary };
- }
- if (Number(input.skewVetoTriggered || 0)) {
- return { key: 'avoid', label: 'Avoid', tone: 'loss', summary: 'Downside skew is too aggressive for a fresh short-vol entry.' };
- }
- if (skew <= -4) {
- return { key: 'defensive', label: 'Defensive Neutral', tone: 'warn', summary: 'Premium is rich, but downside protection demand is elevated.' };
  }
  if (iv >= 40 && thetaMarginPct >= 0.4 && atmScore >= 0.8 && moveFit >= 0.8) {
  return { key: 'premium_rich', label: 'Neutral Premium Rich', tone: 'profit', summary: 'ATM premium, carry, and range fit all line up for short-vol carry.' };
@@ -1094,14 +627,23 @@
  function buildNativeStraddleMarketContext(input = {}) {
  const underlying = String(input.underlying || input.symbol || 'BTC').trim().toUpperCase() || 'BTC';
  const price = Number(input.price || input.markPrice || input.spotPrice || input.underlyingPrice || 0);
+ const chartRead = input.chartRead && typeof input.chartRead === 'object' ? input.chartRead : {};
  const change24h = Number(input.change24h || input.priceChange24hPct || input.changePct24h || 0);
- const move4h = Number(input.move4h || input.change4h || input.priceChange4hPct || 0);
+ const move4h = Number(input.move4h ?? input.change4h ?? input.priceChange4hPct ?? chartRead.move4h ?? 0);
+ const chartMove2h = Number(input.chartMove2h ?? chartRead.move2h ?? 0);
+ const atrPct15m = Math.max(0, Number(input.atrPct15m ?? chartRead.atrPct15m ?? 0));
+ const emaSpreadPct15m = Number(input.emaSpreadPct15m ?? chartRead.emaSpreadPct15m ?? 0);
+ const rangeCompression = Math.max(0, Math.min(1, Number(input.rangeCompression ?? chartRead.rangeCompression ?? 0)));
+ const trendState = String(input.trendState || chartRead.trendState || '').toLowerCase();
+ const breakoutRisk = !!(input.breakoutRisk || chartRead.breakoutRisk);
  const fundingRate = Number(input.fundingRate || input.funding_rate || input.funding || 0);
  const trendScore = Math.max(0, Math.min(100, Number(input.trendScore || input.score || 50)));
  const abs24 = Math.abs(change24h);
  const abs4 = Math.abs(move4h);
+ const abs2 = Math.abs(chartMove2h);
+ const emaSpreadAbs = Math.abs(emaSpreadPct15m);
  const fundingAbs = Math.abs(fundingRate);
- let sellPremiumScore = 72;
+ let sellPremiumScore = 62;
  if (abs24 <= 1.2) sellPremiumScore += 10;
  else if (abs24 <= 2.5) sellPremiumScore += 4;
  else if (abs24 <= 4) sellPremiumScore -= 8;
@@ -1113,34 +655,74 @@
  else if (fundingAbs >= 0.025) sellPremiumScore -= 6;
  if (trendScore >= 72 || trendScore <= 28) sellPremiumScore -= 8;
  else if (trendScore >= 44 && trendScore <= 56) sellPremiumScore += 5;
+ if (atrPct15m >= 1.15) sellPremiumScore -= 18;
+ else if (atrPct15m >= 0.75) sellPremiumScore -= 10;
+ else if (atrPct15m > 0 && atrPct15m <= 0.35) sellPremiumScore += 5;
+ if (emaSpreadAbs >= 1.1) sellPremiumScore -= 12;
+ else if (emaSpreadAbs >= 0.65) sellPremiumScore -= 7;
+ if (abs2 >= 1.4) sellPremiumScore -= 8;
+ if (breakoutRisk) sellPremiumScore -= 14;
+ if (trendState === 'expanding') sellPremiumScore -= 18;
+ else if (trendState === 'compressed' && abs4 <= 1.2 && atrPct15m <= 0.55) sellPremiumScore += 10;
+ else if (rangeCompression >= 0.6 && abs4 <= 1.2) sellPremiumScore += 6;
  sellPremiumScore = Math.max(0, Math.min(100, Math.round(sellPremiumScore)));
- const directionalBias = change24h >= 2.5 || trendScore >= 68 ? 'bullish' : change24h <= -2.5 || trendScore <= 32 ? 'bearish' : 'neutral';
- const recommendedSide = sellPremiumScore >= 65 ? 'sell' : sellPremiumScore >= 45 ? 'wait' : 'buy';
+ const directionalBias = chartRead.directionalBias || (move4h >= 1.2 || emaSpreadPct15m >= 0.55 || change24h >= 2.5 || trendScore >= 68 ? 'bullish' : move4h <= -1.2 || emaSpreadPct15m <= -0.55 || change24h <= -2.5 || trendScore <= 32 ? 'bearish' : 'neutral');
+ const hardExpansion = trendState === 'expanding' || breakoutRisk || abs4 >= 1.8 || abs2 >= 1.1 || atrPct15m >= 0.75 || emaSpreadAbs >= 0.65;
+ const calmForSell = !hardExpansion
+ && abs24 <= 3
+ && abs4 <= 1.2
+ && abs2 <= 0.8
+ && atrPct15m <= 0.55
+ && emaSpreadAbs <= 0.45
+ && trendScore >= 38
+ && trendScore <= 62;
+ const recommendedSide = calmForSell && sellPremiumScore >= 68 ? 'sell' : (hardExpansion || sellPremiumScore <= 42 ? 'buy' : 'wait');
  const label = recommendedSide === 'sell'
  ? 'Sell premium'
  : recommendedSide === 'buy'
  ? 'Buy-vol watch'
  : 'Wait';
  const tone = recommendedSide === 'sell' ? 'profit' : recommendedSide === 'buy' ? 'loss' : 'warn';
+ const chartPhrase = chartRead.symbol
+ ? `${chartRead.symbol} 15m ${trendState || 'chart'}: ${move4h.toFixed(2)}% 4h, ATR ${atrPct15m.toFixed(2)}%.`
+ : '';
  const summary = recommendedSide === 'sell'
- ? `${underlying} is calm enough for short straddle scoring.`
+ ? `${underlying} chart is calm enough for short straddle scoring. ${chartPhrase}`.trim()
  : recommendedSide === 'buy'
- ? `${underlying} is moving too strongly for fresh short premium; long-vol or no-trade is safer.`
- : `${underlying} is not clean enough for fresh short premium yet.`;
+ ? `${underlying} chart is expanding too strongly for fresh short premium; long-vol or no-trade is safer. ${chartPhrase}`.trim()
+ : `${underlying} chart is not clean enough for fresh short premium yet. ${chartPhrase}`.trim();
  return {
  underlying,
  price,
  change24h,
  move4h,
+ chartMove2h,
+ atrPct15m,
+ emaSpreadPct15m,
+ rangeCompression,
+ trendState,
+ breakoutRisk,
  fundingRate,
  trendScore,
  absMoveScore: Math.max(abs24, abs4),
  sellPremiumScore,
+ hardExpansion,
+ calmForSell,
  directionalBias,
  recommendedSide,
  label,
  tone,
  summary,
+ chartRead: {
+ ...chartRead,
+ move4h,
+ move2h: chartMove2h,
+ atrPct15m,
+ emaSpreadPct15m,
+ rangeCompression,
+ trendState,
+ breakoutRisk,
+ },
  };
  }
 
@@ -1298,9 +880,6 @@
  : 0;
  const strategyBudgetUSD = Math.max(0, Number(context.strategyBudgetUSD || input.strategyBudgetUSD || cfg.maxRiskUSD || 0));
  const softGateThreshold = Math.max(0, Number(context.softGateThreshold || input.softGateThreshold || cfg.minTradeQuality || NATIVE_STRADDLE_SOFT_GATE_SCORE));
- const riskReversal25d = Number(context.riskReversal25d || input.riskReversal25d || 0);
- const butterfly25d = Number(context.butterfly25d || input.butterfly25d || 0);
- const skewVetoTriggered = !!cfg.skewVetoEnabled && riskReversal25d <= Number(cfg.maxBearishSkewRR || -6);
  const marketContext = buildNativeStraddleMarketContext(context.marketContext || context.btcContext || input.marketContext || analysis.marketContext || {});
  const sameDayRisk = Number(analysis.daysToExpiry || 0) <= 1;
  const hardChecks = [
@@ -1335,12 +914,6 @@
  detail: `${marketContext.sellPremiumScore}/100 - ${marketContext.label} for ${orderSide === 'buy' ? 'buy vol' : 'short premium'}`,
  },
  {
- key: 'skew_veto',
- label: 'Skew Veto',
- passed: !skewVetoTriggered,
- detail: cfg.skewVetoEnabled ? `25D RR ${riskReversal25d.toFixed(2)} vs veto ${Number(cfg.maxBearishSkewRR || 0).toFixed(2)}` : 'Disabled',
- },
- {
  key: 'profile_cap',
  label: 'Profile Cap',
  passed: !(profileMaxOrderSizeUSD > 0) || premiumUSD <= profileMaxOrderSizeUSD,
@@ -1351,12 +924,10 @@
  const actionLabel = orderSide === 'buy' ? 'Buy Vol' : 'Sell Premium';
  const expiryRisk = classifyNativeStraddleExpiryRisk(analysis.daysToExpiry, analysis.components?.gammaScore || 0);
  const regime = resolveNativeStraddleRegime({
- riskReversal25d,
  iv: analysis.iv,
  atmScore: analysis.components?.atmScore || 0,
  thetaMarginRatioPct,
  moveFitScore: analysis.components?.moveFitScore || 0,
- skewVetoTriggered,
  marketContext,
  });
  const premiumToSpotPct = analysis.spot > 0 ? (analysis.premiumPerContract / analysis.spot) * 100 : 0;
@@ -1427,155 +998,8 @@
  regime,
  expiryRisk,
  contractThesis,
- riskReversal25d,
- butterfly25d,
- skewVetoTriggered,
  canPlace,
  reason,
- };
- }
-
- /* ===================================================================
- Volatility Skew
- =================================================================== */
- function pickClosestDeltaContract(contracts = [], targetAbsDelta = 0.25, optionType = 'call') {
- const type = String(optionType || '').toLowerCase();
- return (Array.isArray(contracts) ? contracts : [])
- .filter(contract => String(contract?.optionType || '').toLowerCase() === type && Number(contract?.iv || contract?.impliedVolatility || 0) > 0)
- .map(contract => ({ contract, distance: Math.abs(Math.abs(Number(contract?.delta || 0)) - Math.abs(Number(targetAbsDelta || 0.25))) }))
- .sort((a, b) => a.distance - b.distance)[0]?.contract || null;
- }
-
- function contractSpreadPct(contract = {}) {
- const bid = Number(contract?.bidPrice || contract?.bid || 0);
- const ask = Number(contract?.askPrice || contract?.ask || 0);
- const mark = Math.max(Number(contract?.markPrice || contract?.premium || 0), bid > 0 && ask > 0 ? (bid + ask) / 2 : 0.01);
- if (!(bid > 0 && ask > 0 && ask >= bid)) return 100;
- return ((ask - bid) / mark) * 100;
- }
-
- function classifySkewQuoteQuality(points = [], chainQuality = {}) {
- const usable = (Array.isArray(points) ? points : []).filter(point => Number(point?.iv || 0) > 0);
- const avgSpread = usable.length
- ? usable.reduce((sum, point) => sum + Number(point.spreadPct || 0), 0) / usable.length
- : Number(chainQuality?.avgSpreadPct || 0);
- const hasWings = usable.some(point => point.side === 'put') && usable.some(point => point.side === 'call');
- const staleMs = Math.max(0, Date.now() - Number(chainQuality?.fetchedAt || chainQuality?.timestamp || 0));
- const warnings = [];
- if (usable.length < 12) warnings.push('Low usable strikes');
- if (!hasWings) warnings.push('Missing put/call wing');
- if (avgSpread > 12) warnings.push('Wide option quotes');
- const grade = warnings.length >= 2 ? 'poor' : warnings.length ? 'mixed' : 'good';
- return {
- grade,
- label: grade === 'good' ? 'Clean quotes' : grade === 'mixed' ? 'Review quotes' : 'Weak quotes',
- usableStrikes: usable.length,
- avgSpreadPct: +avgSpread.toFixed(2),
- tightQuotePct: Number(chainQuality?.tightQuotePct || 0),
- liquidPct: Number(chainQuality?.liquidPct || 0),
- staleMs,
- warnings,
- };
- }
-
- function classifyVolatilitySkew(metrics = {}) {
- const rr = Number(metrics.riskReversal25d || 0);
- const bf = Number(metrics.butterfly25d || 0);
- if (rr <= -6) return { key: 'put_skew', label: 'Put Skew', tone: 'loss', summary: 'Downside protection is being bid aggressively.' };
- if (rr >= 4) return { key: 'call_skew', label: 'Call Skew', tone: 'profit', summary: 'Upside convexity demand is dominating this expiry.' };
- if (bf >= 3) return { key: 'event_wings', label: 'Event Wings', tone: 'warn', summary: 'Both wings are rich versus ATM, suggesting tail or event pricing.' };
- return { key: 'flat', label: 'Flat Skew', tone: 'info', summary: 'The smile is relatively balanced around ATM.' };
- }
-
- function computeVolatilitySkewMetrics(chain = {}, options = {}) {
- const rows = Array.isArray(chain?.rows) ? chain.rows : (Array.isArray(chain) ? chain : []);
- const spot = Math.max(0.00000001, Number(options.spotPrice || chain?.underlyingPrice || 0));
- if (!rows.length || !(spot > 0)) {
- const emptyRegime = classifyVolatilitySkew({});
- return {
- spotPrice: spot,
- atmStrike: 0,
- points: [],
- callWing: [],
- putWing: [],
- atmIv: 0,
- call25dIv: 0,
- put25dIv: 0,
- riskReversal25d: 0,
- butterfly25d: 0,
- regime: emptyRegime,
- };
- }
-
- const normalizedRows = rows.map(row => ({
- strike: Number(row?.strike || 0),
- call: row?.call || null,
- put: row?.put || null,
- })).filter(row => row.strike > 0);
- const atmRow = normalizedRows.reduce((best, row) => !best || Math.abs(row.strike - spot) < Math.abs(best.strike - spot) ? row : best, null);
- const atmCallIv = Number(atmRow?.call?.iv || atmRow?.call?.impliedVolatility || 0);
- const atmPutIv = Number(atmRow?.put?.iv || atmRow?.put?.impliedVolatility || 0);
- const atmIv = atmCallIv > 0 && atmPutIv > 0 ? ((atmCallIv + atmPutIv) / 2) * 100 : Math.max(atmCallIv, atmPutIv, 0) * 100;
-
- const allContracts = normalizedRows.flatMap(row => [row.call, row.put]).filter(Boolean);
- const put25d = pickClosestDeltaContract(allContracts, 0.25, 'put');
- const call25d = pickClosestDeltaContract(allContracts, 0.25, 'call');
- const put25dIv = Number(put25d?.iv || put25d?.impliedVolatility || 0) * 100;
- const call25dIv = Number(call25d?.iv || call25d?.impliedVolatility || 0) * 100;
- const riskReversal25d = call25dIv - put25dIv;
- const butterfly25d = ((call25dIv + put25dIv) / 2) - atmIv;
-
- const curvePoints = normalizedRows.map(row => {
- const putIv = Number(row.put?.iv || row.put?.impliedVolatility || 0) * 100;
- const callIv = Number(row.call?.iv || row.call?.impliedVolatility || 0) * 100;
- const sourceContract = row.strike < Number(atmRow?.strike || 0) ? (row.put || row.call) : row.strike > Number(atmRow?.strike || 0) ? (row.call || row.put) : (row.call || row.put);
- let plottedIv = 0;
- let side = 'mixed';
- if (row.strike < Number(atmRow?.strike || 0)) {
- plottedIv = putIv || callIv || 0;
- side = 'put';
- } else if (row.strike > Number(atmRow?.strike || 0)) {
- plottedIv = callIv || putIv || 0;
- side = 'call';
- } else {
- plottedIv = atmIv;
- side = 'atm';
- }
- return {
- strike: row.strike,
- putIv,
- callIv,
- iv: plottedIv,
- side,
- delta: Number(sourceContract?.delta || 0),
- openInterest: Number(sourceContract?.openInterest || sourceContract?.oiContracts || 0),
- volume: Number(sourceContract?.volume || 0),
- bid: Number(sourceContract?.bidPrice || sourceContract?.bid || 0),
- ask: Number(sourceContract?.askPrice || sourceContract?.ask || 0),
- spreadPct: contractSpreadPct(sourceContract),
- moneynessPct: spot > 0 ? ((row.strike / spot) - 1) * 100 : 0,
- };
- }).filter(point => point.iv > 0);
-
- const regime = classifyVolatilitySkew({ riskReversal25d, butterfly25d });
- const quoteQuality = classifySkewQuoteQuality(curvePoints, { ...(chain?.quality || {}), fetchedAt: chain?.fetchedAt });
- return {
- spotPrice: spot,
- atmStrike: Number(atmRow?.strike || 0),
- points: curvePoints,
- putWing: curvePoints.filter(point => point.side === 'put'),
- callWing: curvePoints.filter(point => point.side === 'call'),
- atmIv,
- call25dIv,
- put25dIv,
- riskReversal25d,
- butterfly25d,
- regime,
- quoteQuality,
- call25dStrike: Number(call25d?.strike || 0),
- put25dStrike: Number(put25d?.strike || 0),
- expiryKey: String(options.expiryKey || chain?.expiryKey || ''),
- underlying: String(options.underlying || chain?.underlying || ''),
  };
  }
 
@@ -1605,23 +1029,11 @@
  OPTION_AUTOMATION_ALLOWED_EXPIRY_BUCKETS,
  OPTION_ENTRY_MODES,
  OPTION_RANGE_STEPS,
- OPTION_READY_MADE_STRATEGIES,
- OPTION_STRATEGY_TYPES,
  OPTION_UNDERLYINGS,
- analyzeOptionsStrategy,
- buildDirectionalCreditSpreadFromChain,
- classifyVolatilitySkew,
- computeVolatilitySkewMetrics,
- buildOptionPnlTable,
  buildNativeStraddleMarketContext,
- buildShortStraddleForAutoTrade,
- buildScenarioPriceRange,
- buildStrategyFromChain,
  estimateOptionMarkAtDate,
  formatDeltaOptionSymbol,
  formatOptionsExpiryKey,
- getContractDeltaAbs,
- getOptionSpreadPct,
  getOptionsExpiryBucket,
  intrinsicValue,
  normalCdf,
@@ -1643,9 +1055,7 @@
  NATIVE_STRADDLE_SOFT_GATE_SCORE,
  resolveNativeStraddleRegime,
  scoreNativeStraddleContract,
- scoreShortPremiumContract,
  selectBestNativeStraddle,
- summarizeOptionStrategy,
  toYearFraction,
  });
 

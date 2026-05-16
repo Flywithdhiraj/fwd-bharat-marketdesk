@@ -9,12 +9,6 @@
  const sanitizeOptionsAutoTradeSettings = typeof optionsShared.sanitizeOptionsAutoTradeSettings === 'function'
  ? optionsShared.sanitizeOptionsAutoTradeSettings
  : (value => value || {});
- const buildDirectionalCreditSpreadFromChain = typeof optionsShared.buildDirectionalCreditSpreadFromChain === 'function'
- ? optionsShared.buildDirectionalCreditSpreadFromChain
- : (() => null);
- const buildShortStraddleForAutoTrade = typeof optionsShared.buildShortStraddleForAutoTrade === 'function'
- ? optionsShared.buildShortStraddleForAutoTrade
- : (() => null);
  const selectBestNativeStraddle = typeof optionsShared.selectBestNativeStraddle === 'function'
  ? optionsShared.selectBestNativeStraddle
  : (() => null);
@@ -31,26 +25,16 @@
  tone: 'warn',
  summary: 'Market context unavailable.',
  }));
- const computeVolatilitySkewMetrics = typeof optionsShared.computeVolatilitySkewMetrics === 'function'
- ? optionsShared.computeVolatilitySkewMetrics
- : (() => ({ points: [], regime: { key: 'flat', label: 'Flat Skew', tone: 'info', summary: '' } }));
  const NATIVE_STRADDLE_SOFT_GATE_SCORE = Number(optionsShared.NATIVE_STRADDLE_SOFT_GATE_SCORE || 70);
  const sanitizeOptionLeg = typeof optionsShared.sanitizeOptionLeg === 'function'
  ? optionsShared.sanitizeOptionLeg
  : (value => value || {});
- const summarizeOptionStrategy = typeof optionsShared.summarizeOptionStrategy === 'function'
- ? optionsShared.summarizeOptionStrategy
- : (() => ({ legs: [], maxLoss: null, maxProfit: 0, breakevens: [], greeks: {} }));
- const buildOptionPnlTable = typeof optionsShared.buildOptionPnlTable === 'function'
- ? optionsShared.buildOptionPnlTable
- : (() => []);
  const sanitizeText = typeof shared.sanitizeText === 'function'
  ? shared.sanitizeText
  : ((value, fallback = '', max = 120) => String(value || '').trim().slice(0, max) || fallback);
 
  const V17_OPTIONS_PRODUCTS_TTL_MS = 60 * 1000;
  const V17_OPTIONS_TICKERS_TTL_MS = 25 * 1000;
- const V17_OPTIONS_LOG_LIMIT = 120;
  const V17_OPTIONS_REPAIR_STATE_KEY = 'optionsExecutionRepairState';
  const v17OptionsProductsCache = new Map();
  const v17OptionsTickersCache = new Map();
@@ -132,6 +116,37 @@
  const value = Number(expiryTs || 0);
  if (!(value > 0)) return 0;
  return Math.max(0, (value - Date.now()) / 86400000);
+ }
+
+ function v17NativeExpiryBucket(expiryTs = 0, nowTs = Date.now()) {
+ const hours = Math.max(0, (Number(expiryTs || 0) - Number(nowTs || 0)) / 3600000);
+ if (hours <= 36) return 'daily';
+ if (hours <= 10 * 24) return 'weekly';
+ return 'monthly';
+ }
+
+ function v17NormalizeNativeExpiryModes(value = null) {
+ const allowed = ['daily', 'weekly', 'monthly'];
+ const raw = Array.isArray(value)
+ ? value
+ : String(value || '').split(/[\s,;]+/g).filter(Boolean);
+ const seen = new Set();
+ const modes = [];
+ raw.forEach(item => {
+ const mode = String(item || '').trim().toLowerCase();
+ if (!allowed.includes(mode) || seen.has(mode)) return;
+ seen.add(mode);
+ modes.push(mode);
+ });
+ return modes.length ? modes : allowed;
+ }
+
+ function v17IsNativeExpiryTradable(expiry = {}, options = {}) {
+ const expiryTs = Number(expiry.expiryTs || 0);
+ if (!(expiryTs > 0)) return false;
+ const minFreshMs = Math.max(0, Number(options.minExpiryFreshMinutes ?? 5)) * 60000;
+ if (expiryTs <= Date.now() + minFreshMs) return false;
+ return v17NormalizeNativeExpiryModes(options.expiryModes).includes(v17NativeExpiryBucket(expiryTs));
  }
 
  function v17DetectOptionProductType(raw = {}) {
@@ -322,37 +337,6 @@
  return v17OptionsCacheSet(v17OptionsProductsCache, cacheKey, output);
  }
 
- async function v17FetchOptionTickers(underlying = '') {
- await detectAPI();
- const safeUnderlying = sanitizeText(underlying, '', 12).toUpperCase();
- const cacheKey = `${BASE || 'delta'}::tickers::${safeUnderlying || 'ALL'}`;
- const cached = v17OptionsCacheGet(v17OptionsTickersCache, cacheKey, V17_OPTIONS_TICKERS_TTL_MS);
- if (cached) return cached;
- const output = new Map();
- const urls = [
- `${BASE}/tickers?contract_types=call_options`,
- `${BASE}/tickers?contract_types=put_options`,
- `${BASE}/tickers`,
- ];
- for (const url of urls) {
- try {
- const response = await rateLimitedFetch(url);
- if (!response?.ok) continue;
- const payload = await response.json();
- const list = payload?.result ?? payload?.data ?? (Array.isArray(payload) ? payload : []);
- list.forEach(raw => {
- const normalized = v17NormalizeOptionTicker(raw);
- if (!normalized.symbol || !normalized.optionType) return;
- if (safeUnderlying && normalized.underlying !== safeUnderlying) return;
- if (!output.has(normalized.symbol)) output.set(normalized.symbol, normalized);
- });
- } catch (_) {
- continue;
- }
- }
- return v17OptionsCacheSet(v17OptionsTickersCache, cacheKey, output);
- }
-
  async function v17FetchUnderlyingReferencePrice(underlying = '') {
  const base = sanitizeText(underlying, '', 12).toUpperCase();
  if (!base) return 0;
@@ -369,6 +353,99 @@
  return 0;
  }
 
+ function v17CandleClose(candle = {}) {
+ return Number(candle.close ?? candle.c ?? candle.price ?? candle.last ?? 0);
+ }
+
+ function v17CandleHigh(candle = {}) {
+ return Number(candle.high ?? candle.h ?? v17CandleClose(candle));
+ }
+
+ function v17CandleLow(candle = {}) {
+ return Number(candle.low ?? candle.l ?? v17CandleClose(candle));
+ }
+
+ function v17SimpleEma(values = [], period = 9) {
+ const list = values.map(Number).filter(Number.isFinite);
+ if (!list.length) return 0;
+ const k = 2 / (Math.max(1, period) + 1);
+ return list.reduce((ema, value, index) => index === 0 ? value : (value * k) + (ema * (1 - k)), list[0]);
+ }
+
+ function v17PctMove(from = 0, to = 0) {
+ const start = Number(from || 0);
+ const end = Number(to || 0);
+ return start > 0 ? ((end - start) / start) * 100 : 0;
+ }
+
+ function v17BuildChartRead(symbol = '', candles15 = [], candles1d = [], fallbackPrice = 0) {
+ const intraday = Array.isArray(candles15) ? candles15.filter(candle => v17CandleClose(candle) > 0) : [];
+ const daily = Array.isArray(candles1d) ? candles1d.filter(candle => v17CandleClose(candle) > 0) : [];
+ const closes15 = intraday.map(v17CandleClose);
+ const closes1d = daily.map(v17CandleClose);
+ const price = Number(closes15.at(-1) || closes1d.at(-1) || fallbackPrice || 0);
+ const move2h = closes15.length >= 9 ? v17PctMove(closes15.at(-9), price) : 0;
+ const move4h = closes15.length >= 17 ? v17PctMove(closes15.at(-17), price) : 0;
+ const move24h = closes15.length >= 97 ? v17PctMove(closes15.at(-97), price) : (closes1d.length >= 2 ? v17PctMove(closes1d.at(-2), price) : 0);
+ const ema9 = v17SimpleEma(closes15.slice(-80), 9);
+ const ema30 = v17SimpleEma(closes15.slice(-120), 30);
+ const emaSpreadPct15m = price > 0 ? ((ema9 - ema30) / price) * 100 : 0;
+ const recent = intraday.slice(-32);
+ const highs = recent.map(v17CandleHigh).filter(value => value > 0);
+ const lows = recent.map(v17CandleLow).filter(value => value > 0);
+ const recentHigh = highs.length ? Math.max(...highs) : 0;
+ const recentLow = lows.length ? Math.min(...lows) : 0;
+ const rangePct15m = price > 0 && recentHigh > recentLow ? ((recentHigh - recentLow) / price) * 100 : 0;
+ const trueRanges = recent.slice(1).map((candle, index) => {
+ const prevClose = v17CandleClose(recent[index]);
+ return Math.max(
+ v17CandleHigh(candle) - v17CandleLow(candle),
+ Math.abs(v17CandleHigh(candle) - prevClose),
+ Math.abs(v17CandleLow(candle) - prevClose)
+ );
+ }).filter(value => value > 0);
+ const avgTr = trueRanges.length ? trueRanges.reduce((sum, value) => sum + value, 0) / trueRanges.length : 0;
+ const atrPct15m = price > 0 ? (avgTr / price) * 100 : 0;
+ const trendStrength = Math.min(100, Math.round((Math.abs(move4h) * 13) + (Math.abs(emaSpreadPct15m) * 18) + (atrPct15m * 16)));
+ const rangeCompression = Math.max(0, Math.min(1, 1 - (rangePct15m / Math.max(2.8, Math.abs(move24h) || 1))));
+ const breakoutRisk = rangePct15m > 0 && (price >= recentHigh * 0.995 || price <= recentLow * 1.005) && Math.abs(move2h) >= 0.8;
+ const trendState = Math.abs(move4h) >= 2 || Math.abs(emaSpreadPct15m) >= 0.8 || breakoutRisk ? 'expanding' : rangeCompression >= 0.55 ? 'compressed' : 'balanced';
+ return {
+ symbol,
+ price,
+ move2h,
+ move4h,
+ move24h,
+ atrPct15m,
+ emaSpreadPct15m,
+ rangePct15m,
+ rangeCompression,
+ breakoutRisk,
+ trendScore: trendState === 'expanding' ? Math.max(68, trendStrength) : trendState === 'compressed' ? 50 : Math.max(42, Math.min(62, 50 + Math.round(emaSpreadPct15m * 8))),
+ trendState,
+ directionalBias: move4h >= 1.2 || emaSpreadPct15m >= 0.55 ? 'bullish' : move4h <= -1.2 || emaSpreadPct15m <= -0.55 ? 'bearish' : 'neutral',
+ candles15m: intraday.length,
+ candles1d: daily.length,
+ };
+ }
+
+ async function v17BuildUnderlyingChartRead(underlying = '', fallbackPrice = 0) {
+ if (typeof fetchCandles !== 'function') return null;
+ const base = sanitizeText(underlying || 'BTC', 'BTC', 12).toUpperCase();
+ const candidates = [`${base}USD`, `${base}USDT`, `PERP-${base}USD`];
+ for (const symbol of candidates) {
+ try {
+ const candles15 = await fetchCandles(symbol, '15m', 140, { closedOnly: true });
+ if (!Array.isArray(candles15) || candles15.length < 24) continue;
+ const candles1d = await fetchCandles(symbol, '1d', 45, { closedOnly: true }).catch(() => []);
+ return v17BuildChartRead(symbol, candles15, candles1d, fallbackPrice);
+ } catch (_) {
+ continue;
+ }
+ }
+ return null;
+ }
+
  async function v17BuildUnderlyingStraddleMarketContext(underlying = '', fallbackPrice = 0) {
  const base = sanitizeText(underlying || 'BTC', 'BTC', 12).toUpperCase();
  const candidates = [`${base}USD`, `${base}USDT`, `PERP-${base}USD`];
@@ -382,13 +459,20 @@
  }
  }
  const raw = ticker?.raw || ticker || {};
+ const chartRead = await v17BuildUnderlyingChartRead(base, Number(ticker?.markPrice || ticker?.price || raw.mark_price || raw.price || fallbackPrice || 0)).catch(() => null);
  return buildNativeStraddleMarketContext({
  underlying: base,
- price: Number(ticker?.markPrice || ticker?.price || raw.mark_price || raw.price || fallbackPrice || 0),
- change24h: Number(ticker?.change24h || raw.change24h || raw.change_24h || raw.price_change_24h || 0),
- move4h: Number(ticker?.move4h || raw.move4h || raw.change4h || 0),
+ price: Number(chartRead?.price || ticker?.markPrice || ticker?.price || raw.mark_price || raw.price || fallbackPrice || 0),
+ change24h: Number(chartRead?.move24h ?? ticker?.change24h ?? raw.change24h ?? raw.change_24h ?? raw.price_change_24h ?? 0),
+ move4h: Number(chartRead?.move4h ?? ticker?.move4h ?? raw.move4h ?? raw.change4h ?? 0),
  fundingRate: Number(ticker?.fundingRate || raw.funding_rate_8h || raw.funding_rate || raw.predicted_funding_rate || 0),
- trendScore: Number(ticker?.trendScore || ticker?.score || 50),
+ trendScore: Number(chartRead?.trendScore ?? ticker?.trendScore ?? ticker?.score ?? 50),
+ chartRead,
+ atrPct15m: chartRead?.atrPct15m,
+ emaSpreadPct15m: chartRead?.emaSpreadPct15m,
+ rangeCompression: chartRead?.rangeCompression,
+ trendState: chartRead?.trendState,
+ breakoutRisk: chartRead?.breakoutRisk,
  });
  }
 
@@ -429,19 +513,36 @@
 
  async function v17GetStraddleChain(payload = {}) {
  const underlying = sanitizeText(payload?.underlying || 'BTC', 'BTC', 12).toUpperCase();
+ const expiryModes = v17NormalizeNativeExpiryModes(payload?.expiryModes);
+ const minExpiryFreshMinutes = Math.max(1, Math.min(240, Number(payload?.minExpiryFreshMinutes || 5)));
  const products = (await v17FetchOptionProducts(underlying))
  .filter(p => p.underlying === underlying && p.optionType === 'straddle' && p.expiryKey && p.expiryTs > 0);
  if (!products.length) return { ok: false, error: `No native straddle (MV-) products found for ${underlying}` };
  const tickers = await v17FetchStraddleTickers(underlying);
- const expiries = Array.from(new Map(products.map(p => [p.expiryKey, {
+ const allExpiries = Array.from(new Map(products.map(p => [p.expiryKey, {
  key: p.expiryKey,
  label: p.expiryLabel,
  expiryTs: p.expiryTs,
  daysToExpiry: p.daysToExpiry,
+ expiryBucket: v17NativeExpiryBucket(p.expiryTs),
  }])).values()).sort((a, b) => a.expiryTs - b.expiryTs);
+ const expiries = allExpiries.filter(expiry => v17IsNativeExpiryTradable(expiry, { expiryModes, minExpiryFreshMinutes }));
+ if (!expiries.length) {
+ return {
+ ok: false,
+ error: `No active ${underlying} native straddle expiry for ${expiryModes.join('/')}. Expired MV contracts were ignored.`,
+ expiries: allExpiries,
+ expiryModes,
+ };
+ }
  const selectedExpiryKey = expiries.some(e => e.key === payload?.expiryKey)
  ? String(payload.expiryKey)
  : expiries[0]?.key;
+ const expiryBuckets = expiries.reduce((acc, expiry) => {
+ const bucket = expiry.expiryBucket || v17NativeExpiryBucket(expiry.expiryTs);
+ acc[bucket] = (acc[bucket] || 0) + 1;
+ return acc;
+ }, { daily: 0, weekly: 0, monthly: 0 });
  const contracts = products
  .filter(p => !selectedExpiryKey || p.expiryKey === selectedExpiryKey)
  .map(product => {
@@ -455,6 +556,8 @@
  expiryTs: product.expiryTs,
  expiryKey: product.expiryKey,
  expiryLabel: product.expiryLabel,
+ expiryBucket: v17NativeExpiryBucket(product.expiryTs),
+ expiresInHours: Math.max(0, (Number(product.expiryTs || 0) - Date.now()) / 3600000),
  daysToExpiry: product.daysToExpiry || v17ResolveDaysToExpiry(product.expiryTs),
  contractMultiplier: product.contractMultiplier || 1,
  markPrice: Number(ticker.markPrice || 0),
@@ -488,245 +591,12 @@
  marketContext,
  expiryKey: selectedExpiryKey,
  expiries,
+ allExpiries,
+ expiryBuckets,
+ expiryModes,
+ minExpiryFreshMinutes,
  contracts,
  fetchedAt: Date.now(),
- };
- }
-
- function v17BuildChainRows(products = [], tickers = new Map(), selectedExpiryKey = '') {
- const rowsByStrike = new Map();
- products
- .filter(product => !selectedExpiryKey || product.expiryKey === selectedExpiryKey)
- .forEach(product => {
- const strikeKey = Number(product.strike || 0);
- if (!(strikeKey > 0)) return;
- const bucket = rowsByStrike.get(strikeKey) || { strike: strikeKey, call: null, put: null };
- const ticker = tickers.get(product.symbol) || {};
- const entry = {
- ...sanitizeOptionLeg({
- ...product,
- ...ticker,
- symbol: product.symbol,
- optionType: product.optionType,
- strike: product.strike,
- daysToExpiry: product.daysToExpiry,
- contractMultiplier: product.contractMultiplier,
- underlying: product.underlying,
- expiryTs: product.expiryTs,
- expiryKey: product.expiryKey,
- markPrice: ticker.markPrice,
- bidPrice: ticker.bidPrice,
- askPrice: ticker.askPrice,
- openInterest: ticker.openInterest,
- impliedVolatility: ticker.impliedVolatility,
- delta: ticker.delta,
- gamma: ticker.gamma,
- theta: ticker.theta,
- vega: ticker.vega,
- rho: ticker.rho,
- }),
- productId: product.productId,
- underlyingPrice: Number(ticker.underlyingPrice || 0),
- };
- bucket[product.optionType] = entry;
- rowsByStrike.set(strikeKey, bucket);
- });
- return Array.from(rowsByStrike.values()).sort((a, b) => a.strike - b.strike);
- }
-
- async function v17GetOptionUniverse(payload = {}) {
- const underlying = sanitizeText(payload?.underlying || '', '', 12).toUpperCase();
- const products = await v17FetchOptionProducts(underlying);
- const byUnderlying = new Map();
- products.forEach(product => {
- if (!product.underlying || !product.expiryKey || !(product.expiryTs > 0)) return;
- const key = product.underlying;
- const bucket = byUnderlying.get(key) || {
- underlying: key,
- expiries: new Map(),
- };
- const expiryBucket = bucket.expiries.get(product.expiryKey) || {
- key: product.expiryKey,
- label: product.expiryLabel,
- expiryTs: product.expiryTs,
- daysToExpiry: product.daysToExpiry,
- calls: 0,
- puts: 0,
- strikes: new Set(),
- };
- expiryBucket.strikes.add(product.strike);
- if (product.optionType === 'call') expiryBucket.calls += 1;
- if (product.optionType === 'put') expiryBucket.puts += 1;
- bucket.expiries.set(product.expiryKey, expiryBucket);
- byUnderlying.set(key, bucket);
- });
- return {
- ok: true,
- underlyings: Array.from(byUnderlying.values())
- .map(item => ({
- underlying: item.underlying,
- expiries: Array.from(item.expiries.values())
- .sort((a, b) => a.expiryTs - b.expiryTs)
- .map(expiry => ({
- key: expiry.key,
- label: expiry.label,
- expiryTs: expiry.expiryTs,
- daysToExpiry: Number(expiry.daysToExpiry || 0),
- calls: expiry.calls,
- puts: expiry.puts,
- strikeCount: expiry.strikes.size,
- })),
- }))
- .sort((a, b) => a.underlying.localeCompare(b.underlying)),
- };
- }
-
- async function v17GetOptionsChain(payload = {}) {
- const underlying = sanitizeText(payload?.underlying || 'BTC', 'BTC', 12).toUpperCase();
- const products = (await v17FetchOptionProducts(underlying))
- .filter(product => product.underlying === underlying && product.expiryKey && product.expiryTs > 0);
- if (!products.length) throw new Error(`No Delta option products found for ${underlying}`);
- const tickers = await v17FetchOptionTickers(underlying);
- const expiries = Array.from(new Map(products.map(product => [product.expiryKey, {
- key: product.expiryKey,
- label: product.expiryLabel,
- expiryTs: product.expiryTs,
- daysToExpiry: product.daysToExpiry,
- }])).values()).sort((a, b) => a.expiryTs - b.expiryTs);
- const selectedExpiryKey = expiries.some(expiry => expiry.key === payload?.expiryKey)
- ? String(payload.expiryKey)
- : expiries[0]?.key;
- const rows = v17BuildChainRows(products, tickers, selectedExpiryKey);
- let underlyingPrice = rows.find(row => Number(row.call?.underlyingPrice || row.put?.underlyingPrice || 0) > 0)?.call?.underlyingPrice
- || rows.find(row => Number(row.put?.underlyingPrice || row.call?.underlyingPrice || 0) > 0)?.put?.underlyingPrice
- || 0;
- if (!(underlyingPrice > 0)) {
- underlyingPrice = await v17FetchUnderlyingReferencePrice(underlying);
- }
- const atmStrike = rows.reduce((best, row) => {
- const candidateDiff = Math.abs(Number(row.strike || 0) - Number(underlyingPrice || 0));
- if (!best || candidateDiff < best.diff) return { strike: row.strike, diff: candidateDiff };
- return best;
- }, null)?.strike || 0;
- const allContracts = rows.flatMap(row => [row.call, row.put]).filter(Boolean);
- const spreads = allContracts.map(contract => {
- const bid = Number(contract.bidPrice || contract.bid || 0);
- const ask = Number(contract.askPrice || contract.ask || 0);
- const mark = Math.max(Number(contract.markPrice || contract.premium || 0), bid > 0 && ask > 0 ? (bid + ask) / 2 : 0.01);
- return bid > 0 && ask > 0 ? ((ask - bid) / mark) * 100 : 100;
- });
- const liquidCount = allContracts.filter(contract => Number(contract.openInterest || contract.oiContracts || 0) >= 250 && Number(contract.markPrice || 0) > 0).length;
- const quality = {
- contractCount: allContracts.length,
- strikeCount: rows.length,
- avgSpreadPct: spreads.length ? +(spreads.reduce((sum, value) => sum + value, 0) / spreads.length).toFixed(2) : 0,
- tightQuotePct: allContracts.length ? +((spreads.filter(value => value <= 5).length / allContracts.length) * 100).toFixed(1) : 0,
- liquidPct: allContracts.length ? +((liquidCount / allContracts.length) * 100).toFixed(1) : 0,
- staleAfterMs: V17_OPTIONS_TICKERS_TTL_MS,
- source: 'delta_public_rest',
- };
- return {
- ok: true,
- underlying,
- underlyingPrice,
- atmStrike,
- expiryKey: selectedExpiryKey,
- expiries,
- rows,
- quality,
- fetchedAt: Date.now(),
- };
- }
-
- async function v17GetVolatilitySkew(payload = {}) {
- const chain = await v17GetOptionsChain(payload);
- if (!chain?.ok) return chain;
- const metrics = computeVolatilitySkewMetrics(chain, {
- underlying: chain.underlying,
- expiryKey: chain.expiryKey,
- spotPrice: chain.underlyingPrice,
- });
- const rr = Number(metrics.riskReversal25d || 0);
- const bf = Number(metrics.butterfly25d || 0);
- const tradingNote = rr <= -6
- ? 'Put skew is heavy; treat it as a tail-risk warning and avoid selling downside vol blindly.'
- : rr >= 4
- ? 'Call skew is rich; upside demand is elevated and squeeze conditions may dominate this expiry.'
- : bf >= 3
- ? 'Both wings are rich versus ATM; event or tail premium is elevated across the smile.'
- : 'Skew is relatively balanced; use it as a secondary regime filter rather than a primary trigger.';
- const expirySummaries = [];
- const expiries = Array.isArray(chain.expiries) ? chain.expiries.slice(0, 12) : [];
- for (const expiry of expiries) {
- try {
- const expiryChain = expiry.key === chain.expiryKey ? chain : await v17GetOptionsChain({ ...payload, underlying: chain.underlying, expiryKey: expiry.key, force: false });
- const expiryMetrics = computeVolatilitySkewMetrics(expiryChain, {
- underlying: chain.underlying,
- expiryKey: expiry.key,
- spotPrice: expiryChain?.underlyingPrice || chain.underlyingPrice,
- });
- expirySummaries.push({
- expiryKey: expiry.key,
- expiryLabel: expiry.label || expiry.key,
- expiryTs: Number(expiry.expiryTs || 0),
- daysToExpiry: Number(expiry.daysToExpiry || 0),
- atmIv: Number(expiryMetrics.atmIv || 0),
- riskReversal25d: Number(expiryMetrics.riskReversal25d || 0),
- butterfly25d: Number(expiryMetrics.butterfly25d || 0),
- quoteQuality: expiryMetrics.quoteQuality || null,
- regime: expiryMetrics.regime || { key: 'flat', label: 'Flat Skew', tone: 'info', summary: '' },
- });
- } catch (_) {}
- }
- return {
- ok: true,
- underlying: chain.underlying,
- expiryKey: chain.expiryKey,
- expiryLabel: Array.isArray(chain.expiries) ? (chain.expiries.find(item => item.key === chain.expiryKey)?.label || chain.expiryKey) : chain.expiryKey,
- underlyingPrice: chain.underlyingPrice,
- atmStrike: chain.atmStrike,
- fetchedAt: chain.fetchedAt,
- points: metrics.points,
- metrics: {
- atmIv: Number(metrics.atmIv || 0),
- put25dIv: Number(metrics.put25dIv || 0),
- call25dIv: Number(metrics.call25dIv || 0),
- riskReversal25d: rr,
- butterfly25d: bf,
- put25dStrike: Number(metrics.put25dStrike || 0),
- call25dStrike: Number(metrics.call25dStrike || 0),
- },
- quoteQuality: metrics.quoteQuality || null,
- expirySummaries,
- regime: metrics.regime || { key: 'flat', label: 'Flat Skew', tone: 'info', summary: '' },
- tradingNote,
- };
- }
-
- function v17ResolveStrategyContextFromLegs(legs = []) {
- const normalized = (Array.isArray(legs) ? legs : []).map(leg => sanitizeOptionLeg(leg));
- const underlyingPrice = normalized.find(leg => Number(leg.underlyingPrice || leg.markPrice || 0) > 0)?.underlyingPrice || 0;
- const daysToExpiry = normalized.reduce((max, leg) => Math.max(max, Number(leg.daysToExpiry || 0)), 0);
- return { underlyingPrice, daysToExpiry };
- }
-
- async function v17AnalyzeOptionStrategy(payload = {}) {
- const legs = (Array.isArray(payload?.legs) ? payload.legs : []).map(leg => sanitizeOptionLeg(leg));
- if (!legs.length) throw new Error('At least one strategy leg is required');
- const ctx = v17ResolveStrategyContextFromLegs(legs);
- const context = {
- underlyingPrice: Number(payload?.underlyingPrice || ctx.underlyingPrice || 0),
- daysToExpiry: Number(payload?.daysToExpiry || ctx.daysToExpiry || 0),
- targetDays: Number(payload?.targetDays || Math.min(ctx.daysToExpiry || 0, 3) || 0),
- priceRangePct: Number(payload?.priceRangePct || 0.18),
- points: Number(payload?.points || 141),
- rate: Number(payload?.rate || 0),
- };
- const summary = summarizeOptionStrategy(legs, context);
- return {
- ok: true,
- summary,
- pnlTable: buildOptionPnlTable(legs, context),
  };
  }
 
@@ -789,16 +659,6 @@
  };
  }
 
- async function v17RecordOptionStrategyOrderLog(entry = {}) {
- const logDoc = await storeLocalGet(['optionStrategyOrderLog']);
- const log = Array.isArray(logDoc?.optionStrategyOrderLog) ? logDoc.optionStrategyOrderLog.slice() : [];
- log.unshift({
- ts: Date.now(),
- ...entry,
- });
- await storeLocalSet({ optionStrategyOrderLog: log.slice(0, V17_OPTIONS_LOG_LIMIT) });
- }
-
  function v17BuildOptionsRepairState(input = {}) {
  const id = String(input.id || `options_repair_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`);
  return {
@@ -838,120 +698,6 @@
  throw new Error(`Options execution locked: ${repair.message || 'manual repair required'}`);
  }
 
- function v17BuildOppositeOptionLeg(leg = {}) {
- const normalized = sanitizeOptionLeg(leg);
- return sanitizeOptionLeg({
- ...normalized,
- side: String(normalized.side || '').toLowerCase() === 'sell' ? 'buy' : 'sell',
- quantity: Math.max(1, Math.round(Number(normalized.quantity || normalized.qty || 1))),
- qty: Math.max(1, Math.round(Number(normalized.quantity || normalized.qty || 1))),
- });
- }
-
- async function v17PlaceOptionStrategyOrders(payload = {}) {
- const legs = (Array.isArray(payload?.legs) ? payload.legs : []).map(leg => sanitizeOptionLeg(leg));
- if (!legs.length) throw new Error('At least one strategy leg is required');
- await v17AssertOptionsExecutionUnlocked();
- if (!payload?.automated && payload?.previewAccepted !== true) {
- throw new Error('Final options order preview was not accepted. Re-open the ticket and confirm before placing.');
- }
- const access = await v16ResolveAuthorizedProfile(payload, { tradeRequired: true });
- const summaryEnvelope = await v17AnalyzeOptionStrategy({
- legs,
- underlyingPrice: payload?.underlyingPrice,
- daysToExpiry: payload?.daysToExpiry,
- targetDays: payload?.targetDays,
- });
- const allowUndefinedRisk = !!payload?.allowUndefinedRisk;
- if (summaryEnvelope.summary?.hasUndefinedRisk && !allowUndefinedRisk) {
- throw new Error('This option strategy has undefined upside risk. Enable undefined-risk execution explicitly before placing it.');
- }
- const maxRiskUSD = Number(payload?.maxRiskUSD || 0);
- if (maxRiskUSD > 0 && summaryEnvelope.summary?.maxLoss != null && Math.abs(Number(summaryEnvelope.summary.maxLoss || 0)) > maxRiskUSD) {
- throw new Error(`Strategy max loss $${Math.abs(Number(summaryEnvelope.summary.maxLoss || 0)).toFixed(2)} exceeds allowed risk $${maxRiskUSD.toFixed(2)}`);
- }
- const orderedLegs = legs.slice().sort((a, b) => {
- const aSell = String(a.side || '').toLowerCase() === 'sell';
- const bSell = String(b.side || '').toLowerCase() === 'sell';
- return Number(aSell) - Number(bSell);
- });
- const results = [];
- const placedLegs = [];
- const strategyLabel = sanitizeText(payload?.strategyLabel, 'manual_option_strategy', 48);
- try {
- for (const leg of orderedLegs) {
- const placed = await v17PlaceDirectOptionOrder(leg, access, { entryMode: payload?.entryMode || 'limit' });
- results.push(placed);
- placedLegs.push({ leg, placed });
- }
- } catch (error) {
- const compensationResults = [];
- for (const placedLeg of placedLegs.slice().reverse()) {
- try {
- const closeLeg = v17BuildOppositeOptionLeg(placedLeg.leg);
- const closeResult = await v17PlaceDirectOptionOrder(closeLeg, access, {
- entryMode: 'market',
- reduceOnly: true,
- });
- compensationResults.push({ ok: true, symbol: closeLeg.symbol, side: closeLeg.side, result: closeResult });
- } catch (closeError) {
- compensationResults.push({
- ok: false,
- symbol: placedLeg.leg?.symbol || '',
- side: String(placedLeg.leg?.side || ''),
- error: closeError?.message || 'Compensation order failed',
- });
- }
- }
- await v17RecordOptionStrategyOrderLog({
- profileId: access.profileId,
- strategyLabel,
- symbols: legs.map(leg => leg.symbol),
- legs: orderedLegs,
- summary: summaryEnvelope.summary,
- orderCount: results.length,
- status: results.length ? 'partial_failed' : 'failed',
- error: error?.message || 'Strategy order failed',
- results,
- compensationResults,
- automated: !!payload?.automated,
- });
- await v17PersistOptionsRepairState({
- source: 'strategy_basket',
- message: results.length
- ? `Strategy ${strategyLabel} partially placed (${results.length}/${orderedLegs.length}). Verify positions/orders before any new options trade.`
- : `Strategy ${strategyLabel} failed during placement. Verify no orders were accepted before retrying.`,
- symbols: legs.map(leg => leg.symbol),
- details: {
- strategyLabel,
- placedCount: results.length,
- expectedCount: orderedLegs.length,
- error: error?.message || '',
- compensationResults,
- },
- });
- throw new Error(results.length
- ? `Strategy partially placed (${results.length}/${orderedLegs.length}). Rollback attempted; check Orders before retrying. ${error?.message || ''}`.trim()
- : (error?.message || 'Strategy order failed'));
- }
- await v17RecordOptionStrategyOrderLog({
- profileId: access.profileId,
- strategyLabel,
- symbols: legs.map(leg => leg.symbol),
- legs: orderedLegs,
- summary: summaryEnvelope.summary,
- orderCount: results.length,
- status: 'placed',
- automated: !!payload?.automated,
- });
- return {
- ok: true,
- profileId: access.profileId,
- summary: summaryEnvelope.summary,
- results,
- };
- }
-
  async function v17EmitOptionsAutoTradeNotice(cfg = {}, entry = {}) {
  const symbolList = Array.isArray(entry?.symbols) ? entry.symbols.join(', ') : '';
  const body = `${String(entry?.templateId || 'Option strategy').toUpperCase()}\n${symbolList}\nNet credit: $${Number(entry?.netPremium || 0).toFixed(2)}\nMax loss: ${entry?.maxLoss == null ? 'Undefined' : `$${Math.abs(Number(entry.maxLoss || 0)).toFixed(2)}`}`;
@@ -971,85 +717,6 @@
  return;
  }
  }
- }
-
- function v17ResolveOptionsSignalDirection(signal = {}) {
- const direction = String(signal?.direction || signal?.side || '').toLowerCase();
- if (direction.includes('short') || direction === 'bearish') return 'bearish';
- if (direction.includes('long') || direction === 'bullish') return 'bullish';
- return '';
- }
-
- async function runOptionsAutoTradeEngine(scanResults = []) {
- const stored = await storeLocalGet(['optionsAutoTradeSettings', 'optionsAutoTradeLog']);
- const cfg = sanitizeOptionsAutoTradeSettings(stored?.optionsAutoTradeSettings || {});
- if (!cfg.enabled) return { ok: true, active: false, placed: 0 };
- await v17AssertOptionsExecutionUnlocked();
- const log = Array.isArray(stored?.optionsAutoTradeLog) ? stored.optionsAutoTradeLog.slice() : [];
- const startOfDay = new Date();
- startOfDay.setHours(0, 0, 0, 0);
- const todayTs = startOfDay.getTime();
- const placedToday = log.filter(item => Number(item?.ts || 0) >= todayTs);
- if (placedToday.length >= cfg.maxStrategiesPerDay) {
- return { ok: true, active: true, placed: 0, skipped: 'daily_limit' };
- }
- const activeCount = placedToday.filter(item => String(item?.status || 'placed') === 'placed').length;
- if (activeCount >= cfg.maxConcurrentStrategies) {
- return { ok: true, active: true, placed: 0, skipped: 'concurrent_limit' };
- }
- const signals = (Array.isArray(scanResults) ? scanResults : [])
- .filter(signal => {
- const base = normalizeBaseSymbol(signal?.symbol || '').replace(/USD(T)?$/i, '');
- return cfg.underlyings.includes(base)
- && Number(signal?.tradeQuality?.score || 0) >= cfg.minTradeQuality
- && !!v17ResolveOptionsSignalDirection(signal);
- })
- .sort((a, b) => Number(b?.tradeQuality?.score || 0) - Number(a?.tradeQuality?.score || 0));
- let placed = 0;
- for (const signal of signals) {
- if ((placedToday.length + placed) >= cfg.maxStrategiesPerDay) break;
- if ((activeCount + placed) >= cfg.maxConcurrentStrategies) break;
- const base = normalizeBaseSymbol(signal?.symbol || '').replace(/USD(T)?$/i, '');
- const direction = v17ResolveOptionsSignalDirection(signal);
- if (!base || !direction) continue;
- const chain = await v17GetOptionsChain({ underlying: base }).catch(() => null);
- if (!chain?.rows?.length) continue;
- const contracts = chain.rows.flatMap(row => [row.call, row.put]).filter(Boolean).map(contract => ({
- ...contract,
- underlyingPrice: Number(chain.underlyingPrice || 0),
- }));
- const strategy = buildDirectionalCreditSpreadFromChain(contracts, direction, cfg);
- if (!strategy?.legs?.length) continue;
- if (strategy.summary?.maxLoss == null && !cfg.allowUndefinedRisk) continue;
- if (strategy.summary?.maxLoss != null && Math.abs(Number(strategy.summary.maxLoss || 0)) > cfg.maxRiskUSD) continue;
- const result = await v17PlaceOptionStrategyOrders({
- legs: strategy.legs,
- underlyingPrice: chain.underlyingPrice,
- daysToExpiry: Math.max(...strategy.legs.map(leg => Number(leg.daysToExpiry || 0)), 0),
- entryMode: cfg.entryMode,
- allowUndefinedRisk: cfg.allowUndefinedRisk,
- maxRiskUSD: cfg.maxRiskUSD,
- strategyLabel: strategy.templateId,
- automated: true,
- }).catch(() => null);
- if (!result?.ok) continue;
- const entry = {
- ts: Date.now(),
- underlying: base,
- templateId: strategy.templateId,
- status: 'placed',
- symbols: strategy.legs.map(leg => leg.symbol),
- netPremium: Number(strategy.summary?.netPremium || 0),
- maxLoss: strategy.summary?.maxLoss,
- };
- log.unshift(entry);
- placed += 1;
- await v17EmitOptionsAutoTradeNotice(cfg, entry).catch(() => {});
- }
- if (placed > 0) {
- await storeLocalSet({ optionsAutoTradeLog: log.slice(0, V17_OPTIONS_LOG_LIMIT) });
- }
- return { ok: true, active: true, placed };
  }
 
  /* ===================================================================
@@ -1123,22 +790,7 @@
  if (!['active', 'partial_stop'].includes(String(entry?.status || ''))) return false;
  if (v17NormalizeProtectionState(entry?.protectionState || '', '') === 'unprotected') return true;
  if (v17NormalizeProtectionState(entry?.straddleLeg?.protectionState || '', '') === 'unprotected') return true;
- if (v17NormalizeProtectionState(entry?.callLeg?.protectionState || '', '') === 'unprotected') return true;
- if (v17NormalizeProtectionState(entry?.putLeg?.protectionState || '', '') === 'unprotected') return true;
  return false;
- }
-
- function v17ResolveSyntheticProtectionState(entry = {}) {
- const states = [
- v17NormalizeProtectionState(entry?.callLeg?.protectionState || '', ''),
- v17NormalizeProtectionState(entry?.putLeg?.protectionState || '', ''),
- ].filter(Boolean);
- if (states.includes('unprotected')) return 'unprotected';
- if (states.includes('manual_native')) return 'manual_native';
- if (states.includes('triggered')) return 'triggered';
- if (states.includes('armed')) return 'armed';
- if (states.includes('closed') && states.every(state => state === 'closed')) return 'closed';
- return 'missing';
  }
 
  async function v17PersistStraddleAutomationState(cfg = {}, log = [], patch = {}) {
@@ -1271,13 +923,13 @@
  const next = { ...(entry || {}) };
  next.entryMode = String(next.entryMode || defaults.entryMode || 'limit').trim().toLowerCase() || 'limit';
  next.stopLossPct = Math.max(0, Number(next.stopLossPct ?? defaults.stopLossPct ?? 30));
- next.type = String(next.type || (next.straddleLeg ? 'native_straddle' : 'synthetic_straddle') || '');
+ next.type = 'native_straddle';
  next.status = String(next.status || '').trim().toLowerCase();
- next.underlying = String(next.underlying || next.straddleLeg?.underlying || next.callLeg?.underlying || next.putLeg?.underlying || '').trim().toUpperCase();
+ next.underlying = String(next.underlying || next.straddleLeg?.underlying || '').trim().toUpperCase();
  next.degradedMultiplier = false;
  const hasClosedAt = Number(next.closedAt || 0) > 0;
 
- if (next.type === 'native_straddle' && next.straddleLeg) {
+ if (next.straddleLeg) {
  let leg = await v17EnsureStraddleLegMeta(next.straddleLeg);
  leg = v17SyncStraddleLegDerived(leg, defaults);
  leg.status = String(leg.status || '').trim().toLowerCase() || 'live';
@@ -1308,85 +960,15 @@
  next.entryOrderState = String(leg.entryOrderState || '');
  next.reentryCount = Number(leg.reentryCount || 0);
  next.degradedMultiplier = !!leg.degradedMultiplier;
- } else {
- let callLeg = await v17EnsureStraddleLegMeta(next.callLeg || {});
- let putLeg = await v17EnsureStraddleLegMeta(next.putLeg || {});
- callLeg = v17SyncStraddleLegDerived(callLeg, defaults);
- putLeg = v17SyncStraddleLegDerived(putLeg, defaults);
- callLeg.status = String(callLeg.status || '').trim().toLowerCase() || 'live';
- putLeg.status = String(putLeg.status || '').trim().toLowerCase() || 'live';
- if (hasClosedAt || next.status === 'closed') {
- next.status = 'closed';
- if (['stopped', 'live', 'reentered', 'partial_stop', ''].includes(callLeg.status)) callLeg.status = 'closed';
- if (['stopped', 'live', 'reentered', 'partial_stop', ''].includes(putLeg.status)) putLeg.status = 'closed';
- } else if (next.status === 'partial_stop' && ![callLeg.status, putLeg.status].includes('stopped')) {
- next.status = [callLeg.status, putLeg.status].every(status => status === 'closed') ? 'closed' : 'active';
- } else if (!next.status) {
- next.status = [callLeg.status, putLeg.status].includes('stopped') ? 'partial_stop' : 'active';
- }
- next.callLeg = callLeg;
- next.putLeg = putLeg;
- next.symbol = String(next.symbol || `${callLeg.symbol || ''}${callLeg.symbol && putLeg.symbol ? ' / ' : ''}${putLeg.symbol || ''}`.trim());
- next.qty = Math.max(callLeg.qty || 0, putLeg.qty || 0, 1);
- next.contractMultiplier = Math.max(Number(callLeg.contractMultiplier || 0), Number(putLeg.contractMultiplier || 0), 1);
- next.premiumPerContract = Number(callLeg.premiumPerContract || 0) + Number(putLeg.premiumPerContract || 0);
- next.premiumUSD = Number(callLeg.premiumUSD || 0) + Number(putLeg.premiumUSD || 0);
- next.realizedPnlUSD = Number(callLeg.realizedPnlUSD || 0) + Number(putLeg.realizedPnlUSD || 0);
- next.unrealizedPnlUSD = Number(callLeg.unrealizedPnlUSD || 0) + Number(putLeg.unrealizedPnlUSD || 0);
- next.totalPnlUSD = next.realizedPnlUSD + next.unrealizedPnlUSD;
- next.totalPnl = next.totalPnlUSD;
- next.stopPrice = Math.max(Number(callLeg.stopPrice || 0), Number(putLeg.stopPrice || 0), 0);
- next.stopOrderId = String(callLeg.stopOrderId || putLeg.stopOrderId || '');
- next.protectionState = v17ResolveSyntheticProtectionState({ callLeg, putLeg });
- next.protectionSource = v17NormalizeProtectionSource(next.protectionSource || '', '');
- next.reentryCount = Number(callLeg.reentryCount || 0) + Number(putLeg.reentryCount || 0);
- next.degradedMultiplier = !!callLeg.degradedMultiplier || !!putLeg.degradedMultiplier;
  }
 
  next.realizedPnl = Number(next.realizedPnlUSD || 0);
  next.totalPnl = Number(next.totalPnlUSD || 0);
  next.timeToExpiryMs = Math.max(0, Number(next.expiryTs || 0) - Date.now());
  next.displayStatus = next.status === 'partial_stop' ? 'Partial Stop' : String(next.status || 'active').replace(/_/g, ' ');
- next.sourceSymbol = String(next.straddleLeg?.symbol || next.callLeg?.symbol || '');
+ next.sourceSymbol = String(next.straddleLeg?.symbol || '');
  next.stopHealth = v17NormalizeProtectionState(next.protectionState || next.straddleLeg?.protectionState || '', 'missing');
  return next;
- }
-
- function v17BuildStraddleLegEntry(leg = {}, orderId = '') {
- const side = String(leg.side || 'sell').trim().toLowerCase() === 'buy' ? 'buy' : 'sell';
- const entryPrice = Number(leg.markPrice || leg.premium || 0);
- const stopLossPct = Math.max(0, Number(leg.stopLossPct || 30));
- return {
- symbol: String(leg.symbol || ''),
- productId: Number(leg.productId || 0),
- side,
- entryPrice,
- currentPrice: entryPrice,
- stopPrice: side === 'buy' ? entryPrice * Math.max(0, (100 - stopLossPct) / 100) : entryPrice * (1 + stopLossPct / 100),
- status: 'live',
- reentryCount: 0,
- reentries: [],
- orderId: String(orderId || ''),
- realizedPnl: 0,
- realizedPnlUSD: 0,
- entryOrderId: String(orderId || ''),
- entryOrderPlacedAt: Date.now(),
- entryOrderState: 'working',
- entryFilledAt: 0,
- entryMode: String(leg.entryMode || 'limit').trim().toLowerCase() || 'limit',
- stopLossPct,
- qty: v17ResolveStraddleLegQty(leg),
- quantity: v17ResolveStraddleLegQty(leg),
- contractMultiplier: Math.max(0.000001, Number(leg.contractMultiplier || leg.contractValue || 1)),
- premiumCapturePct: Math.max(0, Number(leg.premiumCapturePct || 0)),
- stopOrderId: '',
- stopOrderState: '',
- protectionSource: '',
- stopOrderPlacedAt: 0,
- stopOrderUpdatedAt: 0,
- lastStopActionAt: 0,
- protectionState: 'armed',
- };
  }
 
  async function v17BuildNativeStraddleEvaluation(contract = {}, mvChain = {}, cfg = {}, access = null) {
@@ -1396,18 +978,6 @@
  const qty = (cfg.autoSizeEnabled && cfg.targetProfitUSD > 0 && Number(contract?.markPrice || 0) > 0)
  ? Math.max(1, Math.ceil(Number(cfg.targetProfitUSD || 0) / (Number(contract.markPrice || 0) * Math.max(0.000001, Number(contract.contractMultiplier || 1)))))
  : 1;
- let skewMetrics = {};
- try {
- const chain = await v17GetOptionsChain({
- underlying: String(contract?.underlying || mvChain?.underlying || '').trim().toUpperCase(),
- expiryKey: String(contract?.expiryKey || mvChain?.expiryKey || '').trim(),
- });
- if (chain?.ok) skewMetrics = computeVolatilitySkewMetrics(chain, {
- underlying: contract?.underlying || mvChain?.underlying,
- expiryKey: contract?.expiryKey || mvChain?.expiryKey,
- spotPrice: chain?.underlyingPrice || spotPrice,
- }) || {};
- } catch (_) {}
  const preview = buildNativeStraddleTicketPreview({
  ...contract,
  qty,
@@ -1420,11 +990,9 @@
  strategyBudgetUSD: Number(cfg.maxRiskUSD || 0),
  feePctPerSide: V17_NATIVE_STRADDLE_FEE_PCT_PER_SIDE,
  softGateThreshold: NATIVE_STRADDLE_SOFT_GATE_SCORE,
- riskReversal25d: Number(skewMetrics?.riskReversal25d || 0),
- butterfly25d: Number(skewMetrics?.butterfly25d || 0),
  marketContext,
  });
- return { qty, preview, skewMetrics };
+ return { qty, preview };
  }
 
  async function runStraddleAutoTradeEntry() {
@@ -1559,8 +1127,6 @@
  closeReason: null,
  regimeKey: String(best.preview?.regime?.key || ''),
  regimeLabel: String(best.preview?.regime?.label || ''),
- riskReversal25d: Number(best.preview?.riskReversal25d || 0),
- butterfly25d: Number(best.preview?.butterfly25d || 0),
  hardChecks: Array.isArray(best.preview?.hardChecks) ? best.preview.hardChecks.slice() : [],
  contractThesis: Array.isArray(best.preview?.contractThesis) ? best.preview.contractThesis.slice() : [],
  straddleLeg: {
@@ -1593,8 +1159,6 @@
  stopOrderUpdatedAt: 0,
  lastStopActionAt: 0,
  },
- callLeg: null,
- putLeg: null,
  totalPnl: 0,
  totalPnlUSD: 0,
  notifications: { entryAt: entryTs, stopAt: null, exitAt: null },
@@ -1685,80 +1249,6 @@
  continue;
  }
  }
- // --- Fallback: synthetic straddle (two separate legs) ---
- const chain = await v17GetOptionsChain({ underlying }).catch(() => null);
- if (!chain?.rows?.length) {
- blockedReason = `${underlying}: no option chain data available for fallback synthetic straddle.`;
- lastDecision = 'no_fallback_chain';
- continue;
- }
- const straddle = buildShortStraddleForAutoTrade(chain, cfg);
- if (!straddle?.legs?.length) {
- blockedReason = `${underlying}: no synthetic straddle candidate passed the fallback rules.`;
- lastDecision = 'no_fallback_candidate';
- continue;
- }
-
- const callResult = await v17PlaceDirectOptionOrder(straddle.legs[0], access, { entryMode: cfg.entryMode }).catch(e => { dlog(`Straddle call order err: ${e?.message}`); return null; });
- const putResult = await v17PlaceDirectOptionOrder(straddle.legs[1], access, { entryMode: cfg.entryMode }).catch(e => { dlog(`Straddle put order err: ${e?.message}`); return null; });
- if (!callResult && !putResult) continue;
- if (!callResult || !putResult) {
- const liveLeg = callResult ? straddle.legs[0] : straddle.legs[1];
- const failedLeg = callResult ? straddle.legs[1] : straddle.legs[0];
- const closeLeg = v17BuildOppositeOptionLeg(liveLeg);
- const closeAttempt = await v17PlaceDirectOptionOrder(closeLeg, access, { entryMode: 'market', reduceOnly: true })
- .then(result => ({ ok: true, result }))
- .catch(error => ({ ok: false, error: error?.message || 'Emergency close failed' }));
- await v17PersistOptionsRepairState({
- source: 'synthetic_straddle_partial',
- message: `Synthetic straddle partially placed for ${underlying}. ${liveLeg.symbol} may need review because ${failedLeg.symbol} failed.`,
- symbols: [liveLeg.symbol, failedLeg.symbol],
- details: {
- liveLeg: liveLeg.symbol,
- failedLeg: failedLeg.symbol,
- closeAttempt,
- },
- });
- blockedReason = `${underlying}: synthetic straddle partial execution; emergency close ${closeAttempt.ok ? 'submitted' : 'failed'}.`;
- lastDecision = 'fallback_partial_repair_required';
- continue;
- }
-
- const entryId = `straddle_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
- const legStopMultiplier = 1 + cfg.legStopLossPct / 100;
- const entry = {
- id: entryId,
- ts: Date.now(),
- underlying,
- profileId: cfg.profileId || '',
- type: 'synthetic_straddle',
- entryMode: cfg.entryMode,
- stopLossPct: cfg.legStopLossPct,
- expiryTs: straddle.expiryTs,
- expiryKey: straddle.expiryKey,
- atmStrike: straddle.atmStrike,
- spotAtEntry: Number(chain.underlyingPrice || 0),
- status: 'active',
- closedAt: null,
- closeReason: null,
- callLeg: v17BuildStraddleLegEntry(straddle.legs[0], callResult?.result?.id || ''),
- putLeg: v17BuildStraddleLegEntry(straddle.legs[1], putResult?.result?.id || ''),
- totalPnl: 0,
- totalPnlUSD: 0,
- notifications: { entryAt: Date.now(), callStopAt: null, putStopAt: null, exitAt: null },
- };
- entry.callLeg.stopPrice = entry.callLeg.entryPrice * legStopMultiplier;
- entry.putLeg.stopPrice = entry.putLeg.entryPrice * legStopMultiplier;
- if (!callResult) { entry.callLeg.status = 'closed'; entry.status = 'partial_stop'; }
- if (!putResult) { entry.putLeg.status = 'closed'; entry.status = 'partial_stop'; }
-
- log.unshift(await v17NormalizeStraddleEntry(entry, cfg));
- placed += 1;
- lastPlacedSymbol = `${entry.callLeg.symbol} / ${entry.putLeg.symbol}`;
- lastPlacedUnderlying = underlying;
- lastDecision = 'placed_fallback';
- await v17EmitOptionsAutoTradeNotice(cfg, { ts: entry.ts, underlying, templateId: 'auto_short_straddle', status: 'placed', netPremium: straddle.netPremium }).catch(() => {});
- dlog(`Straddle placed: ${underlying} ATM ${straddle.atmStrike} premium=${straddle.netPremium.toFixed(4)}`);
  }
  if (placed > 0) {
  await storeLocalSet({ optionsStraddleLog: log.slice(0, V17_STRADDLE_LOG_LIMIT) });
@@ -1890,26 +1380,16 @@
  return { stopOrder: latest, source: v17IsManagedProtectionOrder(latest) ? 'app_native' : 'manual_native' };
  }
 
- async function runOptionsStraddleMonitor() {
- // Auto-entry: attempt to place new straddle if enabled and limits allow
- if (typeof runStraddleAutoTradeEntry === 'function') {
- try {
- const entryResult = await runStraddleAutoTradeEntry();
- if (entryResult?.placed > 0) {
- dlog('[STRADDLE] Auto-entry placed ' + entryResult.placed + ' new straddle(s)');
- }
- } catch (err) {
- dlog('[STRADDLE] Auto-entry error: ' + String(err?.message || err));
- }
- }
+async function runOptionsStraddleMonitor() {
+ // Native Straddle is scanner/notification-only now. Keep monitor protection for
+ // existing entries, but do not open new straddles from the background alarm.
 
  const stored = await storeLocalGet(['optionsAutoTradeSettings', 'optionsStraddleLog']);
  const cfg = sanitizeOptionsAutoTradeSettings(stored?.optionsAutoTradeSettings || {});
  const log = Array.isArray(stored?.optionsStraddleLog) ? stored.optionsStraddleLog.slice() : [];
  const activeEntries = log.filter(e => ['active', 'partial_stop'].includes(String(e?.status || '')));
  const fetchNativeTickers = typeof globalThis.v17FetchStraddleTickers === 'function' ? globalThis.v17FetchStraddleTickers : v17FetchStraddleTickers;
- const fetchOptionTickers = typeof globalThis.v17FetchOptionTickers === 'function' ? globalThis.v17FetchOptionTickers : v17FetchOptionTickers;
- if (!activeEntries.length && !cfg.straddleEnabled) {
+ if (!activeEntries.length) {
  syncOptionsStraddleMonitorAlarm(() => {});
  return { ok: true, active: 0 };
  }
@@ -2143,133 +1623,7 @@
  continue;
  }
 
- // --- SYNTHETIC STRADDLE MONITOR (existing dual-leg logic) ---
- // Fetch current prices
- const tickers = await fetchOptionTickers(entry.underlying).catch(() => new Map());
- const callTicker = tickers.get(entry.callLeg?.symbol);
- const putTicker = tickers.get(entry.putLeg?.symbol);
- if (callTicker && entry.callLeg.status !== 'closed') entry.callLeg.currentPrice = Number(callTicker.markPrice || callTicker.lastPrice || entry.callLeg.currentPrice);
- if (putTicker && entry.putLeg.status !== 'closed') entry.putLeg.currentPrice = Number(putTicker.markPrice || putTicker.lastPrice || entry.putLeg.currentPrice);
-
- let access;
- try { access = await v16ResolveAuthorizedProfile({ profileId: entry.profileId || cfg.profileId }, { tradeRequired: true }); } catch { continue; }
-
- let entryChanged = false;
- const liveLegKeys = ['callLeg', 'putLeg'].filter(k => ['live', 'reentered'].includes(entry[k]?.status));
- const stoppedLegKeys = ['callLeg', 'putLeg'].filter(k => entry[k]?.status === 'stopped');
-
- // --- Universal time exit ---
- const minutesLeft = (Number(entry.expiryTs || 0) - now) / 60000;
- if (minutesLeft <= cfg.closeMinutesBeforeExpiry && minutesLeft > -60) {
- for (const k of liveLegKeys) {
- await v17StraddleCloseLeg(entry[k], access, cfg);
- entry[k] = v17RealizeStraddleLeg({ ...entry[k], status: 'closed' });
- entry[k].status = 'closed';
- }
- for (const k of stoppedLegKeys) entry[k].status = 'closed';
- entry.status = 'closed';
- entry.closedAt = now;
- entry.closeReason = 'time_exit';
- entry.notifications.exitAt = now;
- entryChanged = true;
- dlog(`Straddle time exit: ${entry.underlying} ${entry.id}`);
- }
-
- // --- Universal P&L exit ---
- if (entry.status !== 'closed') {
- const callPnl = Number(v17SyncStraddleLegDerived(entry.callLeg, cfg).totalPnlUSD || 0);
- const putPnl = Number(v17SyncStraddleLegDerived(entry.putLeg, cfg).totalPnlUSD || 0);
- const totalPnl = callPnl + putPnl;
- entry.totalPnl = totalPnl;
- entry.totalPnlUSD = totalPnl;
-
- if (cfg.universalProfitTarget > 0 && totalPnl >= cfg.universalProfitTarget) {
- for (const k of liveLegKeys) {
- await v17StraddleCloseLeg(entry[k], access, cfg);
- entry[k] = v17RealizeStraddleLeg({ ...entry[k], status: 'closed' });
- entry[k].status = 'closed';
- }
- entry.status = 'closed'; entry.closedAt = now; entry.closeReason = 'pnl_profit';
- entry.notifications.exitAt = now; entryChanged = true;
- dlog(`Straddle profit exit: ${entry.underlying} PnL=${totalPnl.toFixed(4)}`);
- } else if (cfg.universalLossLimit > 0 && totalPnl <= -cfg.universalLossLimit) {
- for (const k of liveLegKeys) {
- await v17StraddleCloseLeg(entry[k], access, cfg);
- entry[k] = v17RealizeStraddleLeg({ ...entry[k], status: 'closed' });
- entry[k].status = 'closed';
- }
- entry.status = 'closed'; entry.closedAt = now; entry.closeReason = 'pnl_loss';
- entry.notifications.exitAt = now; entryChanged = true;
- dlog(`Straddle loss exit: ${entry.underlying} PnL=${totalPnl.toFixed(4)}`);
- }
- }
-
- // --- Per-leg stop-loss ---
- if (entry.status !== 'closed') {
- for (const k of ['callLeg', 'putLeg']) {
- const leg = entry[k];
- if (!['live', 'reentered'].includes(leg.status)) continue;
- leg.protectionState = 'armed';
- leg.protectionSource = '';
- if (leg.currentPrice >= leg.stopPrice) {
- await v17StraddleCloseLeg(leg, access, cfg);
- entry[k] = v17RealizeStraddleLeg({ ...leg, status: 'stopped' });
- entry[k].status = 'stopped';
- entry[k].protectionState = 'triggered';
- entry.notifications[k === 'callLeg' ? 'callStopAt' : 'putStopAt'] = now;
- entryChanged = true;
- dlog(`Straddle ${k} stopped: ${leg.symbol} entry=${leg.entryPrice.toFixed(4)} current=${leg.currentPrice.toFixed(4)}`);
- }
- }
- const allStopped = ['callLeg', 'putLeg'].every(k => ['stopped', 'closed'].includes(entry[k].status));
- const canReenter = cfg.reentryEnabled && ['callLeg', 'putLeg'].some(k => entry[k].status === 'stopped' && entry[k].reentryCount < cfg.maxReentries);
- if (allStopped && !canReenter) {
- entry.status = 'closed'; entry.closedAt = now; entry.closeReason = 'all_stopped';
- entry.notifications.exitAt = now; entryChanged = true;
- } else if (['callLeg', 'putLeg'].some(k => entry[k].status === 'stopped')) {
- if (entry.status !== 'partial_stop') { entry.status = 'partial_stop'; entryChanged = true; }
- }
- }
-
- // --- Re-entry logic ---
- if (entry.status !== 'closed' && cfg.reentryEnabled) {
- for (const k of ['callLeg', 'putLeg']) {
- const leg = entry[k];
- if (leg.status !== 'stopped') continue;
- if (leg.reentryCount >= cfg.maxReentries) continue;
- const originalEntry = leg.reentries.length ? leg.reentries[0].entryPrice || leg.entryPrice : leg.entryPrice;
- const reentryThreshold = originalEntry * (1 + cfg.reentryThresholdPct / 100);
- if (leg.currentPrice <= reentryThreshold) {
- const result = await v17StraddleReenterLeg(leg, access, cfg);
- if (result) {
- leg.reentries.push({ ts: now, entryPrice: leg.currentPrice, exitTs: null, exitPrice: null, exitReason: null });
- leg.entryPrice = leg.currentPrice;
- leg.stopPrice = leg.currentPrice * (1 + cfg.legStopLossPct / 100);
- leg.status = 'reentered';
- leg.reentryCount += 1;
- leg.orderId = String(result?.result?.id || leg.orderId);
- leg.protectionState = 'armed';
- leg.protectionSource = '';
- if (entry.status === 'partial_stop') entry.status = 'active';
- entryChanged = true;
- dlog(`Straddle ${k} re-entered: ${leg.symbol} at ${leg.currentPrice.toFixed(4)} (attempt ${leg.reentryCount})`);
- }
- }
- }
- }
-
- // Update total P&L
- if (entry.status !== 'closed') {
- entry.callLeg = v17SyncStraddleLegDerived(entry.callLeg, cfg);
- entry.putLeg = v17SyncStraddleLegDerived(entry.putLeg, cfg);
- const callPnl = Number(entry.callLeg.totalPnlUSD || 0);
- const putPnl = Number(entry.putLeg.totalPnlUSD || 0);
- entry.totalPnl = callPnl + putPnl;
- entry.totalPnlUSD = entry.totalPnl;
- entryChanged = true;
- }
-
- if (entryChanged) { log[i] = await v17NormalizeStraddleEntry(entry, cfg); updated += 1; }
+ continue;
  }
 
  if (updated > 0) {
@@ -2306,18 +1660,6 @@
  profileMaxOrderSizeUSD = Number(access?.profile?.maxOrderSizeUSD || 0);
  resolvedProfileId = String(access?.profile?.id || resolvedProfileId || '').trim();
  }
- let skewMetrics = {};
- try {
- const chain = await v17GetOptionsChain({
- underlying: String(msg?.underlying || '').trim().toUpperCase(),
- expiryKey: String(msg?.expiryKey || '').trim(),
- });
- if (chain?.ok) skewMetrics = computeVolatilitySkewMetrics(chain, {
- underlying: msg?.underlying,
- expiryKey: msg?.expiryKey,
- spotPrice: Number(msg?.spotPrice || chain?.underlyingPrice || 0),
- }) || {};
- } catch (_) {}
  const marketContext = await v17BuildUnderlyingStraddleMarketContext(
  String(msg?.underlying || '').trim().toUpperCase() || 'BTC',
  Number(msg?.spotPrice || 0)
@@ -2345,8 +1687,6 @@
  strategyBudgetUSD: Number(cfg.maxRiskUSD || 0),
  feePctPerSide: V17_NATIVE_STRADDLE_FEE_PCT_PER_SIDE,
  softGateThreshold: NATIVE_STRADDLE_SOFT_GATE_SCORE,
- riskReversal25d: Number(skewMetrics?.riskReversal25d || 0),
- butterfly25d: Number(skewMetrics?.butterfly25d || 0),
  marketContext,
  });
  return {
@@ -2368,9 +1708,7 @@
  const cfg = sanitizeOptionsAutoTradeSettings(stored?.optionsAutoTradeSettings || {});
  const rawLog = Array.isArray(stored?.optionsStraddleLog) ? stored.optionsStraddleLog.slice() : [];
  const nativeTickerCache = new Map();
- const optionTickerCache = new Map();
  const fetchNativeTickers = typeof globalThis.v17FetchStraddleTickers === 'function' ? globalThis.v17FetchStraddleTickers : v17FetchStraddleTickers;
- const fetchOptionTickers = typeof globalThis.v17FetchOptionTickers === 'function' ? globalThis.v17FetchOptionTickers : v17FetchOptionTickers;
  let changed = false;
  const entries = [];
 
@@ -2382,17 +1720,6 @@
  if (!nativeTickerCache.has(entry.underlying)) nativeTickerCache.set(entry.underlying, await fetchNativeTickers(entry.underlying).catch(() => new Map()));
  const mvTicker = nativeTickerCache.get(entry.underlying)?.get(entry.straddleLeg.symbol);
  if (mvTicker) entry.straddleLeg.currentPrice = Number(mvTicker.markPrice || mvTicker.lastPrice || entry.straddleLeg.currentPrice);
- } else {
- if (!optionTickerCache.has(entry.underlying)) optionTickerCache.set(entry.underlying, await fetchOptionTickers(entry.underlying).catch(() => new Map()));
- const tickerMap = optionTickerCache.get(entry.underlying);
- if (tickerMap && entry.callLeg && entry.callLeg.status !== 'closed') {
- const callTicker = tickerMap.get(entry.callLeg.symbol);
- if (callTicker) entry.callLeg.currentPrice = Number(callTicker.markPrice || callTicker.lastPrice || entry.callLeg.currentPrice);
- }
- if (tickerMap && entry.putLeg && entry.putLeg.status !== 'closed') {
- const putTicker = tickerMap.get(entry.putLeg.symbol);
- if (putTicker) entry.putLeg.currentPrice = Number(putTicker.markPrice || putTicker.lastPrice || entry.putLeg.currentPrice);
- }
  }
  }
  entry = await v17NormalizeStraddleEntry(entry, cfg);
@@ -2452,14 +1779,7 @@
  }
  if (entry.straddleLeg.status === 'stopped') entry.straddleLeg.status = 'closed';
  } else {
- for (const k of ['callLeg', 'putLeg']) {
- if (['live', 'reentered'].includes(entry[k].status)) {
- await v17StraddleCloseLeg(entry[k], access, { entryMode: 'market' });
- entry[k] = v17RealizeStraddleLeg({ ...entry[k], status: 'closed' });
- entry[k].status = 'closed';
- }
- if (entry[k].status === 'stopped') entry[k].status = 'closed';
- }
+ return { ok: false, error: 'Only Native Straddle entries are supported.' };
  }
  entry.status = 'closed'; entry.closedAt = Date.now(); entry.closeReason = 'manual';
  entry.notifications.exitAt = Date.now();
@@ -2469,33 +1789,13 @@
  }
 
  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
- if (msg?.action === 'v17:getOptionUniverse') {
- v17GetOptionUniverse(msg)
- .then(sendResponse)
- .catch(error => sendResponse({ ok: false, error: error?.message || 'Failed to load option universe' }));
- return true;
- }
- if (msg?.action === 'v17:getOptionsChain') {
- v17GetOptionsChain(msg)
- .then(sendResponse)
- .catch(error => sendResponse({ ok: false, error: error?.message || 'Failed to load option chain' }));
- return true;
- }
- if (msg?.action === 'v17:analyzeOptionStrategy') {
- v17AnalyzeOptionStrategy(msg)
- .then(sendResponse)
- .catch(error => sendResponse({ ok: false, error: error?.message || 'Failed to analyze strategy' }));
- return true;
- }
  if (msg?.action === 'v17:getOptionsExecutionHealth') {
  (async () => {
- const stored = await storeLocalGet([V17_OPTIONS_REPAIR_STATE_KEY, 'optionStrategyOrderLog', 'optionsAutoTradeLog', 'optionsStraddleLog']);
+ const stored = await storeLocalGet([V17_OPTIONS_REPAIR_STATE_KEY, 'optionsStraddleLog']);
  const repair = stored?.[V17_OPTIONS_REPAIR_STATE_KEY] || null;
- const recentStrategy = Array.isArray(stored?.optionStrategyOrderLog) ? stored.optionStrategyOrderLog.slice(0, 5) : [];
- const recentAuto = Array.isArray(stored?.optionsAutoTradeLog) ? stored.optionsAutoTradeLog.slice(0, 5) : [];
  const straddleLog = Array.isArray(stored?.optionsStraddleLog) ? stored.optionsStraddleLog : [];
  const unprotected = straddleLog.filter(entry => {
- const legs = [entry?.straddleLeg, entry?.callLeg, entry?.putLeg].filter(Boolean);
+ const legs = [entry?.straddleLeg].filter(Boolean);
  return ['active', 'partial_stop', 'protection_failed'].includes(String(entry?.status || ''))
  && legs.some(leg => ['missing', 'failed', 'unprotected'].includes(String(leg?.protectionState || leg?.stopOrderState || '').toLowerCase()));
  });
@@ -2503,24 +1803,14 @@
  ok: true,
  locked: !!repair && String(repair.status || '') === 'open',
  repair: repair && String(repair.status || '') === 'open' ? repair : null,
- recentStrategy,
- recentAuto,
  unprotectedCount: unprotected.length,
  unprotected: unprotected.slice(0, 6),
  });
  })().catch(error => sendResponse({ ok: false, error: error?.message || 'Failed to load options execution health' }));
  return true;
  }
- if (msg?.action === 'v17:placeOptionStrategyOrders') {
- v17PlaceOptionStrategyOrders(msg)
- .then(sendResponse)
- .catch(error => sendResponse({ ok: false, error: error?.message || 'Failed to place option strategy' }));
- return true;
- }
  if (msg?.action === 'v17:startStraddleAutoTrade') {
- runStraddleAutoTradeEntry()
- .then(sendResponse)
- .catch(error => sendResponse({ ok: false, error: error?.message || 'Failed to start straddle' }));
+ sendResponse({ ok: false, disabled: true, error: 'Native Straddle auto-entry is disabled. Scanner is notify-only.' });
  return true;
  }
  if (msg?.action === 'v17:getStraddleLog') {
@@ -2561,6 +1851,10 @@
  return true;
  }
  if (msg?.action === 'v17:placeNativeStraddleOrder') {
+ sendResponse({ ok: false, disabled: true, error: 'Native Straddle order placement is disabled. Use scanner notifications and manual chart review only.' });
+ return true;
+ }
+ if (msg?.action === 'v17:placeNativeStraddleOrder:legacy-disabled') {
  (async () => {
  const stored = await storeLocalGet(['optionsAutoTradeSettings', 'optionsStraddleLog']);
  const cfg = sanitizeOptionsAutoTradeSettings(stored?.optionsAutoTradeSettings || {});
@@ -2650,8 +1944,6 @@
  lastStopActionAt: 0,
  protectionState: entryMode === 'market' ? 'missing' : 'missing',
  },
- callLeg: null,
- putLeg: null,
  totalPnl: 0,
  totalPnlUSD: 0,
  notifications: { entryAt: entryTs, stopAt: null, exitAt: null },
@@ -2735,24 +2027,12 @@
  .catch(error => sendResponse({ ok: false, error: error?.message || 'Failed to load straddle chain' }));
  return true;
  }
- if (msg?.action === 'v17:getVolatilitySkew') {
- v17GetVolatilitySkew(msg)
- .then(sendResponse)
- .catch(error => sendResponse({ ok: false, error: error?.message || 'Failed to load volatility skew' }));
- return true;
- }
  return false;
  });
 
  globalThis.v17GetStraddleChain = v17GetStraddleChain;
- globalThis.v17GetVolatilitySkew = v17GetVolatilitySkew;
- globalThis.v17GetOptionUniverse = v17GetOptionUniverse;
- globalThis.v17GetOptionsChain = v17GetOptionsChain;
- globalThis.v17AnalyzeOptionStrategy = v17AnalyzeOptionStrategy;
- globalThis.v17PlaceOptionStrategyOrders = v17PlaceOptionStrategyOrders;
  globalThis.v17GetStraddleTicketPreviewEnvelope = v17GetStraddleTicketPreviewEnvelope;
  globalThis.v17GetStraddleDashboard = v17GetStraddleDashboard;
- globalThis.runOptionsAutoTradeEngine = runOptionsAutoTradeEngine;
  globalThis.runOptionsStraddleMonitor = runOptionsStraddleMonitor;
  globalThis.runStraddleAutoTradeEntry = runStraddleAutoTradeEntry;
 })();

@@ -173,7 +173,6 @@ function createAuth({ app, safeStorage, credentialStore } = {}) {
    configured: await isConfigured(),
    unlocked: await isUnlocked(eventOrId),
    totpEnabled: !!store?.totpEnabled,
-   autoLockMinutes: Number(store?.autoLockMinutes || 15),
    recoveryEnabled: !!(store?.recoveryHash && store?.recoverySalt),
    secureStorage: safeStorage.isEncryptionAvailable(),
   };
@@ -276,7 +275,6 @@ function createAuth({ app, safeStorage, credentialStore } = {}) {
   const passwordRecord = await hashPasswordRecord(password);
   const totpEnabled = !!message.totpEnabled;
   const totpSecret = totpEnabled ? base32Encode(crypto.randomBytes(20)) : '';
-  const autoLockMinutes = Math.min(240, Math.max(1, Number(message.autoLockMinutes || 15)));
   const recoveryCode = createRecoveryCode();
   const recovery = hashRecoveryCode(recoveryCode);
   const accountLabel = encodeURIComponent('FWD TradeDesk Pro');
@@ -290,7 +288,6 @@ function createAuth({ app, safeStorage, credentialStore } = {}) {
    recoveryHash: recovery.hash,
    recoverySalt: recovery.salt,
    recoveryPbkdf2Iterations: recovery.iterations,
-   autoLockMinutes,
    totpEnabled,
    totpSecret: totpEnabled ? await credentialStore.protectSecret({ secret: totpSecret }) : null,
    createdAt: Date.now(),
@@ -302,7 +299,6 @@ function createAuth({ app, safeStorage, credentialStore } = {}) {
    configured: true,
    unlocked: true,
    totpEnabled,
-   autoLockMinutes,
    recoveryCode,
    manualKey: totpSecret,
    qrDataUrl: totpEnabled
@@ -366,14 +362,6 @@ function createAuth({ app, safeStorage, credentialStore } = {}) {
   loginState.lockoutUntil = 0;
   unlock(eventOrId);
   return { ...await status(eventOrId), recoveryCode: nextRecoveryCode };
- }
-
- async function updateAutoLock(message = {}, eventOrId = null) {
-  if (!await isUnlocked(eventOrId)) return { ok: false, status: 423, error: 'Login is required before changing auto-lock.' };
-  const store = await readAuthStore();
-  const autoLockMinutes = Math.min(240, Math.max(1, Number(message.autoLockMinutes || 15)));
-  await writeAuthStore({ ...store, autoLockMinutes, updatedAt: Date.now() });
-  return status(eventOrId);
  }
 
  async function updateSecurity(message = {}, eventOrId = null) {
@@ -449,7 +437,6 @@ function createAuth({ app, safeStorage, credentialStore } = {}) {
   setup,
   login,
   resetPassword,
-  updateAutoLock,
   updateSecurity,
   disable,
   ensureUnlocked,

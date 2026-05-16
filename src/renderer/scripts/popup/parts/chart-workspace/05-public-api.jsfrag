@@ -151,6 +151,7 @@
  chartReviewOverlayOpen: false,
  chartTradingDraft: null,
  chartTradingMode: 'select',
+ chartTradingToolsOpen: false,
  };
  if (options.clearTabs !== false) {
  patch.chartReviewTabs = [];
@@ -164,27 +165,33 @@
  async function openDetachedChart(options = {}) {
  const strategy = await getStrategy();
  const current = await getChartState();
+ const hasOption = key => Object.prototype.hasOwnProperty.call(options, key);
+ const requestedUiMode = String(hasOption('uiMode') ? options.uiMode : 'default').trim().toLowerCase() || 'default';
+ const isJournalOpen = requestedUiMode === 'journal';
  const next = sanitizeDetachedChartState({
  ...current,
  ...options,
  symbol: String(options.symbol || current.symbol || previewSurface.getDisplaySymbol?.() || '').trim().toUpperCase(),
  orderContext: normalizeOrderContext(options.orderContext || current.orderContext || (typeof previewSurface.getOrderContext === 'function' ? previewSurface.getOrderContext() : null)),
- preset: normalizePreset(options.preset || current.preset || (String(options.uiMode || current.uiMode || '').toLowerCase() === 'journal' ? current.preset : 'clean')),
- showOrders: Object.prototype.hasOwnProperty.call(options, 'showOrders') ? !!options.showOrders : !!current.showOrders,
+ preset: normalizePreset(options.preset || current.preset || (isJournalOpen ? current.preset : 'clean')),
+ showOrders: hasOption('showOrders') ? !!options.showOrders : !!current.showOrders,
+ replaySeed: isJournalOpen ? (hasOption('replaySeed') ? options.replaySeed : current.replaySeed) : (hasOption('replaySeed') ? options.replaySeed : null),
+ replayMode: isJournalOpen ? (hasOption('replayMode') ? options.replayMode : current.replayMode) : (hasOption('replayMode') ? options.replayMode : null),
+ uiMode: requestedUiMode,
  chartViewMode: 'detached',
- rightPanelOpen: Object.prototype.hasOwnProperty.call(options, 'rightPanelOpen') ? options.rightPanelOpen !== false : current.rightPanelOpen !== false,
- intelligenceOverlays: Object.prototype.hasOwnProperty.call(options, 'intelligenceOverlays') ? options.intelligenceOverlays !== false : current.intelligenceOverlays !== false,
+ rightPanelOpen: hasOption('rightPanelOpen') ? options.rightPanelOpen !== false : current.rightPanelOpen !== false,
+ intelligenceOverlays: hasOption('intelligenceOverlays') ? options.intelligenceOverlays !== false : current.intelligenceOverlays !== false,
  deskLayoutMode: options.deskLayoutMode || current.deskLayoutMode || 'single',
  primaryTimeframe: options.primaryTimeframe || current.primaryTimeframe || current.timeframe || '15m',
  executionTimeframe: options.executionTimeframe || current.executionTimeframe || current.timeframe || '15m',
- syncCharts: Object.prototype.hasOwnProperty.call(options, 'syncCharts') ? options.syncCharts !== false : current.syncCharts !== false,
+ syncCharts: hasOption('syncCharts') ? options.syncCharts !== false : current.syncCharts !== false,
  contextTab: options.contextTab || current.contextTab || 'watchlist',
  watchlistTab: options.watchlistTab || current.watchlistTab || '1',
  overlayDensity: options.overlayDensity || current.overlayDensity || 'minimal',
  panelWidths: options.panelWidths || current.panelWidths || { ...DEFAULT_PANEL_WIDTHS },
  collapsedPanels: options.collapsedPanels || current.collapsedPanels || {},
  maximizedPanel: options.maximizedPanel || current.maximizedPanel || null,
- chartFullscreen: Object.prototype.hasOwnProperty.call(options, 'chartFullscreen') ? options.chartFullscreen === true : current.chartFullscreen === true,
+ chartFullscreen: hasOption('chartFullscreen') ? options.chartFullscreen === true : current.chartFullscreen === true,
  }, strategy.chartDefaults || {});
  detachedSurface.uiMode = String(next.uiMode || 'default').trim().toLowerCase() || 'default';
  await localSet({ [DS_V17_CHART_STATE_KEY]: next });

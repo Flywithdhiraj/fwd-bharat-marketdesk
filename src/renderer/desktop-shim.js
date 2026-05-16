@@ -35,9 +35,11 @@
  const action = String(message?.action || message?.type || '').trim();
  return new Set([
  'startScan',
+ 'strategy-lab:runUnifiedScan',
+ 'strategy-lab:deriveFromLatestScan',
+ 'native-straddle:startScan',
  'wizard:startScan',
  'stage:startScan',
- 'runBacktest',
  'buildCorrelationMatrix',
  'exportCSV',
  'v16:getPrivateAccountSnapshot',
@@ -46,6 +48,7 @@
  'v16:placeProtectionOrder',
  'v16:updateOrder',
  'v16:cancelAllOrdersForSymbol',
+ 'v17:placeNativeStraddleOrder',
  ]).has(action) ? DESKTOP_RUNTIME_LONG_TIMEOUT_MS : DESKTOP_RUNTIME_STANDARD_TIMEOUT_MS;
  }
 

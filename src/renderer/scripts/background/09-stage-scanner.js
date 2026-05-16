@@ -552,7 +552,7 @@
  };
  }
 
- function stageBacktestRule(weekly = [], targetStage = 'STAGE_II', settings = STAGE_DEFAULT_SETTINGS) {
+ function stageRuleEvidence(weekly = [], targetStage = 'STAGE_II', settings = STAGE_DEFAULT_SETTINGS) {
  const rows = Array.isArray(weekly) ? weekly : [];
  const samples = [];
  for (let i = Number(settings.minWeeklyCandles || 42); i < rows.length - 8; i += 3) {
@@ -587,7 +587,7 @@
  latestQuoteVolume: Number(ticker?.usdVol24h || 0),
  weeklyBars: weekly.length,
  candlePolicy: 'closed_only_daily_to_weekly',
- ruleBacktest: stageBacktestRule(weekly, result.stage, settings),
+ ruleEvidence: stageRuleEvidence(weekly, result.stage, settings),
  };
  return result;
  }
@@ -815,6 +815,85 @@
  return output;
  }
 
+ async function runStageScanFromContext(context) {
+ if (!global.FWDTradeDeskStrategies?.normalizeStrategyResult) throw new Error('Strategy registry not loaded');
+ if (!context?.scanId) throw new Error('Fresh main scan context is required');
+ await stageSetStatus('Deriving Stage rows from main scan...', { active: true, progress: 5, scanId: context.scanId });
+ await chrome.storage.local.set({ 'strategyResults.stage': [] });
+ const settings = await stageLoadSettings();
+ const tickerMap = context.tickerMap || {};
+ const products = Array.isArray(context.products) ? context.products : [];
+ const diagnostics = stageUniverseDiagnostics(tickerMap, products, settings);
+ const universe = stageBuildUniverse(tickerMap, products, settings);
+ diagnostics.universeRows = universe.length;
+ const getContextCandles = globalThis.FWDTradeDeskScanContext?.getCandles;
+ const results = [];
+ const skipped = { insufficientHistory: 0, review: 0, lowAverageLiquidity: 0, fetchErrors: 0, noContextCandles: 0 };
+ for (let i = 0; i < universe.length; i += 1) {
+ const item = universe[i];
+ if (i % 10 === 0 || i === universe.length - 1) {
+ await stageSetStatus(`Deriving ${item.symbol} (${i + 1}/${universe.length})`, {
+ active: true,
+ progress: Math.round(8 + (i / Math.max(1, universe.length)) * 86),
+ scanned: i + 1,
+ total: universe.length,
+ scanId: context.scanId,
+ });
+ }
+ try {
+ const safeCandles = getContextCandles?.(context, item.symbol, '1d', settings.preferredDailyCandles) || [];
+ if (!safeCandles.length) {
+ skipped.noContextCandles += 1;
+ continue;
+ }
+ if (safeCandles.length < Number(settings.minWeeklyCandles || 42) * 5) skipped.insufficientHistory += 1;
+ const result = stageAnalyzeSymbol(item.symbol, safeCandles, item.ticker, settings);
+ if (!result.symbol) continue;
+ if (result.stage === 'REVIEW') skipped.review += 1;
+ const avgQuoteVolume20 = Number(result.raw?.stageMetrics?.avgQuoteVolume20 || 0);
+ if (avgQuoteVolume20 && avgQuoteVolume20 < Number(settings.minAvgQuoteVolume20 || 0)) {
+ skipped.lowAverageLiquidity += 1;
+ result.reasons = [...(result.reasons || []), 'Average liquidity below stage threshold'];
+ result.checks = { ...(result.checks || {}), avgLiquidityPassed: false };
+ result.raw = { ...(result.raw || {}), stageDiagnostics: { lowAverageLiquidity: true } };
+ } else {
+ result.checks = { ...(result.checks || {}), avgLiquidityPassed: true };
+ }
+ results.push(result);
+ } catch (error) {
+ skipped.fetchErrors += 1;
+ stageLog(`${item.symbol} derive skipped: ${error?.message || error}`);
+ }
+ }
+ const lifecycle = await stageUpdateLifecycleState(results);
+ const sortedResults = stageSortRows(lifecycle.results);
+ const output = sortedResults.slice(0, Math.max(20, Number(settings.outputLimit || STAGE_DEFAULT_SETTINGS.outputLimit)));
+ const counts = stageCounts(output);
+ const allStageCounts = stageCounts(results);
+ await chrome.storage.local.set({
+ 'strategyResults.stage': output,
+ 'strategyStatus.stage': {
+ strategyId: 'stage',
+ status: `Derived - ${output.length} Stage rows from main scan | II ${allStageCounts.STAGE_II || 0}, I ${allStageCounts.STAGE_I || 0}, III ${allStageCounts.STAGE_III || 0}`,
+ active: false,
+ progress: 100,
+ scanned: results.length,
+ total: universe.length,
+ stageCounts: counts,
+ allStageCounts,
+ stageTransitions: lifecycle.transitions,
+ skipped,
+ diagnostics,
+ source: 'main_scan_context',
+ scanId: context.scanId,
+ lastScanTs: stageNow(),
+ ts: stageNow(),
+ },
+ stageLastScanTs: stageNow(),
+ });
+ return output;
+ }
+
  function getStageSnapshot(callback) {
  chrome.storage.local.get([
  'strategyResults.stage',
@@ -838,7 +917,14 @@
  return false;
  }
  if (msg?.action === 'stage:startScan') {
- runStageScan()
+ const context = globalThis.FWDTradeDeskScanContext?.getFresh?.();
+ const runner = context ? () => runStageScanFromContext(context) : (msg?.forceIndependent === true ? runStageScan : null);
+ if (!runner) {
+ stageSetStatus('Run main scan first - Stage will derive from shared scan data', { active: false, progress: 0 })
+ .finally(() => sendResponse({ ok: false, error: 'Run main scan first' }));
+ return true;
+ }
+ runner()
  .then(results => sendResponse({ ok: true, count: results.length }))
  .catch(async error => {
  await stageSetStatus(`Stage scan failed - ${error?.message || error}`, { active: false, progress: 0 });
@@ -870,8 +956,9 @@
  stageCounts,
  stageSortRows,
  stageUniverseDiagnostics,
- stageBacktestRule,
+ stageRuleEvidence,
  stageUpdateLifecycleState,
  runStageScan,
+ runStageScanFromContext,
  });
 })(globalThis);

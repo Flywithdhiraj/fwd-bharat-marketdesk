@@ -52,6 +52,16 @@
  <div class="sbar">
  <div class="sdot" id="sdot"></div>
  <span class="stxt" id="stxt">Ready - click Scan Now</span>
+ <div class="price-change-distribution" id="priceChangeDistribution" hidden>
+ <span class="pcd-label">Price Change Distribution</span>
+ <div class="pcd-track" aria-hidden="true">
+ <i class="pcd-decline" id="pcdDeclineBar"></i>
+ <i class="pcd-flat" id="pcdFlatBar"></i>
+ <i class="pcd-advance" id="pcdAdvanceBar"></i>
+ </div>
+ <span class="pcd-count decline" id="pcdDecliners">D 0</span>
+ <span class="pcd-count advance" id="pcdAdvancers">A 0</span>
+ </div>
  <button class="api-usage-meter" id="apiUsageMeter" type="button" title="API usage status">API --</button>
  <span class="slst" id="slst"></span>
  </div>
@@ -66,13 +76,13 @@
  <span id="secureStorageWarningText">Native secret encryption is unavailable.</span>
  </div>
 
- <!-- --- FWD-10 INDEX BAR --- -->
+ <!-- --- FWD-100 INDEX BAR --- -->
  <div class="d10-bar" id="d10bar" style="display:none">
  <div class="d10-left">
- <div class="d10-logo">F10</div>
+ <div class="d10-logo">F100</div>
  <div class="d10-info">
- <div class="d10-name">FWD-10 INDEX</div>
- <div class="d10-sub" id="d10sub">Equal-weight composite | Top 10 coins</div>
+ <div class="d10-name">FWD-100 INDEX</div>
+ <div class="d10-sub" id="d10sub">Equal-weight composite | Top 100 coins</div>
  </div>
  </div>
  <div class="d10-center">
@@ -83,7 +93,7 @@
  <div class="d10-benchmarks" id="d10benchmarks">
  <div class="d10-benchmark-card" id="d10houseBenchmark">
  <span class="d10-benchmark-label">House</span>
- <strong class="d10-benchmark-value">FWD-10</strong>
+ <strong class="d10-benchmark-value">FWD-100</strong>
  <small class="d10-benchmark-copy">Live tape</small>
  </div>
  <div class="d10-benchmark-card pending" id="d10cfBenchmark" title="Internal CF-style benchmark card.">
@@ -98,8 +108,8 @@
  </div>
  </div>
  <div class="d10-coins" id="d10coins"></div>
- <button class="d10-detail-btn" id="d10chart" title="Open FWD-10 in Chart workspace">Chart</button>
- <button class="d10-detail-btn" id="d10detail" title="Full FWD-10 breakdown">Info</button>
+ <button class="d10-detail-btn" id="d10chart" title="Open FWD-100 in Chart workspace">Chart</button>
+ <button class="d10-detail-btn" id="d10detail" title="Full FWD-100 breakdown">Info</button>
  </div>
 
  <!-- --- SECTOR SUMMARY BAR --- -->
@@ -155,9 +165,9 @@
  <button class="tab" data-group="settings" data-tab="strategy" role="tab" aria-selected="false" tabindex="-1">Settings</button>
  <button class="tab" data-group="risk" data-tab="webhooks" role="tab" aria-selected="false" tabindex="-1">Integrations</button>
  <button class="tab" data-group="reports" data-tab="liveanalytics" role="tab" aria-selected="false" tabindex="-1">Reports & Journal</button>
+ <button class="tab" data-group="reports" data-tab="tradecheck" role="tab" aria-selected="false" tabindex="-1">Trade Check &amp; Paper</button>
  <button class="tab" data-group="reports" data-tab="funding" role="tab" aria-selected="false" tabindex="-1">Funding</button>
  <button class="tab" data-group="reports" data-tab="corr" role="tab" aria-selected="false" tabindex="-1">Matrix</button>
- <button class="tab" data-group="reports" data-tab="backtest" role="tab" aria-selected="false" tabindex="-1">Backtest</button>
  <button class="tab" data-group="settings" data-tab="debug" role="tab" aria-selected="false" tabindex="-1">Debug</button>
  </nav>
 
@@ -217,6 +227,12 @@
  </section>
 
  <!-- ---------------------------------------------------
+ TRADE CHECK TAB
+ --------------------------------------------------- -->
+ <section class="pane" id="pane-tradecheck" role="tabpanel" aria-label="Trade check">
+ </section>
+
+ <!-- ---------------------------------------------------
  FUND DETAILS TAB
  --------------------------------------------------- -->
  <section class="pane" id="pane-funds" role="tabpanel" aria-label="Fund details">
@@ -241,12 +257,9 @@
  </section>
 
  <!-- ---------------------------------------------------
- BACKTEST TAB
+ CORRELATION MATRIX TAB
  --------------------------------------------------- -->
  <section class="pane" id="pane-corr">
- </section>
-
- <section class="pane" id="pane-backtest">
  </section>
 
  <!-- ---------------------------------------------------
@@ -286,7 +299,6 @@
  <button class="btn-tojrnl" id="btnOpenInDelta">Open in Delta</button>
  <button class="btn-tojrnl" id="btnLiveTradePreview">Preview Live</button>
  <button class="btn-tojrnl" id="btnToJrnl">Pre-Trade Checklist</button>
- <button class="btn-btmodal" id="btnBTModal">Backtest</button>
  <button class="mo-close" id="moClose">X</button>
  </div>
  </div>
@@ -441,18 +453,18 @@
  <button class="mo-close" id="liveJournalClose">X</button>
  </div>
  <div class="mo-body" id="liveJournalBody"></div>
- <div class="checklist-footer live-order-footer">
- <button class="bsm" id="liveJournalCancel" style="flex:1;padding:8px">Close</button>
- <button class="btn-save" id="liveJournalSave" style="flex:1">Save Notes</button>
+ <div class="checklist-footer live-order-footer live-journal-footer">
+ <button class="bsm live-journal-close-action" id="liveJournalCancel">Close</button>
+ <button class="btn-save live-journal-save-action" id="liveJournalSave">Save Notes</button>
  </div>
  </div>
 </div>
 
-<!-- --- FWD-10 INDEX DETAIL MODAL --- -->
+<!-- --- FWD-100 INDEX DETAIL MODAL --- -->
 <div class="overlay" id="d10overlay" style="display:none">
  <div class="modal d10-modal">
  <div class="mo-hdr">
- <div class="mo-title">FWD-10 INDEX - Full Breakdown</div>
+ <div class="mo-title">FWD-100 INDEX - Full Breakdown</div>
  <button class="mo-close" id="d10close">x</button>
  </div>
  <div class="mo-body" id="d10body"></div>
@@ -518,21 +530,92 @@
 </div>
 
 <div class="app-lock-overlay" id="appLockOverlay" hidden>
- <div class="app-lock-card" role="dialog" aria-modal="true" aria-labelledby="appLockTitle">
- <div class="app-lock-head">
- <div class="app-lock-kicker">Secure Workspace</div>
- <div class="app-lock-title" id="appLockTitle">FWD TradeDesk Pro Login</div>
- <div class="app-lock-copy">Unlock the trading desk before private exchange data, order actions, and API tools can run.</div>
- <div class="app-lock-status-row">
- <span>Workspace locked</span>
- <span>Private API gated</span>
- <span>Orders protected</span>
+ <div class="app-lock-shell" role="dialog" aria-modal="true" aria-labelledby="appLockTitle">
+ <header class="app-lock-nav" aria-label="FWD TradeDesk Pro home navigation">
+ <div class="app-lock-brand-mark">
+ <img src="icons/icon128.png" alt="FWD TradeDesk Pro">
+ <span>FWD TradeDesk Pro</span>
  </div>
+ <nav class="app-lock-nav-links" aria-label="Product sections">
+ <a href="#appLockProductRail">Products</a>
+ <a href="#appLockMarketIntelligence">Markets</a>
+ <a href="#appLockRiskControls">Risk</a>
+ <a href="#appLockReports">Reports</a>
+ </nav>
+ <div class="app-lock-search" aria-label="Search placeholder">
+ <span></span>
+ <b>Search symbols, scanners, journals...</b>
+ <kbd>Ctrl K</kbd>
+ </div>
+ <button class="app-lock-nav-login" type="button">Unlock Futures</button>
+ <a class="app-lock-nav-primary" href="#appLockProductRail">See Features</a>
+ </header>
+
+ <main class="app-lock-main">
+ <section class="app-lock-hero" aria-label="FWD TradeDesk Pro homepage">
+ <div class="app-lock-hero-copy">
+ <div class="app-lock-kicker app-lock-command-kicker">Welcome to your Command Center</div>
+ <h1 class="app-lock-title" id="appLockTitle">Trade futures only after the desk says <span>go</span></h1>
+ <div class="app-lock-rotator" aria-label="Product focus">
+ <strong>Scanner</strong><i></i><strong>Options</strong><i></i><strong>Charts</strong><i></i><strong>Risk</strong><i></i><strong>Journal</strong>
+ </div>
+ <p>FWD keeps the trader calm: first it shows the best setup, then the risk blocker, then the next action. You unlock only when you are ready to act.</p>
+ <div class="app-lock-built-grid">
+ <div><small>built for</small><strong>Active Traders</strong></div>
+ <div><small>built for</small><strong>Risk-First Automation</strong></div>
+ </div>
+ <div class="app-lock-trust-row" aria-label="Product highlights">
+ <div><b>Command Center</b><span>What to do now, not more noise.</span></div>
+ <div><b>Live Risk Gate</b><span>Blocked states speak first.</span></div>
+ <div><b>Options Builder</b><span>Plan before execution.</span></div>
+ </div>
+ </div>
+
+ <div class="app-lock-product-stage" aria-hidden="true">
+ <div class="app-lock-chart-card">
+ <div class="app-lock-card-top"><span>BTCUSDT PERP</span><strong>67,842.12</strong></div>
+ <div class="app-lock-mini-chart app-lock-mini-chart--line">
+ <i style="height:34%"></i><i style="height:48%"></i><i style="height:42%"></i><i style="height:58%"></i><i style="height:51%"></i><i style="height:64%"></i><i style="height:72%"></i><i style="height:61%"></i><i style="height:78%"></i><i style="height:86%"></i>
+ </div>
+ </div>
+ <div class="app-lock-queue-card">
+ <div class="app-lock-card-top"><span>Scanner Queue</span><strong>12</strong></div>
+ <p><b>BTC Breakout</b><span>Score 92</span></p>
+ <p><b>ETH Reversal</b><span>Score 87</span></p>
+ <p><b>SOL Pullback</b><span>Score 84</span></p>
+ <p><b>DOGE Volume Spike</b><span>Score 76</span></p>
+ </div>
+ <div class="app-lock-action-card">
+ <span>Next Action</span>
+ <strong>Review long breakout</strong>
+ <small>Entry 67,720 | Target 68,450 | Stop 66,980</small>
+ <em>Confidence 87%</em>
+ </div>
+ <div class="app-lock-risk-card">
+ <span>Live Risk Gate</span>
+ <strong>Trading Allowed</strong>
+ <small>Daily loss guard and kill switch are clear.</small>
+ </div>
+ <div class="app-lock-journal-card">
+ <span>Journal Timeline</span>
+ <p>10:32 BTC breakout triggered</p>
+ <p>10:15 ETH reversal signaled</p>
+ <p>09:47 Daily loss guard updated</p>
+ </div>
+ </div>
+ </section>
+
+ <section class="app-lock-card" aria-label="Login form">
+ <div class="app-lock-head">
+ <img src="icons/icon128.png" alt="" aria-hidden="true">
+ <div class="app-lock-kicker">Secure access</div>
+ <div class="app-lock-form-title" id="appLockFormTitle">Unlock Futures</div>
+ <div class="app-lock-copy" id="appLockFormCopy">Use one password. Open the desk only when the setup, risk, and action are clear.</div>
  </div>
 
  <form class="app-lock-section" id="appLockSetup" hidden>
  <label class="app-lock-field">
- <span>Create App Password</span>
+ <span>Create password</span>
  <input type="password" id="appLockSetupPassword" autocomplete="new-password" minlength="8" required>
  </label>
  <label class="app-lock-field">
@@ -543,10 +626,6 @@
  <input type="checkbox" id="appLockSetupTotp">
  <span>Enable Microsoft Authenticator 6-digit code for login</span>
  </label>
- <label class="app-lock-field">
- <span>Auto-lock after inactivity</span>
- <input type="number" id="appLockSetupAutoLock" min="1" max="240" value="15">
- </label>
  <div class="app-lock-actions">
  <button class="app-lock-primary" type="submit">Enable App Lock</button>
  </div>
@@ -554,7 +633,7 @@
 
  <form class="app-lock-section" id="appLockLogin" hidden>
  <label class="app-lock-field">
- <span>App Password</span>
+ <span>Password</span>
  <input type="password" id="appLockLoginPassword" autocomplete="current-password" required>
  </label>
  <label class="app-lock-field" id="appLockLoginCodeWrap" hidden>
@@ -562,7 +641,7 @@
  <input type="text" id="appLockLoginCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000">
  </label>
  <div class="app-lock-actions">
- <button class="app-lock-primary" type="submit">Login</button>
+ <button class="app-lock-primary" type="submit">Unlock Futures</button>
  <button class="app-lock-secondary" id="appLockShowRecovery" type="button">Reset Password</button>
  </div>
  </form>
@@ -597,20 +676,59 @@
  <code id="appLockRecoveryDisplay"></code>
  </div>
  <!-- SEC-05: otpauth URI field removed to prevent TOTP secret exposure in the DOM -->
- <label class="app-lock-field">
- <span>Auto-lock minutes</span>
- <input type="number" id="appLockAutoLockMinutes" min="1" max="240" value="15">
- </label>
  <div class="app-lock-copy">Scan the QR in Microsoft Authenticator, or enter the setup key manually. Keep the recovery code private; it is shown only after setup or reset.</div>
  <div class="app-lock-actions">
  <button class="app-lock-secondary" id="appLockCopyKey" type="button">Copy Key</button>
  <button class="app-lock-secondary" id="appLockCopyRecovery" type="button">Copy Recovery</button>
- <button class="app-lock-secondary" id="appLockSaveAutoLock" type="button">Save Auto-lock</button>
  <button class="app-lock-primary" id="appLockContinue" type="button">Continue</button>
  </div>
  </div>
 
  <div class="app-lock-message" id="appLockMessage"></div>
+ </section>
+
+ <section class="app-lock-product-rail" id="appLockProductRail" aria-label="FWD TradeDesk Pro products">
+ <button type="button" class="active"><strong>Command Center</strong><span>Decision-first cockpit</span></button>
+ <button type="button"><strong>Scanner</strong><span>Real-time opportunities</span></button>
+ <button type="button"><strong>Options</strong><span>Strategy builder and chains</span></button>
+ <button type="button"><strong>Chart</strong><span>Clean professional charting</span></button>
+ <button type="button"><strong>Risk</strong><span>Live protection layer</span></button>
+ <button type="button"><strong>Journal</strong><span>Replay and lessons</span></button>
+ </section>
+
+ <section class="app-lock-feature-bands">
+ <div class="app-lock-feature-band" id="appLockMarketIntelligence">
+ <div>
+ <div class="app-lock-band-icon">F</div>
+ <h2>Markets that explain themselves</h2>
+ <p>Scanner families separate tradeable movement from noise, so the trader sees why a coin deserves attention before opening a chart.</p>
+ </div>
+ <div class="app-lock-band-grid">
+ <span>Wizard Scanner</span><span>Stage Scanner</span><span>Darvas Scanner</span><span>Radar Scanner</span><span>Reversal Scanner</span><span>Pullback Scanner</span>
+ </div>
+ </div>
+ <div class="app-lock-feature-band app-lock-feature-band--risk" id="appLockRiskControls">
+ <div>
+ <div class="app-lock-band-icon">R</div>
+ <h2>Risk before excitement</h2>
+ <p>The app is designed to slow bad clicks: kill switch, daily loss, paper-only state, and live-order permission stay visible before action.</p>
+ </div>
+ <div class="app-lock-band-grid">
+ <span>Kill Switch</span><span>Paper Only</span><span>Live Orders Gate</span><span>Daily Loss Guard</span><span>Funding Risk</span><span>Correlation Matrix</span>
+ </div>
+ </div>
+ <div class="app-lock-feature-band app-lock-feature-band--reports" id="appLockReports">
+ <div>
+ <div class="app-lock-band-icon">J</div>
+ <h2>Reports that improve the next trade</h2>
+ <p>Journal, funding, and matrix views turn each decision into evidence instead of memory.</p>
+ </div>
+ <div class="app-lock-band-grid">
+ <span>Trade Journal</span><span>Replay Notes</span><span>Funding Heatmap</span><span>Correlation Review</span><span>Release Diagnostics</span>
+ </div>
+ </div>
+ </section>
+ </main>
  </div>
 </div>
 
@@ -626,7 +744,6 @@
 <script src="scripts/popup/04-research-risk.js"></script>
 <script src="scripts/popup/05-settings-webhooks-helpers.js"></script>
 <script src="scripts/popup/06-pane-templates.js"></script>
-<script src="scripts/popup/09-strategy-lab.js"></script>
 <script src="app-lock.js"></script>
 <script src="popup.js"></script>
 </body>

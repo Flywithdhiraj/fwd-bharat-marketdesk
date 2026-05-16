@@ -124,6 +124,7 @@ positionsFilter: 'all',
   lastPositionMetrics: null,
   positionAlertState: {},
   positionNotificationsEnabled: false,
+  notificationSourceFilter: 'all',
   uxHintDismissals: {},
 };
 let v16LiveAnalyticsView = {
@@ -132,6 +133,11 @@ let v16LiveAnalyticsView = {
  instrument: 'all',
  setupMode: 'all',
  setupSort: 'impact',
+ tradeCheckSymbol: '',
+ tradeCheckSide: 'long',
+ tradeCheckEntry: '',
+ tradeCheckStop: '',
+ tradeCheckTarget: '',
  autoRefresh: false,
  legend: {
  deposits: true,
@@ -449,7 +455,6 @@ function v16ResolveTradeEntryBlockReason({ symbol = '', preview = null, profile 
  const activeProfile = profile || getV16ActiveAccountProfile();
  const resolvedSymbol = String(symbol || preview?.symbol || '').trim().toUpperCase();
  if (!resolvedSymbol) return '';
- if (draft?.manualOverride === true) return '';
  const blockedSymbols = new Set(v16ResolveBlockedSymbols(activeProfile));
  if (blockedSymbols.has(resolvedSymbol)) {
  return `${resolvedSymbol} is blocked for live trading in the active profile.`;
@@ -461,9 +466,8 @@ function v16ResolveTradeEntryBlockReason({ symbol = '', preview = null, profile 
  ? Math.min(profileCapUSD, requestedCapUSD)
  : profileCapUSD;
  const estimatedNotional = Number(preview?.estimatedNotional || 0);
- // Allow 5% rounding buffer so contract-size rounding never hard-blocks an order
  if (estimatedNotional > maxOrderUSD * 1.05) {
- return `Order blocked: actual notional $${v16FmtNumber(estimatedNotional, 2)} exceeds the allowed cap of $${v16FmtNumber(maxOrderUSD, 2)} after contract rounding.`;
+ return `Order blocked: actual notional $${v16FmtNumber(estimatedNotional, 2)} exceeds the allowed cap of $${v16FmtNumber(maxOrderUSD, 2)}. Exchange minimum contract size rounded this order above your limit.`;
  }
  }
  return '';
@@ -853,6 +857,11 @@ function v16RenderJournal(trades = []) {
  <div class="live-journal-meta">${v16Esc(tradeStory)}</div>
  <div class="live-journal-meta">${v16Esc(diagnosticSummary || 'Trade summary will become richer after more tracked closes.')}</div>
  <div class="live-journal-meta">${review.notes ? v16Esc(v16BuildJournalSummary(review)) : v16Esc(v16BuildJournalLessonStatus(review))}</div>
+ <div class="live-journal-row-actions" aria-hidden="true">
+ <span>Review</span>
+ <span>Replay</span>
+ <span>${review.notes ? 'Edit Lesson' : 'Add Lesson'}</span>
+ </div>
  </button>`;
  }).join('');
  wrap.querySelectorAll('[data-live-journal-id]').forEach(button => {
@@ -974,7 +983,10 @@ async function openV16JournalDetail(trade = {}) {
  const lessonPlaceholder = v16BuildJournalLessonsPlaceholder(trade, review);
  const holdMinutes = Number(trade.holdMinutes || 0);
  const shiftCount = Array.isArray(trade.targetShiftEvents) ? trade.targetShiftEvents.length : 0;
- const tradeTypeLabel = String(review.type || 'unknown').replace(/-/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+ const normalizedReviewType = String(review.type || 'unknown').trim();
+ const tradeTypeLabel = normalizedReviewType && normalizedReviewType !== 'unknown'
+ ? normalizedReviewType.replace(/-/g, ' ').replace(/\b\w/g, char => char.toUpperCase())
+ : `${tradeMode} ${String(trade.side || '').toUpperCase()}`.trim();
  v16LiveAccountView.activeJournalId = String(trade.id || '');
  body.innerHTML = `
  <div class="live-journal-summary-band">
@@ -1004,7 +1016,6 @@ async function openV16JournalDetail(trade = {}) {
  <div class="live-journal-detail-main">
  <div class="live-order-preview-card">
  <div class="v16-section-title"><div class="mo-section">Trade Summary</div>${v16BuildInlineHelpHtml('Trade summary', 'This section compresses the trade into the shortest readable story: trade type, hold time, planned risk path, and lesson status.')}</div>
- <div class="live-order-preview-copy">This is the short version of the trade: what happened, how long it ran, and how the system managed it.</div>
  <div class="live-journal-detail-grid">
  <div><span>Trade Type</span><strong>${v16Esc(tradeTypeLabel)}</strong><small>${v16Esc(tradeMode)} ${v16Esc(String(trade.side || '').toUpperCase())}${reverseMeta.enabled ? ` | ${v16Esc(reverseMeta.detail)}` : ''}</small></div>
  <div><span>Held</span><strong>${holdMinutes > 0 ? `${v16Esc(String(holdMinutes))}m` : '-'}</strong><small>${trade.rMultiple != null && Number.isFinite(Number(trade.rMultiple)) ? v16Esc(`${Number(trade.rMultiple).toFixed(2)}R realized`) : 'R multiple unavailable'}</small></div>
@@ -1025,14 +1036,6 @@ async function openV16JournalDetail(trade = {}) {
  </div>
  <div class="live-journal-detail-form">
  <div class="v16-section-title"><div class="mo-section">Lessons</div>${v16BuildInlineHelpHtml('Journal checklist', 'Use the checklist to mark whether you followed plan, respected risk, and executed cleanly before writing your lesson note.')}</div>
- <div class="live-order-preview-copy">Separate what the system did from what you learned, then capture what went well and what to improve next time.</div>
- ${v16BuildFirstUseHintHtml({
- key: 'journal_checklist',
- title: 'Journal notes now split system behavior from trader learning',
- body: 'Fill What Went Well, What To Improve Next Time, and the checklist first. Then use the main note box to compare what FWD TradeDesk Pro did with what you learned from the trade.',
- dismissals: uxHintDismissals,
- tone: 'info',
- })}
  <div class="live-order-preview-grid live-journal-detail-form-grid">
  <label class="account-field"><span>Trade Type</span>
  <select class="si" id="liveJournalType">
@@ -1063,14 +1066,6 @@ async function openV16JournalDetail(trade = {}) {
  <div class="live-journal-detail-side">
  <div class="live-order-preview-card live-journal-chart-review-card">
  <div class="v16-section-title"><div class="mo-section">Replay</div>${v16BuildInlineHelpHtml('Replay controls', 'Use Back and Forward to step through the trade, Reset to restart the story, and Open Full Chart when you need more space.')}</div>
- <div class="live-order-preview-copy">This replay keeps the trade story front and center: entry, stop, targets, target shifts, and final exit. The journal view hides extra workspace controls so review stays fast.</div>
- ${v16BuildFirstUseHintHtml({
- key: 'journal_replay',
- title: 'Replay is now chart-story first',
- body: 'The journal replay keeps entry, stop, target ladder, shifts, and exit visible by default. Extra workspace controls stay hidden until you open the full chart.',
- dismissals: uxHintDismissals,
- tone: 'info',
- })}
  ${v16BuildJournalReplayLegendHtml(trade)}
  <div id="liveJournalChartPreview"></div>
  </div>
@@ -2403,8 +2398,10 @@ function buildV16SessionSummary(snapshot = {}) {
  const regimeMeta = getMarketRegimeMeta(marketIndex?.regime);
  const thresholds = getRegimeThresholds(marketIndex?.regime, marketIndex?.thresholds || {});
  const thresholdCopy = `Execute >= ${thresholds.alertScore} | Setup >= ${thresholds.setupScore} | Watch >= ${thresholds.watchScore}`;
+ const sentimentValue = Number(marketIndex?.sentiment?.value ?? marketIndex?.value ?? 0);
+ const indexMove = Number(marketIndex?.indexChangePct ?? 0);
  const regimeCopy = marketIndex?.value != null
- ? `${directionLabel} direction | ${regimeMeta.label} volatility structure | ${Number(marketIndex.value) >= 0 ? '+' : ''}${Number(marketIndex.value).toFixed(2)}% FWD-10`
+ ? `${directionLabel} sentiment | ${regimeMeta.label} volatility structure | Index ${indexMove >= 0 ? '+' : ''}${indexMove.toFixed(2)}% | Sent ${sentimentValue >= 0 ? '+' : ''}${sentimentValue.toFixed(2)}%`
  : `Breadth ${breadth >= 0 ? '+' : ''}${breadth} with ${scanResults.length} live signals`;
  return {
  profile,
@@ -2564,7 +2561,7 @@ async function renderV16DecisionEngineShell(preloaded = null) {
  <div class="regime-block">
  <span>Regime</span>
  <strong>${v16Esc(summary.regimeLabel)}</strong>
- <small>${marketValue >= 0 ? '+' : ''}${marketValue.toFixed(2)}% FWD-10</small>
+ <small>Sent ${marketValue >= 0 ? '+' : ''}${marketValue.toFixed(2)}% | Index ${Number(summary.marketIndex?.indexChangePct || 0) >= 0 ? '+' : ''}${Number(summary.marketIndex?.indexChangePct || 0).toFixed(2)}%</small>
  </div>
  <div class="regime-block">
  <span>Direction</span>
@@ -2656,19 +2653,6 @@ async function renderV16RiskManageBoard() {
  <div class="risk-manage-card"><span>Live Positions</span><strong>${livePositions}</strong><small>Interactive reductions and closes available in Positions</small></div>
  <div class="risk-manage-card"><span>30D Review</span><strong class="${model.realized >= 0 ? 'good' : 'bad'}">${v16FmtSigned(model.realized)}</strong><small>${model.closedTrades.length} closed trades | ${model.winRate.toFixed(1)}% win rate</small></div>
  </div>
- <div class="risk-manage-section-label">SETUP FAMILY PERFORMANCE (30D)</div>
- <div class="risk-manage-setup-header"><span>Setup</span><span>Trades</span><span>Win%</span><span>P&amp;L</span><span>Expectancy</span></div>
- <div class="risk-manage-setup-rows">${
- model.setupBreakdown.length
- ? model.setupBreakdown.map(s => `<div class="risk-manage-setup-row">
- <span class="rsf-name">${v16Esc(s.family)}</span>
- <span class="rsf-trades">${s.trades}T</span>
- <span class="rsf-wr" style="color:${s.winRate >= 50 ? '#00e5a0' : '#ff4560'}">${s.winRate}%</span>
- <span class="rsf-pnl" style="color:${s.pnl >= 0 ? '#00e5a0' : '#ff4560'}">${v16FmtSigned(s.pnl)}</span>
- <span class="rsf-exp" style="color:${s.expectancy >= 0 ? '#00e5a0' : '#ff4560'}">${s.expectancy >= 0 ? '+' : ''}${s.expectancy}</span>
- </div>`).join('')
- : '<div class="account-inline-note">No setup-tagged trades in range. Tag trades in journal to see breakdown.</div>'
- }</div>
  <div class="risk-manage-section-label">R-MULTIPLE DISTRIBUTION${model.rDistribution.avgR !== null ? ` &nbsp; | &nbsp; Avg R: <span style="color:${model.rDistribution.avgR >= 1 ? '#00e5a0' : '#ff4560'}">${model.rDistribution.avgR >= 0 ? '+' : ''}${model.rDistribution.avgR}R</span>` : ''}</div>
  <div class="risk-manage-r-rows">${
  model.rDistribution.count > 0
@@ -2830,6 +2814,57 @@ function syncV16SettingsPanelState() {
  activateV16SettingsPanel(document.querySelector('.settings-rail-item.active')?.dataset.settingsTarget || 'profile');
 }
 
+function filterV16SettingsRail(query = '') {
+ const needle = String(query || '').trim().toLowerCase();
+ const rail = document.querySelector('#pane-strategy .settings-left-rail');
+ if (!rail) return;
+ rail.querySelectorAll('.settings-rail-group, .settings-rail-more').forEach(group => {
+ let visibleCount = 0;
+ group.querySelectorAll('.settings-rail-item').forEach(button => {
+ const haystack = [
+ button.textContent || '',
+ button.dataset.settingsTarget || '',
+ button.dataset.settingsTab || '',
+ ].join(' ').toLowerCase();
+ const visible = !needle || haystack.includes(needle);
+ button.hidden = !visible;
+ if (visible) visibleCount += 1;
+ });
+ group.hidden = visibleCount === 0 && !!needle;
+ });
+}
+
+function markV16SettingsDirty(source = null) {
+ const layout = document.querySelector('#pane-strategy .account-profiles-layout');
+ if (!layout) return;
+ layout.classList.add('settings-dirty');
+ const label = document.getElementById('settingsSaveStateLabel');
+ if (label) {
+ const panel = source?.closest?.('[data-settings-panel]')?.dataset?.settingsPanel || layout.dataset.activeSettingsPanel || '';
+ const activeButton = panel ? document.querySelector(`#pane-strategy [data-settings-target="${CSS.escape(panel)}"] span`) : null;
+ label.textContent = activeButton?.textContent ? `${activeButton.textContent} changed` : 'Unsaved settings';
+ }
+}
+
+function clearV16SettingsDirty() {
+ document.querySelector('#pane-strategy .account-profiles-layout')?.classList.remove('settings-dirty');
+ const label = document.getElementById('settingsSaveStateLabel');
+ if (label) label.textContent = 'No visible changes';
+}
+
+function setV16SettingsSubfilter(filter = 'all') {
+ const safeFilter = String(filter || 'all').trim().toLowerCase() || 'all';
+ const library = document.querySelector('#pane-strategy .settings-library');
+ if (!library) return;
+ library.querySelectorAll('[data-settings-panel-tabs="scanner-rules"] button').forEach(button => {
+ button.classList.toggle('active', String(button.dataset.settingsSubfilter || 'all') === safeFilter);
+ });
+ library.querySelectorAll('[data-settings-panel="scanner-rules"][data-settings-subsection]').forEach(section => {
+ const tags = String(section.dataset.settingsSubsection || '').toLowerCase().split(/\s+/).filter(Boolean);
+ section.classList.toggle('settings-subsection-hidden', safeFilter !== 'all' && !tags.includes(safeFilter));
+ });
+}
+
 function activateV16SettingsPanel(panel = 'profile') {
  const target = String(panel || 'profile').trim() || 'profile';
  const layout = document.querySelector('.account-profiles-layout');
@@ -2870,7 +2905,7 @@ function activateV16SettingsPanel(panel = 'profile') {
  recovery: ['DEVELOPER / DEBUG', 'Recovery Center', 'Common blocked states and recovery actions for scanner, account sync, and execution readiness.'],
  'scanner-rules': ['SCANNER RULES', 'Scanner & Market Data', 'Signal filters, timeframes, scan limits, market-data mode, and FWD-10 basket settings.'],
  'strategy-profiles': ['SCANNER RULES', 'Strategy Profiles', 'Presets that update scanner, paper, chart, and risk-template fields before saving.'],
- 'futures-auto': ['AUTOMATION', 'Futures Auto-Trade', 'Live futures execution gates, size limits, funding exits, backtest checks, and notifications.'],
+ 'futures-auto': ['AUTOMATION', 'Futures Auto-Trade', 'Live futures execution gates, size limits, funding exits, and notifications.'],
  'options-auto': ['AUTOMATION', 'Options Auto-Trade', 'Defined-risk options automation rules for the theta desk.'],
  'straddle-auto': ['AUTOMATION', 'Short Straddle', 'Short straddle entry, re-entry, expiry, premium, skew, and auto-sizing controls.'],
  charts: ['SYSTEM', 'Charts & Levels', 'Chart presets, key levels, and risk-template defaults used by scanner context.'],
@@ -2879,6 +2914,9 @@ function activateV16SettingsPanel(panel = 'profile') {
  const meta = libraryMeta[target];
  if (library) {
  library.classList.toggle('active', !!meta);
+ library.querySelectorAll('[data-settings-panel-tabs]').forEach(tabRow => {
+ tabRow.classList.toggle('active', tabRow.dataset.settingsPanelTabs === target);
+ });
  const kicker = library.querySelector('.settings-stage-kicker');
  const title = library.querySelector('.settings-stage-title');
  const copy = library.querySelector('.settings-stage-copy');
@@ -2899,6 +2937,7 @@ function activateV16SettingsPanel(panel = 'profile') {
  });
  if (target === 'paper-mode') void v16RenderPaperModeSettingsPanel();
  if (target === 'recovery') void v16RenderSettingsRecoveryCenter();
+ if (target === 'scanner-rules') setV16SettingsSubfilter('all');
 }
 
 function v16StatusToneClass(tone = '') {
@@ -4672,6 +4711,11 @@ function v16NormalizeLiveAnalyticsView(value = {}) {
  instrument: 'all',
  setupMode: 'all',
  setupSort: 'impact',
+ tradeCheckSymbol: '',
+ tradeCheckSide: 'long',
+ tradeCheckEntry: '',
+ tradeCheckStop: '',
+ tradeCheckTarget: '',
  autoRefresh: false,
  legend: {
  deposits: true,
@@ -4699,6 +4743,11 @@ function v16NormalizeLiveAnalyticsView(value = {}) {
  normalized.setupSort = ['impact', 'expectancy', 'live', 'winRate'].includes(String(normalized.setupSort || ''))
  ? String(normalized.setupSort)
  : 'impact';
+ normalized.tradeCheckSymbol = v16NormalizeSymbol(normalized.tradeCheckSymbol || '').slice(0, 40);
+ normalized.tradeCheckSide = String(normalized.tradeCheckSide || '').toLowerCase() === 'short' ? 'short' : 'long';
+ normalized.tradeCheckEntry = String(normalized.tradeCheckEntry || '').trim().slice(0, 40);
+ normalized.tradeCheckStop = String(normalized.tradeCheckStop || '').trim().slice(0, 40);
+ normalized.tradeCheckTarget = String(normalized.tradeCheckTarget || '').trim().slice(0, 40);
  normalized.autoRefresh = normalized.autoRefresh === true;
  normalized.legend = {
  deposits: normalized.legend?.deposits !== false,
@@ -5047,24 +5096,36 @@ function v16RenderAnalyticsReliabilityPanel(snapshot = {}, analyticsModel = null
  });
 }
 
-function v16RenderAnalyticsDailyControlPanel(analyticsModel = {}, shadowLedger = {}) {
+function v16RenderAnalyticsDailyControlPanel(analyticsModel = {}, shadowLedger = {}, options = {}) {
  const wrap = document.getElementById('liveAnalyticsDailyControlPanel');
  if (!wrap) return;
+ const paperOnly = options?.paperOnly === true;
  const dayStart = v16LocalStartOfDay(Date.now());
  const paperClosedToday = (Array.isArray(shadowLedger?.closed) ? shadowLedger.closed : []).filter(trade => Number(trade.closedAt || 0) >= dayStart);
  const paperWins = paperClosedToday.filter(trade => Number(trade.rMultiple ?? trade.pnl ?? 0) > 0).length;
  const paperR = paperClosedToday.reduce((sum, trade) => sum + Number(trade.rMultiple ?? 0), 0);
+ const paperClosedAll = Array.isArray(shadowLedger?.closed) ? shadowLedger.closed : [];
+ const paperOpen = Array.isArray(shadowLedger?.open) ? shadowLedger.open : [];
+ const paperWinsAll = paperClosedAll.filter(trade => Number(trade.rMultiple ?? trade.pnl ?? 0) > 0).length;
  const liveClosed = Number(analyticsModel?.tradeCount || 0);
  const livePnl = Number(analyticsModel?.realized || 0);
  const winRate = Number(analyticsModel?.winRate || 0);
- wrap.innerHTML = `
- <section class="risk-manage-setup-shell">
- <div class="risk-manage-section-label">DAILY CONTROL DASHBOARD</div>
- <div class="risk-manage-setup-summary">
+ const cards = paperOnly
+ ? `
+ <article class="risk-manage-setup-summary-card ${paperR >= 0 ? 'tone-good' : 'tone-bad'}"><span>Paper Today</span><strong>${paperClosedToday.length ? `${paperR >= 0 ? '+' : ''}${v16FmtNumber(paperR, 2)}R` : 'NONE'}</strong><small>${paperClosedToday.length} closed | ${paperWins}/${paperClosedToday.length || 0} wins | ${paperOpen.length} open</small></article>
+ <article class="risk-manage-setup-summary-card tone-info"><span>Open Paper</span><strong>${paperOpen.length}</strong><small>Shadow trades still active.</small></article>
+ <article class="risk-manage-setup-summary-card ${paperClosedAll.length ? 'tone-good' : 'tone-muted'}"><span>Closed Paper</span><strong>${paperClosedAll.length}</strong><small>${paperClosedAll.length ? `${paperWinsAll}/${paperClosedAll.length} wins in ledger.` : 'No paper sample yet.'}</small></article>
+ <article class="risk-manage-setup-summary-card tone-warn"><span>Best Use</span><strong>Paper first</strong><small>Promote only setups with enough closed samples and positive expectancy.</small></article>`
+ : `
  <article class="risk-manage-setup-summary-card ${livePnl >= 0 ? 'tone-good' : 'tone-bad'}"><span>Live Closed P&amp;L</span><strong>${v16FmtSigned(livePnl)}</strong><small>${liveClosed} closed in selected range | ${v16FmtNumber(winRate, 1)}% win</small></article>
  <article class="risk-manage-setup-summary-card ${paperR >= 0 ? 'tone-good' : 'tone-bad'}"><span>Paper Today</span><strong>${paperClosedToday.length ? `${paperR >= 0 ? '+' : ''}${v16FmtNumber(paperR, 2)}R` : 'NONE'}</strong><small>${paperClosedToday.length} closed | ${paperWins}/${paperClosedToday.length || 0} wins | ${Number(shadowLedger?.open?.length || 0)} open</small></article>
  <article class="risk-manage-setup-summary-card tone-info"><span>Kill / Slots</span><strong>Review</strong><small>Use Orders health strip for live slot, kill switch, and profile state.</small></article>
- <article class="risk-manage-setup-summary-card tone-warn"><span>Best Use</span><strong>Paper first</strong><small>Promote only setups with enough closed samples and positive expectancy.</small></article>
+ <article class="risk-manage-setup-summary-card tone-warn"><span>Best Use</span><strong>Paper first</strong><small>Promote only setups with enough closed samples and positive expectancy.</small></article>`;
+ wrap.innerHTML = `
+ <section class="risk-manage-setup-shell">
+ <div class="risk-manage-section-label">${paperOnly ? 'PAPER TODAY' : 'DAILY CONTROL DASHBOARD'}</div>
+ <div class="risk-manage-setup-summary">
+ ${cards}
  </div>
  </section>`;
 }
@@ -5074,7 +5135,10 @@ function v16RenderPaperLedgerPanel(shadowLedger = {}) {
  if (!wrap) return;
  const open = Array.isArray(shadowLedger?.open) ? shadowLedger.open : [];
  const closed = Array.isArray(shadowLedger?.closed) ? shadowLedger.closed : [];
- const rows = [...open.slice(0, 12), ...closed.slice(0, 18)].slice(0, 24);
+ const focusSymbol = typeof v16NormalizeTradeCheckSymbol === 'function' ? v16NormalizeTradeCheckSymbol(v16LiveAnalyticsView?.tradeCheckSymbol || '') : '';
+ const filteredOpen = focusSymbol ? open.filter(trade => v16NormalizeSymbol(trade.symbol || '') === focusSymbol) : open;
+ const filteredClosed = focusSymbol ? closed.filter(trade => v16NormalizeSymbol(trade.symbol || '') === focusSymbol) : closed;
+ const rows = [...filteredOpen.slice(0, 12), ...filteredClosed.slice(0, 18)].slice(0, 24);
  const renderRow = trade => {
  const isClosed = String(trade?.status || '').toLowerCase() === 'closed';
  const r = trade?.rMultiple === null || trade?.rMultiple === undefined ? '-' : `${Number(trade.rMultiple) >= 0 ? '+' : ''}${v16FmtNumber(Number(trade.rMultiple || 0), 2)}R`;
@@ -5084,20 +5148,35 @@ function v16RenderPaperLedgerPanel(shadowLedger = {}) {
  <span><strong class="rsf-cell-main">${v16FmtPrice(Number(trade.entryPrice || 0))}</strong><small class="rsf-cell-meta">Entry</small></span>
  <span><strong class="rsf-cell-main">${v16FmtPrice(Number(trade.stopLoss || 0))}</strong><small class="rsf-cell-meta">SL</small></span>
  <span><strong class="rsf-cell-main">${v16FmtPrice(Number(trade.takeProfit || 0))}</strong><small class="rsf-cell-meta">TP</small></span>
- <span><strong class="rsf-cell-main ${Number(trade?.rMultiple || trade?.pnl || 0) >= 0 ? 'good' : 'bad'}">${v16Esc(isClosed ? r : 'OPEN')}</strong><small class="rsf-cell-meta">${v16Esc(triggerText)}</small></span>
+ <span><strong class="rsf-cell-main ${Number(trade?.rMultiple || trade?.pnl || 0) >= 0 ? 'good' : 'bad'}">${v16Esc(isClosed ? r : 'OPEN')}</strong><small class="rsf-cell-meta">${v16Esc(triggerText)}</small>${isClosed ? `<button class="bsm mini" type="button" data-paper-ledger-replay="${v16Esc(trade.id || '')}">Replay</button>` : `<button class="bsm mini" type="button" data-paper-ledger-chart="${v16Esc(trade.symbol || '')}">Chart</button>`}</span>
  </div>`;
  };
  wrap.innerHTML = `
  <section class="risk-manage-setup-shell">
  <div class="risk-manage-section-label">PAPER / SHADOW LEDGER</div>
  <div class="risk-manage-setup-summary">
- <article class="risk-manage-setup-summary-card tone-info"><span>Open Paper</span><strong>${open.length}</strong><small>Simulated trades still active.</small></article>
- <article class="risk-manage-setup-summary-card ${closed.length ? 'tone-good' : 'tone-muted'}"><span>Closed Paper</span><strong>${closed.length}</strong><small>Stored locally, max 1000 rows.</small></article>
+ <article class="risk-manage-setup-summary-card tone-info"><span>Open Paper</span><strong>${filteredOpen.length}</strong><small>${focusSymbol ? `${v16Esc(focusSymbol)} filter active.` : 'Simulated trades still active.'}</small></article>
+ <article class="risk-manage-setup-summary-card ${filteredClosed.length ? 'tone-good' : 'tone-muted'}"><span>Closed Paper</span><strong>${filteredClosed.length}</strong><small>${focusSymbol ? `Closed for ${v16Esc(focusSymbol)}.` : 'Stored locally, max 1000 rows.'}</small></article>
  <article class="risk-manage-setup-summary-card tone-warn"><span>Ledger Rule</span><strong>No orders</strong><small>Paper mode never sends Delta orders.</small></article>
  </div>
  <div class="risk-manage-setup-header"><span>Trade</span><span>Entry</span><span>SL</span><span>TP</span><span>Outcome</span></div>
- <div class="risk-manage-setup-rows">${rows.length ? rows.map(renderRow).join('') : `<div class="account-inline-note">No paper trades yet. Keep Auto Scan and Paper Tracking enabled while the app stays open.</div>`}</div>
+ <div class="risk-manage-setup-rows">${rows.length ? rows.map(renderRow).join('') : `<div class="account-inline-note">${focusSymbol ? `No paper trades yet for ${v16Esc(focusSymbol)}.` : 'No paper trades yet. Keep Auto Scan and Paper Tracking enabled while the app stays open.'}</div>`}</div>
  </section>`;
+ wrap.querySelectorAll('[data-paper-ledger-chart]').forEach(button => {
+ button.addEventListener('click', event => {
+ event.preventDefault();
+ event.stopPropagation();
+ void v16OpenAnalyticsChart?.(button.dataset.paperLedgerChart || '');
+ });
+ });
+ wrap.querySelectorAll('[data-paper-ledger-replay]').forEach(button => {
+ button.addEventListener('click', event => {
+ event.preventDefault();
+ event.stopPropagation();
+ const trade = rows.find(item => String(item.id || '') === String(button.dataset.paperLedgerReplay || ''));
+ if (trade) void v16OpenAnalyticsChart?.(trade.symbol || '', trade);
+ });
+ });
 }
 
 function v16DownloadCsv(filename = '', headers = [], rows = []) {
@@ -5730,6 +5809,234 @@ function v16RenderAnalyticsBarChart(elementId, series = [], tone = 'neutral', em
  });
 }
 
+function v16NormalizeTradeCheckSymbol(value = '') {
+ const raw = String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+ if (!raw) return '';
+ if (raw === 'FWD100') return 'FWD100';
+ if (raw.endsWith('USD') || raw.endsWith('USDT')) return raw;
+ return `${raw}USD`;
+}
+
+function v16TradeCheckSourceMeta(id = '') {
+ const key = String(id || '').trim().toLowerCase();
+ const labels = { current: 'Current Live', wizard: 'Wizard', stage: 'Stage', radar: 'Radar', reversal: 'Reversal', darvas: 'Darvas', pullback: 'Pullback', native_straddle: 'Native Straddle' };
+ return labels[key] || (key ? key.replace(/_/g, ' ') : 'Scanner');
+}
+
+async function v16LoadStrategyRowsForSymbol(symbol = '') {
+ const normalized = v16NormalizeTradeCheckSymbol(symbol);
+ if (!normalized) return [];
+ const store = await storeGet(['scanResults', 'strategyResults.wizard', 'strategyResults.stage', 'strategyResults.radar', 'strategyResults.reversal', 'strategyResults.darvas', 'strategyResults.pullback', 'strategyResults.native_straddle']).catch(() => ({}));
+ const sources = [
+ ['current', store.scanResults],
+ ['wizard', store['strategyResults.wizard']],
+ ['stage', store['strategyResults.stage']],
+ ['radar', store['strategyResults.radar']],
+['reversal', store['strategyResults.reversal']],
+['darvas', store['strategyResults.darvas']],
+['pullback', store['strategyResults.pullback']],
+['native_straddle', store['strategyResults.native_straddle']],
+ ];
+ return sources.flatMap(([sourceId, rows]) => (Array.isArray(rows) ? rows : [])
+ .filter(row => v16NormalizeTradeCheckSymbol(row?.symbol || row?.raw?.symbol || '') === normalized)
+ .slice(0, 6)
+ .map(row => ({
+ ...row,
+ sourceId,
+ sourceLabel: v16TradeCheckSourceMeta(sourceId),
+ signal: String(row.signal || row.action || row.direction || '').toUpperCase(),
+ score: Number(row.score || row.tradeQuality?.score || 0),
+ actionLabel: String(row.actionLabel || row.setupLabel || row.eventType || row.stageLabel || 'Review'),
+ })));
+}
+
+function v16BuildManualTradeCheckDecision({ symbol = '', side = 'long', scannerRows = [], shadowLedger = {}, analyticsModel = {} }) {
+ const desiredSide = String(side || '').toLowerCase() === 'short' ? 'short' : 'long';
+ const rows = Array.isArray(scannerRows) ? scannerRows : [];
+ const supportiveSignals = desiredSide === 'short' ? ['SELL', 'SHORT', 'WATCHLIST'] : ['BUY', 'LONG', 'WATCHLIST'];
+ const best = rows.slice().sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0] || null;
+ const supportive = rows.filter(row => supportiveSignals.includes(String(row.signal || '').toUpperCase()));
+ const avoid = rows.filter(row => ['IGNORE', 'AVOID'].includes(String(row.signal || '').toUpperCase()));
+ const openPaper = (Array.isArray(shadowLedger?.open) ? shadowLedger.open : []).filter(trade => v16NormalizeTradeCheckSymbol(trade.symbol || '') === symbol);
+ const closedPaper = (Array.isArray(shadowLedger?.closed) ? shadowLedger.closed : []).filter(trade => v16NormalizeTradeCheckSymbol(trade.symbol || '') === symbol);
+ const liveTrades = (Array.isArray(analyticsModel?.trades) ? analyticsModel.trades : []).filter(trade => v16NormalizeTradeCheckSymbol(trade.symbol || '') === symbol);
+ const avgPaperR = closedPaper.length ? closedPaper.reduce((sum, trade) => sum + Number(trade.rMultiple || 0), 0) / closedPaper.length : 0;
+ const livePnl = liveTrades.reduce((sum, trade) => sum + Number(trade.pnl || 0), 0);
+ let verdict = 'Wait';
+ let tone = 'warn';
+ const reasons = [];
+ if (best && Number(best.score || 0) >= 75 && supportive.length && avoid.length === 0) {
+ verdict = 'Can paper test';
+ tone = 'good';
+ reasons.push(`${best.sourceLabel} has the strongest match with score ${Math.round(Number(best.score || 0))}.`);
+ } else if (best && Number(best.score || 0) >= 60 && supportive.length) {
+ verdict = 'Paper only';
+ tone = 'info';
+ reasons.push(`${supportive.length} scanner match${supportive.length === 1 ? '' : 'es'} support review, but confirmation is not clean enough for live action.`);
+ } else if (avoid.length && !supportive.length) {
+ verdict = 'Avoid now';
+ tone = 'bad';
+ reasons.push(`${avoid[0].sourceLabel} is showing avoid/ignore for this coin.`);
+ } else {
+ reasons.push('No strong scanner agreement for this manual idea yet.');
+ }
+ if (openPaper.length) reasons.push(`${openPaper.length} open paper trade${openPaper.length === 1 ? '' : 's'} already exist for ${symbol}.`);
+ if (closedPaper.length) reasons.push(`Paper history: ${closedPaper.length} closed, avg ${avgPaperR >= 0 ? '+' : ''}${v16FmtNumber(avgPaperR, 2)}R.`);
+ if (liveTrades.length) reasons.push(`Real journal: ${liveTrades.length} closed, P&L ${v16FmtSigned(livePnl)}.`);
+ return { verdict, tone, reasons, best, supportive, avoid, openPaper, closedPaper, liveTrades };
+}
+
+async function v16OpenAnalyticsChart(symbol = '', trade = null) {
+ const normalized = v16NormalizeTradeCheckSymbol(symbol || trade?.symbol || v16LiveAnalyticsView.tradeCheckSymbol || '');
+ if (!normalized || normalized === 'FWD100') return;
+ await globalThis.ensureChartWorkspaceLoaded?.();
+ if (trade) {
+ await globalThis.FWDTradeDeskChartWorkspace?.openReplayForTrade?.(trade);
+ return;
+ }
+ await globalThis.FWDTradeDeskChartWorkspace?.openDetachedChart?.({ symbol: normalized, timeframe: '15m', preset: 'decision', showOrders: true, uiMode: 'default', refreshNonce: Date.now() });
+}
+
+function v16TradeCheckPaperTradeTime(trade = {}) {
+ return Number(trade.closedAt || trade.updatedAt || trade.openedAt || trade.createdAt || 0);
+}
+
+function v16TradeCheckPaperResultText(trade = {}) {
+ const isClosed = String(trade?.status || '').toLowerCase() === 'closed';
+ if (!isClosed) return 'OPEN';
+ if (trade?.rMultiple !== null && trade?.rMultiple !== undefined) {
+ const r = Number(trade.rMultiple || 0);
+ return `${r >= 0 ? '+' : ''}${v16FmtNumber(r, 2)}R`;
+ }
+ return v16FmtSigned(Number(trade.pnl || 0));
+}
+
+function v16TradeCheckPaperRowsHtml(decision = {}, symbol = '') {
+ const paperRows = [
+ ...(Array.isArray(decision.openPaper) ? decision.openPaper.map(trade => ({ ...trade, _paperState: 'open' })) : []),
+ ...(Array.isArray(decision.closedPaper) ? decision.closedPaper.map(trade => ({ ...trade, _paperState: 'closed' })) : []),
+ ].sort((a, b) => v16TradeCheckPaperTradeTime(b) - v16TradeCheckPaperTradeTime(a)).slice(0, 10);
+ if (!paperRows.length) {
+ return `<div class="account-inline-note">No paper trades are recorded for ${v16Esc(symbol)} yet.</div>`;
+ }
+ return `
+ <div class="trade-check-paper-shell">
+ <div class="trade-check-paper-head"><span>Paper trades for ${v16Esc(symbol)}</span><small>${paperRows.length} latest shown. Use the full ledger below for older rows.</small></div>
+ <div class="trade-check-paper-rows">
+ ${paperRows.map(trade => {
+ const isClosed = String(trade.status || '').toLowerCase() === 'closed';
+ const resultNumber = Number(trade?.rMultiple ?? trade?.pnl ?? 0);
+ const resultTone = isClosed ? (resultNumber >= 0 ? 'good' : 'bad') : 'warn';
+ const actionAttr = isClosed ? `data-trade-check-paper-replay="${v16Esc(trade.id || '')}"` : `data-trade-check-paper-chart="${v16Esc(trade.symbol || symbol)}"`;
+ const actionLabel = isClosed ? 'Replay' : 'Chart';
+ const ageTs = v16TradeCheckPaperTradeTime(trade);
+ const ageCopy = ageTs ? `${isClosed ? 'Closed' : 'Updated'} ${v16FormatDurationShort(Math.max(0, Date.now() - ageTs))} ago` : 'Time not stored';
+ return `<div class="trade-check-paper-row state-${resultTone}">
+ <div class="trade-check-paper-main">
+ <strong>${v16Esc(trade.symbol || symbol)} <span>${v16Esc(String(trade.side || '').toUpperCase())}</span></strong>
+ <small>${v16Esc(trade.setupFamilyLabel || trade.setupFamily || 'Paper trade')} | ${v16Esc(trade.timeframe || '15m')} | ${v16Esc(ageCopy)}</small>
+ </div>
+ <div><span>Entry</span><strong>${v16FmtPrice(Number(trade.entryPrice || 0))}</strong></div>
+ <div><span>SL</span><strong>${v16FmtPrice(Number(trade.stopLoss || 0))}</strong></div>
+ <div><span>TP</span><strong>${v16FmtPrice(Number(trade.takeProfit || 0))}</strong></div>
+ <div><span>Result</span><strong class="${resultTone}">${v16Esc(v16TradeCheckPaperResultText(trade))}</strong></div>
+ <button class="bsm mini" type="button" ${actionAttr}>${actionLabel}</button>
+ </div>`;
+ }).join('')}
+ </div>
+ </div>`;
+}
+
+async function v16RenderAnalyticsTradeCheck(analyticsModel = {}, shadowLedger = {}, fallbackScanResults = []) {
+ const root = document.getElementById('liveAnalyticsTradeCheck');
+ if (!root) return;
+ const symbolInput = document.getElementById('liveAnalyticsTradeSymbol');
+ const sideInput = document.getElementById('liveAnalyticsTradeSide');
+ const entryInput = document.getElementById('liveAnalyticsTradeEntry');
+ const stopInput = document.getElementById('liveAnalyticsTradeStop');
+ const targetInput = document.getElementById('liveAnalyticsTradeTarget');
+ const result = document.getElementById('liveAnalyticsTradeCheckResult');
+ const meta = document.getElementById('liveAnalyticsTradeCheckMeta');
+ if (symbolInput && document.activeElement !== symbolInput) symbolInput.value = v16LiveAnalyticsView.tradeCheckSymbol || '';
+ if (sideInput && document.activeElement !== sideInput) sideInput.value = v16LiveAnalyticsView.tradeCheckSide || 'long';
+ if (entryInput && document.activeElement !== entryInput) entryInput.value = v16LiveAnalyticsView.tradeCheckEntry || '';
+ if (stopInput && document.activeElement !== stopInput) stopInput.value = v16LiveAnalyticsView.tradeCheckStop || '';
+ if (targetInput && document.activeElement !== targetInput) targetInput.value = v16LiveAnalyticsView.tradeCheckTarget || '';
+ const commit = async () => {
+ await v16PersistLiveAnalyticsView({
+ tradeCheckSymbol: v16NormalizeTradeCheckSymbol(symbolInput?.value || ''),
+ tradeCheckSide: sideInput?.value || 'long',
+ tradeCheckEntry: entryInput?.value || '',
+ tradeCheckStop: stopInput?.value || '',
+ tradeCheckTarget: targetInput?.value || '',
+ });
+ await v16RenderAnalyticsTradeCheck(analyticsModel, shadowLedger, fallbackScanResults);
+ };
+ [symbolInput, sideInput, entryInput, stopInput, targetInput].forEach(input => {
+ if (!input) return;
+ input.onchange = commit;
+ input.onkeydown = event => {
+ if (event.key === 'Enter') {
+ event.preventDefault();
+ void commit();
+ }
+ };
+ });
+ const checkButton = document.getElementById('btnLiveAnalyticsCheckTrade');
+ const chartButton = document.getElementById('btnLiveAnalyticsOpenChart');
+ if (checkButton) checkButton.onclick = () => { void commit(); };
+ if (chartButton) chartButton.onclick = () => { void v16OpenAnalyticsChart(v16LiveAnalyticsView.tradeCheckSymbol); };
+ const symbol = v16NormalizeTradeCheckSymbol(v16LiveAnalyticsView.tradeCheckSymbol || '');
+ if (!symbol) {
+ if (meta) meta.textContent = 'Search a coin before taking a manual trade.';
+ if (result) result.innerHTML = `<div class="account-inline-note">Enter a coin to compare scanner signals, paper history, and closed journal results.</div>`;
+ return;
+ }
+ const scannerRows = await v16LoadStrategyRowsForSymbol(symbol);
+ const fallbackRows = (Array.isArray(fallbackScanResults) ? fallbackScanResults : [])
+ .filter(row => v16NormalizeTradeCheckSymbol(row?.symbol || '') === symbol)
+ .map(row => ({ ...row, sourceId: 'current', sourceLabel: 'Current Live', signal: String(row.signal || row.direction || '').toUpperCase(), score: Number(row.score || row.tradeQuality?.score || 0), actionLabel: row.setupLabel || row.direction || 'Review' }));
+ const uniqueRows = Array.from(new Map([...scannerRows, ...fallbackRows].map(row => [`${row.sourceId}:${row.symbol}:${row.eventType || row.setupLabel || row.stage || ''}`, row])).values());
+ const decision = v16BuildManualTradeCheckDecision({ symbol, side: v16LiveAnalyticsView.tradeCheckSide, scannerRows: uniqueRows, shadowLedger, analyticsModel });
+ if (meta) meta.textContent = `${symbol} | ${String(v16LiveAnalyticsView.tradeCheckSide || 'long').toUpperCase()} | ${uniqueRows.length} scanner match${uniqueRows.length === 1 ? '' : 'es'}`;
+ if (!result) return;
+ const rowsHtml = uniqueRows.slice(0, 8).map(row => `<div class="live-analytics-match-row"><span>${v16Esc(row.sourceLabel)}</span><strong>${v16Esc(row.actionLabel || row.signal || 'Review')}</strong><small>${v16Esc(String(row.signal || '-'))} | Score ${Math.round(Number(row.score || 0))}</small></div>`).join('');
+ const paperHtml = v16TradeCheckPaperRowsHtml(decision, symbol);
+ result.innerHTML = `
+ <div class="live-analytics-verdict tone-${v16Esc(decision.tone)}"><span>${v16Esc(symbol)}</span><strong>${v16Esc(decision.verdict)}</strong><small>${decision.reasons.map(v16Esc).join(' | ')}</small></div>
+ <div class="live-analytics-trade-actions inline">
+ <button class="bsm" type="button" data-analytics-chart-symbol="${v16Esc(symbol)}">Open Chart</button>
+ ${decision.closedPaper[0] ? `<button class="bsm" type="button" data-analytics-paper-replay="${v16Esc(decision.closedPaper[0].id)}">Replay Last Paper</button>` : ''}
+ ${decision.liveTrades[0] ? `<button class="bsm" type="button" data-analytics-live-replay="${v16Esc(decision.liveTrades[0].id)}">Replay Last Real</button>` : ''}
+ </div>
+ ${paperHtml}
+ <div class="live-analytics-match-grid">${rowsHtml || '<div class="account-inline-note">No scanner currently matches this coin.</div>'}</div>`;
+ result.querySelector('[data-analytics-chart-symbol]')?.addEventListener('click', event => { void v16OpenAnalyticsChart(event.currentTarget?.dataset.analyticsChartSymbol || symbol); });
+ result.querySelector('[data-analytics-paper-replay]')?.addEventListener('click', event => {
+ const trade = decision.closedPaper.find(item => String(item.id || '') === String(event.currentTarget?.dataset.analyticsPaperReplay || '')) || decision.closedPaper[0];
+ void v16OpenAnalyticsChart(symbol, trade);
+ });
+ result.querySelector('[data-analytics-live-replay]')?.addEventListener('click', event => {
+ const trade = decision.liveTrades.find(item => String(item.id || '') === String(event.currentTarget?.dataset.analyticsLiveReplay || '')) || decision.liveTrades[0];
+ void v16OpenAnalyticsChart(symbol, trade);
+ });
+ result.querySelectorAll('[data-trade-check-paper-chart]').forEach(button => {
+ button.addEventListener('click', event => {
+ event.preventDefault();
+ const tradeSymbol = event.currentTarget?.dataset.tradeCheckPaperChart || symbol;
+ void v16OpenAnalyticsChart(tradeSymbol);
+ });
+ });
+ result.querySelectorAll('[data-trade-check-paper-replay]').forEach(button => {
+ button.addEventListener('click', event => {
+ event.preventDefault();
+ const tradeId = String(event.currentTarget?.dataset.tradeCheckPaperReplay || '');
+ const trade = [...decision.closedPaper, ...decision.openPaper].find(item => String(item.id || '') === tradeId);
+ if (trade) void v16OpenAnalyticsChart(symbol, trade);
+ });
+ });
+}
+
 function v16RenderLiveAnalyticsKpis(model = {}) {
  const wrap = document.getElementById('liveAnalyticsKpis');
  if (!wrap) return;
@@ -5875,10 +6182,6 @@ async function renderV16LiveAnalyticsPane(preloaded = null, forceRefresh = false
  clearAnalyticsUi(syncEnabled
  ? 'Load a Trade Enabled or Read Only profile with session secrets to fetch private Delta account analytics.'
  : 'Live account sync is paused in Settings. Enable it or click Refresh for an on-demand snapshot.');
- const shadowStore = await storeGet([V16_SHADOW_TRADE_LEDGER_KEY, 'autoTradeSettings']).catch(() => ({}));
- const shadowLedger = shadowStore?.[V16_SHADOW_TRADE_LEDGER_KEY] || { open: [], closed: [] };
- v16RenderAnalyticsReliabilityPanel(null, null, shadowLedger);
- v16RenderPaperLedgerPanel(shadowLedger);
  return;
  }
  const scanResults = Array.isArray(preloaded?.scanResults) ? preloaded.scanResults : ((await getV16Snapshot())?.scanResults || []);
@@ -5947,7 +6250,7 @@ async function renderV16LiveAnalyticsPane(preloaded = null, forceRefresh = false
  closedTrades: analyticsModel.tradeCount || 0,
  updatedAt: snapshot?.fetchedAt || Date.now(),
  autoTrade: false,
- paperTracking: true,
+ paperTracking: false,
  mode: analyticsModel.instrumentLabel || 'Reports',
  profile: v16MarketDataSourceLabel(snapshot?.feedSource || 'rest'),
  });
@@ -5980,9 +6283,6 @@ async function renderV16LiveAnalyticsPane(preloaded = null, forceRefresh = false
  }
 
  v16RenderLiveAnalyticsKpis(analyticsModel);
- v16RenderAnalyticsReliabilityPanel(snapshot, analyticsModel, shadowLedger);
- v16RenderAnalyticsDailyControlPanel(analyticsModel, shadowLedger);
- v16RenderPaperLedgerPanel(shadowLedger);
  const exportSetupBtn = document.getElementById('btnExportSetupReport');
  if (exportSetupBtn) exportSetupBtn.onclick = v16ExportSetupPerformanceReport;
 
@@ -5995,7 +6295,6 @@ async function renderV16LiveAnalyticsPane(preloaded = null, forceRefresh = false
  preloaded,
  cachedAt: Date.now(),
  };
- v16RenderAnalyticsSetupBreakdown(preloaded);
  const rDistEl = document.getElementById('liveAnalyticsRDistribution');
  if (rDistEl) {
  rDistEl.innerHTML = `
@@ -6071,11 +6370,61 @@ async function renderV16LiveAnalyticsPane(preloaded = null, forceRefresh = false
  });
 }
 
+async function renderV16TradeCheckPane(preloaded = null, forceRefresh = false) {
+ const pane = document.getElementById('pane-tradecheck');
+ if (!pane) return;
+ await v16LoadLiveAnalyticsView(forceRefresh);
+ const store = await storeGet([V16_SHADOW_TRADE_LEDGER_KEY, V16_SETUP_PERFORMANCE_KEY, 'autoTradeSettings', 'scanResults', 'lastScan', 'alerts']).catch(() => ({}));
+ const shadowLedger = store?.[V16_SHADOW_TRADE_LEDGER_KEY] || { open: [], closed: [] };
+ const scanResults = Array.isArray(preloaded?.scanResults)
+ ? preloaded.scanResults
+ : (Array.isArray(store?.scanResults) ? store.scanResults : []);
+ const autoTradeSettings = sanitizeAutoTradeSettings(store?.autoTradeSettings || {});
+ const setupPerformance = store?.[V16_SETUP_PERFORMANCE_KEY] || buildSetupPerformance(
+ Array.isArray(shadowLedger?.closed) ? shadowLedger.closed : [],
+ [],
+ { minSample: autoTradeSettings.setupPerformanceMinSample }
+ );
+ const setupRows = v16BuildAnalyticsSetupRows({}, scanResults, setupPerformance);
+ v16LiveAnalyticsSetupCache = {
+ rows: setupRows,
+ analyticsModel: { view: v16LiveAnalyticsView || {} },
+ manageModel: { closedTrades: [], rDistribution: { count: 0, buckets: {}, avgR: null } },
+ preloaded,
+ cachedAt: Date.now(),
+ };
+ await v16RenderAnalyticsTradeCheck({ trades: [] }, shadowLedger, scanResults);
+ v16RenderAnalyticsReliabilityPanel(null, null, shadowLedger);
+ v16RenderAnalyticsDailyControlPanel(null, shadowLedger, { paperOnly: true });
+ v16RenderAnalyticsSetupBreakdown(preloaded);
+ v16RenderPaperLedgerPanel(shadowLedger);
+ const refreshBtn = document.getElementById('btnTradeCheckRefresh');
+ if (refreshBtn) refreshBtn.onclick = () => renderV16TradeCheckPane(preloaded, true);
+ const analyticsBtn = document.getElementById('btnTradeCheckOpenAnalytics');
+ if (analyticsBtn) analyticsBtn.onclick = () => globalThis.setActiveWorkspaceTab?.('liveanalytics', true, true);
+}
+
+function v16ResolveEquityChartDisplayHistory(history = []) {
+ const rows = Array.isArray(history) ? history.filter(point => Number(point?.ts || 0) > 0 && Number.isFinite(Number(point?.equity))) : [];
+ if (rows.length < 4) return { history: rows, baselineAdjusted: false };
+ const firstMove = Math.abs(Number(rows[1]?.equity || 0) - Number(rows[0]?.equity || 0));
+ const laterMoves = rows.slice(2).map((point, index) => Math.abs(Number(point?.equity || 0) - Number(rows[index + 1]?.equity || 0))).filter(value => value > 0);
+ const sorted = laterMoves.slice().sort((a, b) => a - b);
+ const medianLaterMove = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
+ const threshold = Math.max(20, medianLaterMove * 8);
+ if (firstMove > threshold) {
+ return { history: rows.slice(1), baselineAdjusted: true, adjustmentValue: Number(rows[1]?.equity || 0) - Number(rows[0]?.equity || 0) };
+ }
+ return { history: rows, baselineAdjusted: false };
+}
+
 function v16BuildEquityChart(history = [], journalTrades = []) {
- if (!history.length) {
+ const display = v16ResolveEquityChartDisplayHistory(history);
+ const displayHistory = display.history;
+ if (!displayHistory.length) {
  return `<div class="empty"><div class="ei">--</div><div class="eh">No session history yet</div><div class="es">Refresh live data to build today&apos;s curve and journal markers.</div></div>`;
  }
- const model = v16GetEquityChartModel(history);
+ const model = v16GetEquityChartModel(displayHistory);
  if (!model) {
  return `<div class="empty"><div class="ei">--</div><div class="eh">No session history yet</div><div class="es">Refresh live data to build today&apos;s curve and journal markers.</div></div>`;
  }
@@ -6091,6 +6440,9 @@ function v16BuildEquityChart(history = [], journalTrades = []) {
  return `<circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="3.6" fill="${tone}"><title>${v16Esc(trade.symbol)} | ${trade.pnl >= 0 ? 'Win' : 'Loss'} | ${v16FmtSigned(trade.pnl)}</title></circle>`;
  }).join('');
  const zeroOffset = (gradientOffset * 100).toFixed(2);
+ const adjustmentNote = display.baselineAdjusted
+ ? `<div class="live-equity-adjustment-note" title="The first loaded account-equity point was a balance baseline jump, so the chart starts from the next stable point.">Opening balance adjustment hidden</div>`
+ : '';
  return `<div class="live-equity-plot ${isNegative ? 'negative' : 'positive'}">
  <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" class="live-equity-svg">
  <defs>
@@ -6114,6 +6466,7 @@ function v16BuildEquityChart(history = [], journalTrades = []) {
  </svg>
  <div class="live-equity-hoverline" hidden></div>
  <div class="live-equity-tooltip" hidden></div>
+ ${adjustmentNote}
  </div>`;
 }
 
@@ -6121,7 +6474,8 @@ function v16RenderEquityChart(history = [], journalTrades = []) {
  const chartEl = document.getElementById('liveEquityChart');
  if (!chartEl) return;
  chartEl.innerHTML = v16BuildEquityChart(history, journalTrades);
- const model = v16GetEquityChartModel(history);
+ const display = v16ResolveEquityChartDisplayHistory(history);
+ const model = v16GetEquityChartModel(display.history);
  if (!model) return;
  const plot = chartEl.querySelector('.live-equity-plot');
  const tooltip = chartEl.querySelector('.live-equity-tooltip');
@@ -6871,7 +7225,7 @@ function renderV16SecurityStatus(result = null) {
  if (!statusEl) return;
  const status = result || globalThis.FWDAppLock?.getStatus?.() || {};
  statusEl.textContent = status.configured
- ? `App password is enabled. Microsoft Authenticator is ${status.totpEnabled ? 'enabled' : 'off'}. Auto-lock ${Number(status.autoLockMinutes || 15)} min.`
+ ? `App password is enabled. Microsoft Authenticator is ${status.totpEnabled ? 'enabled' : 'off'}. Manual logout stays available from the header.`
  : 'App password is not configured yet. The setup screen appears on first launch.';
  statusEl.className = `account-inline-note ${status.totpEnabled ? 'good' : 'warn'}`;
 }
@@ -7305,6 +7659,9 @@ function v16BuildNotificationCenterEntries(metrics = {}) {
  ts: Number(alert.ts || Date.now()),
  tone: String(alert.alertTier || '').toLowerCase() === 'execute' ? 'success' : 'info',
  title: `${String(alert.alertTier || 'signal').toUpperCase()} ${String(alert.symbol || '').toUpperCase()}`,
+ sourceScannerId: 'current',
+ sourceScannerName: 'Current Live',
+ sourceType: 'scanner',
  what: `${String(alert.direction || '').toUpperCase()} score ${Number(alert.score || 0)} | entry $${v16FmtPrice(Number(alert.entry || alert.price || 0))}`,
  why: Array.isArray(alert.reasons) && alert.reasons.length ? alert.reasons.slice(0, 2).join(' | ') : 'Signal entered the alert stack.',
  next: 'The engine will re-check live filters and auto-trade rules on the next decision pass.',
@@ -7315,8 +7672,52 @@ function v16BuildNotificationCenterEntries(metrics = {}) {
  .slice(0, 14);
 }
 
+function v16ResolveNotificationSource(item = {}) {
+ const id = String(item?.sourceScannerId || item?.scannerId || item?.strategyId || item?.sourceType || '').trim().toLowerCase();
+ const name = String(item?.sourceScannerName || item?.scannerName || item?.sourceLabel || '').trim();
+ const known = {
+ current: 'Current Live',
+ wizard: 'Wizard',
+ stage: 'Stage',
+radar: 'Radar',
+reversal: 'Reversal',
+darvas: 'Darvas',
+pullback: 'Pullback',
+native_straddle: 'Native Straddle',
+ paper: 'Paper Ledger',
+ auto_trade: 'Auto-Trade',
+ manual_check: 'Manual Check',
+ };
+ if (id && known[id]) return { id, label: known[id] };
+ if (name) return { id: id || name.toLowerCase().replace(/[^a-z0-9]+/g, '_'), label: name };
+ const title = String(item?.title || '').toLowerCase();
+ if (title.includes('[radar]')) return { id: 'radar', label: 'Radar' };
+ if (title.includes('[native straddle]')) return { id: 'native_straddle', label: 'Native Straddle' };
+ if (title.includes('[current]')) return { id: 'current', label: 'Current Live' };
+ if (title.includes('paper')) return { id: 'paper', label: 'Paper Ledger' };
+ if (title.includes('auto-trade')) return { id: 'auto_trade', label: 'Auto-Trade' };
+ return { id: 'system', label: 'System' };
+}
+
+function v16NotificationSourceFilters() {
+ return [
+ ['all', 'All'],
+ ['current', 'Current'],
+ ['wizard', 'Wizard'],
+['radar', 'Radar'],
+['reversal', 'Reversal'],
+['darvas', 'Darvas'],
+['pullback', 'Pullback'],
+['native_straddle', 'Native Straddle'],
+ ['paper', 'Paper'],
+ ['auto_trade', 'Auto-Trade'],
+ ];
+}
+
 function v16ResolveNotificationCategory(item = {}) {
  const text = `${item?.title || ''} ${item?.what || ''} ${item?.why || ''} ${item?.action || ''}`.toLowerCase();
+ const source = v16ResolveNotificationSource(item);
+if (['current', 'wizard', 'stage', 'radar', 'reversal', 'darvas', 'pullback', 'native_straddle'].includes(source.id)) return 'Scanner Alerts';
  if (
  text.includes('target shifted')
  || text.includes('target armed')
@@ -7369,12 +7770,16 @@ function v16BuildNotificationExplanation(item = {}) {
 }
 
 function v16BuildGroupedNotificationCenterEntries(metrics = {}) {
- const groups = ['Trade Events', 'Risk Events', 'System Events', 'Warnings'];
+ const groups = ['Scanner Alerts', 'Trade Events', 'Risk Events', 'System Events', 'Warnings'];
  const grouped = new Map(groups.map(group => [group, []]));
  v16BuildNotificationCenterEntries(metrics).forEach(item => {
+ const source = v16ResolveNotificationSource(item);
+ const activeSource = String(v16LiveAccountView.notificationSourceFilter || 'all');
+ if (activeSource !== 'all' && source.id !== activeSource) return;
  const category = v16ResolveNotificationCategory(item);
  grouped.get(category)?.push({
  ...item,
+ source,
  category,
  severity: v16ResolveNotificationSeverity(item),
  explanation: v16BuildNotificationExplanation(item),
@@ -7393,7 +7798,16 @@ function v16RenderNotificationCenter(metrics = {}) {
  const groups = v16BuildGroupedNotificationCenterEntries(metrics);
  const dismissals = v16NormalizeUxHintDismissals(metrics.uxHintDismissals || v16LiveAccountView.uxHintDismissals || {});
  const totalItems = groups.reduce((sum, group) => sum + group.items.length, 0);
- meta.textContent = `${totalItems} recent update${totalItems === 1 ? '' : 's'} grouped by trade, risk, system, and warning events`;
+ const activeSource = String(v16LiveAccountView.notificationSourceFilter || 'all');
+ const activeFilter = v16NotificationSourceFilters().find(([key]) => key === activeSource)?.[1] || 'All';
+ meta.innerHTML = `<span>${totalItems} recent update${totalItems === 1 ? '' : 's'} | ${v16Esc(activeFilter)}</span>
+ <div class="live-notification-filters">${v16NotificationSourceFilters().map(([key, label]) => `<button class="live-notification-filter ${key === activeSource ? 'active' : ''}" type="button" data-live-notification-source="${v16Esc(key)}">${v16Esc(label)}</button>`).join('')}</div>`;
+ meta.querySelectorAll('[data-live-notification-source]').forEach(button => {
+ button.addEventListener('click', () => {
+ v16LiveAccountView.notificationSourceFilter = button.dataset.liveNotificationSource || 'all';
+ v16RenderNotificationCenter(metrics);
+ });
+ });
  if (!totalItems) {
  wrap.innerHTML = `<div class="empty"><div class="ei">+</div><div class="eh">No notifications yet</div><div class="es">Scanner alerts and auto-trade lifecycle updates will appear here with cause and next-step context.</div></div>`;
  return;
@@ -7417,6 +7831,7 @@ function v16RenderNotificationCenter(metrics = {}) {
  <div class="live-notification-head">
  <strong>${v16Esc(item.title || 'System update')}</strong>
  <div class="live-notification-head-side">
+ <span class="live-notification-source">${v16Esc(item.source?.label || v16ResolveNotificationSource(item).label)}</span>
  <span class="live-notification-severity live-notification-severity--${v16Esc(String(item.severity?.className || 'info').toLowerCase())}">${v16Esc(item.severity?.label || 'Info')}</span>
  <span>${v16Esc(v16FormatTs(item.ts || 0))}</span>
  </div>
@@ -7633,7 +8048,7 @@ function v16BuildStraddleManageSection(dashboard = null, canTrade = false) {
  if (!filtered.length) {
  return `<div class="live-straddle-section">
  <div class="live-straddle-header"><div><div class="mo-section">Straddles</div><div class="live-journal-meta">${v16Esc(meta)}</div></div><div class="live-straddle-filters">${statusPills}${underlyingPills}<button class="bsm danger ${closeAllArmed ? 'armed' : ''}" data-straddle-action="close-all" ${canTrade && filteredActiveCount ? '' : 'disabled'}>${v16Esc(closeAllLabel)}</button></div></div>
- <div class="empty"><div class="ei">+</div><div class="eh">No straddles in this view</div><div class="es">Change the filters or place a native straddle from the Options Desk.</div></div>
+ <div class="empty"><div class="ei">+</div><div class="eh">No straddles in this view</div><div class="es">Change filters or review Native Straddle Scanner ideas.</div></div>
  </div>`;
  }
  const rows = filtered.map(entry => {
@@ -7758,7 +8173,7 @@ function v16BuildCombinedPositionsEmpty(filter = 'all', query = '', hasOpenStrad
  const detail = hasQuery
  ? 'Change the search text or clear the filter.'
  : filter === 'straddles' && !hasOpenStraddles
- ? 'Active native straddles from the Options Desk will appear here.'
+ ? 'Active native straddles will appear here.'
  : 'Delta returned no active exposure for the current profile.';
  return `<div class="empty"><div class="ei">+</div><div class="eh">${v16Esc(heading)}</div><div class="es">${v16Esc(detail)}</div></div>`;
 }
@@ -7926,6 +8341,9 @@ async function v16OpenPositionTradeChart(position = {}, metrics = {}) {
  rightPanelOpen: true,
  intelligenceOverlays: true,
  deskLayoutMode: 'single',
+ uiMode: 'default',
+ replaySeed: null,
+ replayMode: null,
  chartTradingDraft: null,
  orderContext: globalThis.FWDTradeDeskChartWorkspace?.buildOrderContextFromPosition?.(position, position.linkedOrders),
  refreshNonce: Date.now(),
@@ -8040,7 +8458,7 @@ function v16RenderPositions(metrics) {
  const netPct = v16FormatWalletPct(metrics.netPnl, walletBalance, 1);
  if (netPct) chips.push(`<div class="pos-risk-pill ${Number(metrics.netPnl || 0) >= 0 ? 'good' : 'bad'}">Net ${v16FmtSigned(Number(metrics.netPnl || 0))} <span>${v16Esc(netPct)} wallet</span></div>`);
  if (drawdownPct >= 10) chips.push(`<div class="pos-risk-pill bad">Drawdown alert <span>${v16FmtNumber(drawdownPct, 1)}% of wallet</span></div>`);
- if (largestExposure?.pct >= 50) chips.push(`<div class="pos-risk-pill ${largestExposure.tone || 'warn'}">${v16Esc(largestExposure.symbol || 'Exposure')} <span>${v16FmtNumber(largestExposure.pct, 1)}% of wallet</span></div>`);
+ if (largestExposure?.pct >= 50) chips.push(`<div class="pos-risk-pill ${largestExposure.tone || 'warn'}"><strong>${v16Esc(largestExposure.pct >= 100 ? 'Overexposed' : 'Exposure')}</strong> ${v16Esc(largestExposure.symbol || 'Exposure')} <span>${v16FmtNumber(largestExposure.pct, 1)}% of wallet</span></div>`);
  riskContext.innerHTML = chips.join('');
  riskContext.hidden = !chips.length;
  }
@@ -8125,7 +8543,7 @@ function v16RenderPositions(metrics) {
  <div><span>Max Profit</span><strong class="${position.exposurePlan?.hasTarget && position.exposurePlan.maxProfit > 0 ? 'good' : ''}">${position.exposurePlan?.hasTarget && position.exposurePlan.maxProfit > 0 ? v16FmtSigned(position.exposurePlan.maxProfit) : '-'}</strong></div>
  <div><span>Margin</span><strong>$${v16FmtNumber(position.margin, 2)}</strong></div>
  <div title="${v16Esc(fundingTitle)}"><span>Funding ${fundingHorizon}</span><strong class="${fundingHorizonValue >= 0 ? 'good' : 'bad'}">${position.fundingEstimate?.fundingRate ? v16FmtSigned(fundingHorizonValue) : '-'}</strong><small>${position.fundingEstimate?.fundingRate ? v16Esc(fundingRateLabel) : 'No live rate'}</small></div>
- <div><span>Notional</span><strong>${position.notionalValue > 0 ? `$${v16FmtNumber(position.notionalValue, position.notionalValue >= 1000 ? 0 : 2)}` : '-'}</strong>${exposureLabel ? `<small class="${exposureTone.tone || 'dim'}">${v16Esc(exposureLabel)}</small>` : ''}</div>
+ <div><span>Notional</span><strong>${position.notionalValue > 0 ? `$${v16FmtNumber(position.notionalValue, position.notionalValue >= 1000 ? 0 : 2)}` : '-'}</strong>${exposureLabel ? `<small class="pos-exposure-badge ${exposureTone.tone || 'dim'}">${v16Esc(exposureLabel)}</small>` : ''}</div>
  </div>
  ${autoTradeSizingSummary ? `<div class="live-journal-meta"><strong>Auto Size</strong> ${v16Esc(autoTradeSizingSummary)}</div>` : ''}
  <div class="live-position-actions">
@@ -8400,7 +8818,7 @@ function v16BuildPositionsTable(positions, canTrade, straddles = []) {
  <td>${v16Esc(sizeLabel)}</td>
  <td>$${v16FmtPrice(position.entry)}</td>
  <td>$${v16FmtPrice(position.markPrice)}</td>
- <td>${v16Esc(notionalLabel)}${exposureLabel ? `<br/><small class="${exposureTone.tone || 'dim'}">${v16Esc(exposureLabel)}</small>` : ''}${autoTradeSizingSummary ? `<br/><small>${v16Esc(autoTradeSizingSummary)}</small>` : ''}</td>
+ <td>${v16Esc(notionalLabel)}${exposureLabel ? `<br/><span class="pos-exposure-badge ${exposureTone.tone || 'dim'}">${v16Esc(exposureLabel)}</span>` : ''}${autoTradeSizingSummary ? `<br/><small>${v16Esc(autoTradeSizingSummary)}</small>` : ''}</td>
  <td class="${upnlClass}">${v16FmtSigned(position.unrealized)}</td>
  <td>$${v16FmtNumber(position.margin, 2)}</td>
  <td class="${fundClass}">${fundLabel}</td>
@@ -8590,6 +9008,9 @@ function v16SyncLiveOrderDeltaButton(symbol = '') {
 
 function v16RenderTradeOrderPreviewCard(preview = {}) {
  const computedContracts = Math.max(1, Math.round(Number(preview.size || 0)));
+ const requestedNotional = Number(preview.requestedNotional || 0);
+ const estimatedNotional = Number(preview.estimatedNotional || 0);
+ const roundedAboveRequest = requestedNotional > 0 && estimatedNotional > requestedNotional * 1.05;
  return `
  <div class="live-order-preview-metrics">
  <div><span>Computed Contracts</span><strong>${v16FmtNumber(computedContracts, 0)}</strong></div>
@@ -8597,9 +9018,10 @@ function v16RenderTradeOrderPreviewCard(preview = {}) {
  <div><span>Side</span><strong>${String(preview.side || '').toUpperCase()}</strong></div>
  <div><span>Entered Size</span><strong>${v16Esc(v16LiveOrderModeLabel(v16LiveAccountView.orderSignalMeta?.sizeMode || 'usd', v16LiveAccountView.orderSignalMeta?.definition || null))}</strong></div>
  <div><span>Mark</span><strong>${Number(preview.markPrice || 0) > 0 ? `$${v16FmtPrice(preview.markPrice)}` : '-'}</strong></div>
- <div><span>Notional</span><strong>${Number(preview.estimatedNotional || 0) > 0 ? `$${v16FmtNumber(preview.estimatedNotional, 2)}` : '-'}</strong></div>
+ <div><span>Notional</span><strong>${estimatedNotional > 0 ? `$${v16FmtNumber(estimatedNotional, 2)}` : '-'}</strong></div>
  <div><span>Risk / Reward</span><strong>${Number(preview.riskRewardRatio || 0) > 0 ? `1:${v16FmtNumber(preview.riskRewardRatio, 2)}` : '-'}</strong></div>
  </div>
+ ${roundedAboveRequest ? `<div class="account-inline-note bad">${v16Esc(`Requested $${v16FmtNumber(requestedNotional, 2)}, but Delta minimum tradable size is ${computedContracts} contract here, making actual notional $${v16FmtNumber(estimatedNotional, 2)}.`)}</div>` : ''}
  <div class="account-inline-note ${Number(preview.estimatedRisk || 0) > 0 ? 'warn' : 'good'}">
  ${v16Esc([
  Number(preview.limitPrice || 0) > 0 ? `Limit $${v16FmtPrice(preview.limitPrice)}` : 'Market execution',
@@ -9123,7 +9545,6 @@ async function openV16OpenOrderEditor(order = null, draftOverrides = {}) {
 }
 
 async function refreshV16PrivateAccountData(force = false) {
- globalThis.FWDAppLock?.touchActivity?.();
  const profile = getV16ActiveAccountProfile();
  const statusEl = document.getElementById('liveAccountStatus');
  const secret = getV16Secrets()?.[profile.id] || {};
@@ -9350,7 +9771,7 @@ async function v16LoadLiveAccountPaneContext(preloaded = null, forceRefresh = fa
  const atMatch = v16ResolveAutoTradeJournalMatch(trade, autoTradeLog);
  // Match to straddle log
  const stMatch = straddleLog.find(sl => {
- const slSym = v16NormalizeSymbol(sl?.straddleLeg?.symbol || sl?.callLeg?.symbol || '');
+ const slSym = v16NormalizeSymbol(sl?.straddleLeg?.symbol || '');
  return slSym === sym;
  });
  const matched = atMatch || stMatch;
@@ -9501,7 +9922,8 @@ async function renderV16PositionsPane(preloaded = null, forceRefresh = false) {
  v16RenderEquityChart(todayHistory, metrics.todayTrades);
  const liveEquityMetaEl = document.getElementById('liveEquityMeta');
  if (liveEquityMetaEl) {
- liveEquityMetaEl.textContent = `${todayHistory.length} points today | Hover to inspect P&L and trade events | ${v16MarketDataSourceLabel(snapshot?.feedSource || 'rest')} | updated ${v16FormatFeedAge(snapshot?.fetchedAt || 0)}.`;
+ const equityDisplay = typeof v16ResolveEquityChartDisplayHistory === 'function' ? v16ResolveEquityChartDisplayHistory(todayHistory) : { baselineAdjusted: false };
+ liveEquityMetaEl.textContent = `${todayHistory.length} points today | ${equityDisplay.baselineAdjusted ? 'Opening balance adjustment hidden | ' : ''}Hover to inspect P&L and trade events | ${v16MarketDataSourceLabel(snapshot?.feedSource || 'rest')} | updated ${v16FormatFeedAge(snapshot?.fetchedAt || 0)}.`;
  }
  await renderV16RiskManageBoard();
 }
@@ -10028,6 +10450,22 @@ function bindV16SettingsUi() {
  FWDTradeDeskUi.delegate('click', '[data-settings-target]', (_e, settingsButton) => {
  activateV16SettingsPanel(settingsButton.dataset.settingsTarget || 'profile');
  });
+ document.addEventListener('input', (e) => {
+ if (e.target?.id === 'settingsRailSearch') {
+ filterV16SettingsRail(e.target.value);
+ return;
+ }
+ if (e.target?.closest?.('#pane-strategy')) markV16SettingsDirty(e.target);
+ });
+ document.addEventListener('change', (e) => {
+ if (e.target?.closest?.('#pane-strategy')) markV16SettingsDirty(e.target);
+ });
+ FWDTradeDeskUi.delegate('click', '[data-settings-subfilter]', (_e, filterButton) => {
+ setV16SettingsSubfilter(filterButton.dataset.settingsSubfilter || 'all');
+ });
+ FWDTradeDeskUi.delegate('click', '#btnSave', () => {
+ setTimeout(clearV16SettingsDirty, 50);
+ });
  // Delegation: Generic V16 tab jumps
  FWDTradeDeskUi.delegate('click', '[data-v16-open-tab]', (_e, tabButton) => {
  if (typeof setActiveWorkspaceTab === 'function') setActiveWorkspaceTab(tabButton.dataset.v16OpenTab);
@@ -10332,6 +10770,13 @@ function bindV16SettingsUi() {
 }
 
 async function refreshV16SignalSurfaces() {
+ if (typeof globalThis.scheduleWorkspaceTabRender === 'function') {
+  await Promise.all([
+   globalThis.scheduleWorkspaceTabRender('scanner'),
+   globalThis.scheduleWorkspaceTabRender('watchlist'),
+  ]);
+  return;
+ }
  if (typeof renderScanner === 'function') await renderScanner();
  if (typeof renderWatchlist === 'function') await renderWatchlist();
 }
@@ -10731,10 +11176,13 @@ globalThis.v16IsLiveAnalyticsAutoRefreshEnabled = v16IsLiveAnalyticsAutoRefreshE
 globalThis.v16SyncLiveAccountSyncButtons = v16SyncLiveAccountSyncButtons;
 globalThis.v16SyncLiveAnalyticsAutoRefreshButtons = v16SyncLiveAnalyticsAutoRefreshButtons;
 globalThis.renderV16LiveAnalyticsPane = renderV16LiveAnalyticsPane;
+globalThis.renderV16TradeCheckPane = renderV16TradeCheckPane;
 globalThis.renderV16PositionsPane = renderV16PositionsPane;
 globalThis.renderV16FundsPane = renderV16FundsPane;
 globalThis.renderV16OrdersPane = renderV16OrdersPane;
 globalThis.openV16LiveTradeOrderPreview = openV16LiveTradeOrderPreview;
+globalThis.openV16OpenOrderEditor = openV16OpenOrderEditor;
+globalThis.openV16ProtectionOrderPreview = openV16ProtectionOrderPreview;
 globalThis.v16ComputeSessionMetrics = v16ComputeSessionMetrics;
 globalThis.v16ResolveOrderRealizedPnl = v16ResolveOrderRealizedPnl;
 globalThis.v16ResolveJournalCloseReason = v16ResolveJournalCloseReason;
@@ -10770,6 +11218,14 @@ function v16RiskAutoModeLabel({ autoTradeOn = false, settings = {} } = {}) {
  if (settings.paperTrackingEnabled) return 'Paper';
  if (settings.entryTriggerRequired || settings.riskQualityRequired) return 'Assist';
  return 'Off';
+}
+
+function v16RiskAutoModeDetail({ autoTradeOn = false, settings = {}, liveAutomationAllowed = false } = {}) {
+ if (liveAutomationAllowed) return 'Live orders may be sent after signal gates pass.';
+ if (autoTradeOn) return 'Live toggle is on, but one or more safety gates block orders.';
+ if (settings.paperTrackingEnabled) return 'Qualified signals are tracked in paper ledger only.';
+ if (settings.entryTriggerRequired || settings.riskQualityRequired) return 'Manual assist mode: rules guide decisions but do not place orders.';
+ return 'Automation is fully off.';
 }
 
 function v16RiskAutoMetricPositions(snapshot = null) {
@@ -10823,41 +11279,20 @@ async function renderV16RiskAutomationCockpit() {
  if (slotMax > 0 && slotUsed >= slotMax) blockers.push('all trade slots are in use');
  if (runtimeIssue) blockers.push('API is cooling down');
  if (!store.autoTrade) blockers.push('live automation is off');
- const decisionTitle = liveAutomationAllowed ? 'Live automation can place qualified orders' : `Trade blocked: ${blockers[0] || 'automation is not ready'}`;
+ const decisionTitle = liveAutomationAllowed ? 'Live Orders Allowed' : `Live Orders Blocked`;
  const decisionDetail = liveAutomationAllowed
- ? 'All core live gates are clear. Strategy checks still apply per signal.'
- : blockers.length ? blockers.join(', ') : 'Enable rules only after reviewing profile, API, and risk limits.';
+ ? 'Core live gates are clear. Strategy, trigger, liquidity, funding, and risk-quality checks still apply per signal.'
+ : blockers.length ? `Reason: ${blockers.join(', ')}` : 'Reason: enable rules only after reviewing profile, API, and risk limits.';
  const strip = document.getElementById('riskAutomationStrip');
  if (strip) {
  const stripRows = [
  ['Profile', capabilityMeta.label || 'Public', profileReady ? (tradeCapable ? 'Trade-enabled profile' : 'Read-only profile') : 'Research profile only', profileReady ? (tradeCapable ? 'good' : 'warn') : 'warn'],
  ['API', apiReady ? 'Ready' : 'Missing', apiReady ? (hasSecret ? 'Private session available' : 'Public data only') : 'Save/test credentials', apiReady ? 'good' : 'bad'],
  ['Risk', riskReady ? 'Clear' : 'Blocked', dailyLossLimit > 0 ? `$${dailyLossUsed.toFixed(0)} / $${dailyLossLimit.toFixed(0)} daily loss` : `${slotUsed}/${slotMax || '-'} slots used`, riskReady ? 'good' : 'bad'],
- ['Automation', automationMode, liveAutomationAllowed ? 'Live gates clear' : (store.autoTrade ? 'Live toggle on, gate blocked' : 'No live order automation'), liveAutomationAllowed ? 'good' : (store.autoTrade ? 'bad' : 'warn')],
+ ['Automation', automationMode, v16RiskAutoModeDetail({ autoTradeOn: !!store.autoTrade, settings, liveAutomationAllowed }), liveAutomationAllowed ? 'good' : (store.autoTrade ? 'bad' : 'warn')],
  ['Kill Switch', killSwitch.enabled ? 'On' : 'Off', killSwitch.reason || (killSwitch.enabled ? 'Execution locked' : 'No global execution block'), killSwitch.enabled ? 'bad' : 'good'],
  ];
  strip.innerHTML = stripRows.map(([label, value, detail, tone]) => `<div class="risk-auto-status is-${v16Esc(v16RiskAutoToneClass(tone))}"><span>${v16Esc(label)}</span><strong>${v16Esc(value)}</strong><small>${v16Esc(detail)}</small></div>`).join('');
- }
- const decision = document.getElementById('riskAutomationDecision');
- if (decision) {
- decision.className = `risk-auto-decision is-${liveAutomationAllowed ? 'good' : blockers.some(item => item.includes('kill') || item.includes('daily') || item.includes('slots') || item.includes('cooling')) ? 'bad' : 'warn'}`;
- const checks = [
- ['Profile allows live action', tradeCapable || !store.autoTrade, capabilityMeta.label || 'Public'],
- ['API/session ready', apiReady, hasSecret ? 'Private account calls can run' : 'No private credential session'],
- ['Kill switch off', !killSwitch.enabled, killSwitch.reason || 'Global guard is clear'],
- ['Daily loss under limit', !(dailyLossLimit > 0 && dailyLossUsed >= dailyLossLimit), dailyLossLimit > 0 ? `$${dailyLossUsed.toFixed(0)} / $${dailyLossLimit.toFixed(0)}` : 'No USD day-loss cap set'],
- ['Trade slots available', !(slotMax > 0 && slotUsed >= slotMax), slotMax > 0 ? `${slotUsed}/${slotMax} used` : 'No max concurrent cap set'],
- ['API cooldown clear', !runtimeIssue, runtimeIssue ? `Retry in ${v16FormatDurationShort(runtimeIssue.waitMs)}` : 'No cooldown recorded'],
- ];
- decision.innerHTML = `
- <div class="risk-auto-decision-main">
- <span>Decision Engine</span>
- <strong>${v16Esc(decisionTitle)}</strong>
- <small>${v16Esc(decisionDetail)}</small>
- </div>
- <div class="risk-auto-checks" id="riskAutomationChecks">
- ${checks.map(([label, passed, detail]) => v16RiskAutoCheckHtml(label, passed, detail)).join('')}
- </div>`;
  }
  const apiGrid = document.getElementById('riskApiSafetyGrid');
  if (apiGrid) {
@@ -10879,7 +11314,7 @@ async function renderV16RiskAutomationCockpit() {
  }
  const preview = document.getElementById('riskAutomationRulePreview');
  if (preview) {
- preview.innerHTML = `<span>Rule Preview</span><strong>${v16Esc(decisionTitle)}</strong><small>${v16Esc(decisionDetail)}</small>`;
+ preview.innerHTML = `<span>Rule Preview</span><strong>${v16Esc(decisionTitle)}</strong><small>${v16Esc(decisionDetail)}</small><small class="risk-auto-next">${v16Esc(v16RiskAutoModeDetail({ autoTradeOn: !!store.autoTrade, settings, liveAutomationAllowed }))}</small>`;
  }
  const rulesGrid = document.getElementById('riskAutomationRulesGrid');
  if (rulesGrid) {
@@ -10890,7 +11325,6 @@ async function renderV16RiskAutomationCockpit() {
  v16RiskAutoCardHtml('Max Per Day', String(settings.maxPerDay || 0), 'Daily automation entry cap.', Number(settings.maxPerDay || 0) > 0 ? 'good' : 'warn'),
  v16RiskAutoCardHtml('Max Concurrent', String(settings.maxConcurrent || 0), `${slotUsed}/${slotMax || '-'} slots used including reserved manual controls.`, slotMax > 0 && slotUsed >= slotMax ? 'bad' : 'good'),
  v16RiskAutoCardHtml('Risk Quality Gate', settings.riskQualityRequired ? 'Required' : 'Optional', settings.riskQualityRequired ? `R:R >= ${settings.riskQualityMinRewardRisk}, stop <= ${settings.riskQualityMaxStopDistancePct}%` : 'Signals may pass without quality gate.', settings.riskQualityRequired ? 'good' : 'warn'),
- v16RiskAutoCardHtml('Backtest Gate', `${settings.backtestMinTrades || 0} trades`, `PF >= ${settings.backtestMinProfitFactor || 0}, expectancy >= ${settings.backtestMinExpectancy || 0}.`, Number(settings.backtestMinTrades || 0) > 0 ? 'good' : 'warn'),
  v16RiskAutoCardHtml('Cooldown', `${settings.cooldownSec || 0}s`, 'Delay after automated action before next eligible entry.', Number(settings.cooldownSec || 0) > 0 ? 'good' : 'warn'),
  ].join('');
  }
@@ -11039,7 +11473,7 @@ function renderV16VarDashboard() {
 
  // --- Sector Exposure Grid ---
  if (el('varSectorGrid')) {
- const allSectors = typeof SECTORS !== 'undefined' ? Object.keys(SECTORS) : ['Layer 1', 'DeFi', 'Meme', 'AI / Data', 'Infra', 'Gaming', 'Layer 2', 'Exchange', 'Privacy', 'Commodity', 'Stock', 'New'];
+ const allSectors = typeof SECTORS !== 'undefined' ? Object.keys(SECTORS) : ['Layer 1', 'DeFi', 'Meme', 'AI / Data', 'Infra', 'Gaming', 'Layer 2', 'Exchange', 'Privacy', 'RWA', 'Commodity', 'Stock', 'New'];
  let sectorHTML = '';
  allSectors.forEach(sector => {
  const count = sectorCounts[sector] || 0;

@@ -65,14 +65,54 @@
  'Exchange': ['BNBUSD', 'SUNUSD', 'OMUSD', 'TRBUSD', 'KAITOUSD', 'REDUSD', 'USUALUSD',
  'BIOUSD', 'ORDIUSD'],
  'Privacy': ['XMRUSD', 'ZECUSD', 'DASHUSD', 'ZENUSD'],
+ 'RWA': [],
  'Commodity': ['PAXGUSD', 'SLVONUSD', 'XANUSD'],
- 'Stock': ['NVDAXUSD', 'TSLAXUSD', 'AMZNXUSD', 'AAPLXUSD', 'METAXUSD', 'GOOGLXUSD'],
+ 'Stock': [],
  'New': ['LIGHTUSD', 'RIVERUSD', 'LITUSD', 'BEATUSD', 'KITEUSD', 'MMTUSD',
  'EVAAUSD', 'HANAUSD', 'STBLUSD', 'VFYUSD', 'EDENUSD', 'FFUSD',
  'XPLUSD', 'ASTERUSD', 'ZORAUSD', 'SOPHUSD', 'TNSRUSD', 'PARTIUSD',
  'TSTUSD', 'VVVUSD', 'ARCUSD', 'VANAUSD', 'SUSD', 'MEUSD', 'HUSD', 'MUSD',
  'JASMYUSD', 'JOEUSDT', 'TOKENUSDT'],
  };
+
+ const RWA_ASSET_TYPES = Object.freeze({
+ tokenized_stock: Object.freeze({
+ label: 'Tokenized Stock',
+ badge: 'RWA / Stock',
+ sector: 'RWA',
+ keywords: ['XSTOCK', 'TOKENIZED STOCK', 'STOCK TOKEN', 'EQUITY TOKEN', 'TOKENISED STOCK', 'TOKENISED EQUITY'],
+ }),
+ tokenized_etf: Object.freeze({
+ label: 'Tokenized ETF',
+ badge: 'RWA / ETF',
+ sector: 'RWA',
+ keywords: ['TOKENIZED ETF', 'ETF TOKEN', 'TOKENISED ETF'],
+ }),
+ tokenized_treasury: Object.freeze({
+ label: 'Tokenized Treasury',
+ badge: 'RWA / Treasury',
+ sector: 'RWA',
+ keywords: ['TOKENIZED TREASURY', 'TREASURY TOKEN', 'T-BILL', 'TBILL', 'GOVERNMENT BOND', 'US TREASURY', 'TOKENISED TREASURY'],
+ }),
+ tokenized_commodity: Object.freeze({
+ label: 'Tokenized Commodity',
+ badge: 'RWA / Commodity',
+ sector: 'RWA',
+ keywords: ['TOKENIZED GOLD', 'TOKENIZED SILVER', 'GOLD TOKEN', 'SILVER TOKEN', 'TOKENIZED COMMODITY', 'TOKENISED COMMODITY', 'PRECIOUS METAL'],
+ }),
+ tokenized_real_estate: Object.freeze({
+ label: 'Tokenized Real Estate',
+ badge: 'RWA / Real Estate',
+ sector: 'RWA',
+ keywords: ['TOKENIZED REAL ESTATE', 'REAL ESTATE TOKEN', 'PROPERTY TOKEN', 'TOKENISED REAL ESTATE'],
+ }),
+ tokenized_credit: Object.freeze({
+ label: 'Tokenized Credit',
+ badge: 'RWA / Credit',
+ sector: 'RWA',
+ keywords: ['PRIVATE CREDIT', 'TOKENIZED CREDIT', 'CREDIT TOKEN', 'TOKENISED CREDIT'],
+ }),
+ });
 
  const TOKENIZED_STOCK_PRODUCTS = Object.freeze({
  AAPLX: Object.freeze({ stockSymbol: 'AAPL', company: 'Apple Inc.', displayName: 'Apple xStock' }),
@@ -165,18 +205,6 @@
  function sanitizeAlertTone(v) {
  const tone = String(v || '').trim().toLowerCase();
  return ALERT_TONES.includes(tone) ? tone : 'classic';
- }
-
- function sanitizeBacktestMinScore(v, fallback = 75) {
- const n = Math.round(Number(v));
- if (!Number.isFinite(n)) return fallback;
- return Math.max(0, Math.min(100, n));
- }
-
- function sanitizeBacktestLookbackDays(v, fallback = 500) {
- const n = Math.round(Number(v));
- if (!Number.isFinite(n)) return fallback;
- return Math.max(100, Math.min(500, n));
  }
 
  function sanitizeKeyLevelSettings(raw = {}) {
@@ -888,7 +916,9 @@
  .split(/[\s,;]+/g)
  .filter(Boolean);
  return {
- maxConstituents: clampNumber(source?.maxConstituents ?? source?.topCount, 10, 3, 100, 0),
+ maxConstituents: clampNumber(source?.maxConstituents ?? source?.topCount, 100, 3, 100, 0),
+ rebalanceDays: clampNumber(source?.rebalanceDays, 7, 1, 90, 0),
+ rebuildNonce: clampNumber(source?.rebuildNonce, 0, 0, Number.MAX_SAFE_INTEGER, 0),
  excludedSymbols: normalizeSymbolList(rawExcludedSymbols, 100),
  weighting: 'equal',
  };
@@ -900,47 +930,6 @@
  .toLowerCase()
  .replace(/[^a-z0-9]+/g, '_')
  .replace(/^_+|_+$/g, '');
- }
-
- function sanitizeBacktestThresholdOverride(raw = {}, defaults = {}) {
- const source = raw && typeof raw === 'object' ? raw : {};
- return {
- minTrades: clampNumber(source?.minTrades, defaults?.minTrades ?? 6, 1, 100, 0),
- minProfitFactor: clampNumber(source?.minProfitFactor, defaults?.minProfitFactor ?? 1.1, 0.1, 10, 2),
- minExpectancy: clampNumber(source?.minExpectancy, defaults?.minExpectancy ?? 0.05, -100, 100, 2),
- maxDrawdownPct: clampNumber(source?.maxDrawdownPct, defaults?.maxDrawdownPct ?? 12, 0.1, 100, 2),
- };
- }
-
- function sanitizeSetupFamilyBacktestOverrides(raw = {}, defaults = {}) {
- const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
- return Object.fromEntries(
- Object.entries(source)
- .map(([familyKey, override]) => {
- const normalizedKey = sanitizeSetupFamilyKey(familyKey);
- if (!normalizedKey || !override || typeof override !== 'object') return null;
- return [normalizedKey, sanitizeBacktestThresholdOverride(override, defaults)];
- })
- .filter(Boolean)
- );
- }
-
- function resolveAutoTradeSetupFamilyBacktestThresholds(settings = {}, family = '') {
- const cfg = sanitizeAutoTradeSettings(settings || {});
- const normalizedFamily = sanitizeSetupFamilyKey(family);
- const globalThresholds = sanitizeBacktestThresholdOverride({}, {
- minTrades: cfg.backtestMinTrades,
- minProfitFactor: cfg.backtestMinProfitFactor,
- minExpectancy: cfg.backtestMinExpectancy,
- maxDrawdownPct: cfg.backtestMaxDrawdownPct,
- });
- const override = normalizedFamily ? cfg.setupFamilyBacktestOverrides?.[normalizedFamily] || null : null;
- return {
- family: normalizedFamily,
- source: override ? 'family_override' : 'global',
- ...globalThresholds,
- ...(override || {}),
- };
  }
 
  function normalizeEntryTriggerMode(value = '') {
@@ -1347,12 +1336,6 @@
  const entryMode = String(raw?.entryMode || '').trim().toLowerCase();
  const entryTriggerMode = normalizeEntryTriggerMode(raw?.entryTriggerMode);
  const defaultMinScore = clampNumber(raw?.minScore, 75, 75, 100, 0);
- const defaultBacktestThresholds = {
- minTrades: clampNumber(raw?.backtestMinTrades, 6, 1, 100, 0),
- minProfitFactor: clampNumber(raw?.backtestMinProfitFactor, 1.1, 0.1, 10, 2),
- minExpectancy: clampNumber(raw?.backtestMinExpectancy, 0.05, -100, 100, 2),
- maxDrawdownPct: clampNumber(raw?.backtestMaxDrawdownPct, 12, 0.1, 100, 2),
- };
  return {
  minScore: defaultMinScore,
  autoSizeUSD: clampNumber(raw?.autoSizeUSD, 5, 1, 60, 0),
@@ -1386,15 +1369,6 @@
  riskQualityMinRewardRisk: clampNumber(raw?.riskQualityMinRewardRisk, 1.15, 0.2, 10, 2),
  riskQualityMaxStopDistancePct: clampNumber(raw?.riskQualityMaxStopDistancePct, 3.5, 0.05, 50, 2),
  riskQualityMaxEntryDistancePct: clampNumber(raw?.riskQualityMaxEntryDistancePct, 1.8, 0.05, 50, 2),
- backtestGateEnabled: raw?.backtestGateEnabled !== false,
- backtestSignalMinScore: sanitizeBacktestMinScore(raw?.backtestSignalMinScore, defaultMinScore),
- backtestLookbackDays: sanitizeBacktestLookbackDays(raw?.backtestLookbackDays, 500),
- backtestMinTrades: defaultBacktestThresholds.minTrades,
- backtestMinProfitFactor: defaultBacktestThresholds.minProfitFactor,
- backtestMinExpectancy: defaultBacktestThresholds.minExpectancy,
- backtestMaxDrawdownPct: defaultBacktestThresholds.maxDrawdownPct,
- backtestCacheHours: clampNumber(raw?.backtestCacheHours, 6, 1, 72, 0),
- setupFamilyBacktestOverrides: sanitizeSetupFamilyBacktestOverrides(raw?.setupFamilyBacktestOverrides || {}, defaultBacktestThresholds),
  probationSizePct: clampNumber(raw?.probationSizePct, 90, 85, 100, 0),
  maturityNewDailyBars: clampNumber(raw?.maturityNewDailyBars, 45, 10, 200, 0),
  maturityNewLowerBars: clampNumber(raw?.maturityNewLowerBars, 90, 20, 400, 0),
@@ -1861,6 +1835,87 @@
  .replace(/USDT?$/, '');
  }
 
+ function buildDeltaInstrumentText(symbolOrProduct = '', description = '') {
+ const raw = typeof symbolOrProduct === 'object' && symbolOrProduct !== null ? symbolOrProduct : {};
+ const values = [
+ description,
+ raw.symbol,
+ raw.product_symbol,
+ raw.productSymbol,
+ raw.code,
+ raw.description,
+ raw.name,
+ raw.contract_type,
+ raw.contractType,
+ raw.asset_class,
+ raw.assetClass,
+ raw.category,
+ raw.sub_category,
+ raw.subCategory,
+ raw.instrument_type,
+ raw.instrumentType,
+ raw.underlying_asset?.symbol,
+ raw.underlying_asset?.name,
+ raw.underlyingAsset?.symbol,
+ raw.underlyingAsset?.name,
+ raw.quoting_asset?.symbol,
+ raw.settling_asset?.symbol,
+ Array.isArray(raw.tags) ? raw.tags.join(' ') : '',
+ ].filter(Boolean);
+ return values.map(value => String(value || '').toUpperCase()).join(' ');
+ }
+
+ function inferEquityTickerFromRwaSymbol(symbol = '') {
+ const base = normalizeBaseSymbol(symbol);
+ if (!base) return '';
+ if (base.endsWith('X') && base.length > 2) return base.slice(0, -1);
+ return base;
+ }
+
+ function inferRwaAssetInfo(symbolOrProduct = '', description = '') {
+ const raw = typeof symbolOrProduct === 'object' && symbolOrProduct !== null ? symbolOrProduct : {};
+ const symbol = String(raw.symbol || raw.product_symbol || raw.productSymbol || symbolOrProduct || '').trim().toUpperCase();
+ const text = buildDeltaInstrumentText(symbolOrProduct, description);
+ const underlyingSymbol = String(raw.underlying_asset?.symbol || raw.underlyingAsset?.symbol || '').trim().toUpperCase();
+ const underlyingName = sanitizeText(raw.underlying_asset?.name || raw.underlyingAsset?.name || '', '', 80);
+ for (const [assetClass, meta] of Object.entries(RWA_ASSET_TYPES)) {
+ const matched = meta.keywords.some(keyword => text.includes(keyword));
+ if (!matched) continue;
+ const ticker = assetClass === 'tokenized_stock'
+ ? (underlyingSymbol || inferEquityTickerFromRwaSymbol(symbol))
+ : (underlyingSymbol || normalizeBaseSymbol(symbol));
+ const displayName = assetClass === 'tokenized_stock'
+ ? `${ticker || 'Equity'} xStock`
+ : `${underlyingName || ticker || meta.label} ${meta.label}`;
+ return {
+ assetClass,
+ assetLabel: meta.label,
+ assetBadge: meta.badge,
+ sector: meta.sector,
+ displayName,
+ underlyingSymbol: ticker,
+ underlyingName: underlyingName || ticker,
+ info: `${displayName} is treated as ${meta.label}. The scanner separates it from normal crypto flow because it represents a tokenized real-world asset exposure.`,
+ };
+ }
+ const base = normalizeBaseSymbol(symbol);
+ const commodityBase = ['PAXG', 'XAUT', 'XAN', 'SLVON'].includes(base);
+ if (commodityBase) {
+ const displayName = DELTA_BASE_ASSET_NAMES[base] || titleCaseAssetCode(base);
+ return {
+ assetClass: 'tokenized_commodity',
+ assetLabel: 'Tokenized Commodity',
+ assetBadge: 'RWA / Commodity',
+ sector: 'RWA',
+ displayName,
+ underlyingSymbol: base,
+ underlyingName: displayName,
+ info: `${displayName} is treated as tokenized commodity exposure, not normal crypto momentum flow.`,
+ };
+ }
+ return null;
+ }
+
  function resolveTokenizedStockMeta(symbolOrProduct = '', description = '') {
  const raw = typeof symbolOrProduct === 'object' && symbolOrProduct !== null ? symbolOrProduct : {};
  const symbol = normalizeBaseSymbol(
@@ -1885,19 +1940,8 @@
  }
 
  function classifyDeltaInstrument(symbolOrProduct = '', description = '') {
- const meta = resolveTokenizedStockMeta(symbolOrProduct, description);
- if (meta) {
- return {
- assetClass: 'tokenized_stock',
- assetLabel: 'Tokenized Stock',
- assetBadge: 'RWA / Tokenized Stock',
- sector: 'Stock',
- displayName: meta.displayName,
- underlyingSymbol: meta.stockSymbol,
- underlyingName: meta.company,
- info: `${meta.displayName} tracks ${meta.company} (${meta.stockSymbol}) through a tokenized Delta perpetual product. It is not a normal crypto coin and it is not direct share ownership.`,
- };
- }
+ const inferredRwa = inferRwaAssetInfo(symbolOrProduct, description);
+ if (inferredRwa) return inferredRwa;
  return {
  assetClass: 'crypto_derivative',
  assetLabel: 'Crypto',
@@ -1922,8 +1966,8 @@
  const symbol = String(raw.symbol || raw.product_symbol || raw.productSymbol || symbolOrProduct || '').trim().toUpperCase();
  const cleanDescription = sanitizeText(description || raw.description || raw.name || '', '', 120);
  if (cleanDescription && cleanDescription.toUpperCase() !== symbol) return cleanDescription;
- const stock = resolveTokenizedStockMeta(raw.symbol ? raw : symbol, cleanDescription);
- if (stock) return `${stock.displayName} Perpetual`;
+ const inferredRwa = inferRwaAssetInfo(raw.symbol ? raw : symbol, cleanDescription);
+ if (inferredRwa?.displayName) return `${inferredRwa.displayName} Perpetual`;
  const base = normalizeBaseSymbol(symbol);
  const assetName = DELTA_BASE_ASSET_NAMES[base] || titleCaseAssetCode(base);
  return assetName ? `${assetName} Perpetual` : symbol;
@@ -1931,14 +1975,16 @@
 
  function isStockToken(base) {
  if (!base) return false;
- if (resolveTokenizedStockMeta(base)) return true;
- if (STOCK_TOKEN_SET.has(base)) return true;
- return base.endsWith('X') && STOCK_TOKEN_SET.has(base.slice(0, -1));
+ const inferredRwa = inferRwaAssetInfo(base);
+ if (inferredRwa?.assetClass === 'tokenized_stock') return true;
+ return false;
  }
 
  function getSector(sym) {
  const raw = String(sym || '').toUpperCase();
  const base = normalizeBaseSymbol(raw);
+ const assetInfo = inferRwaAssetInfo(raw);
+ if (assetInfo?.sector) return assetInfo.sector;
  if (isStockToken(base)) return 'Stock';
  const candidates = [raw];
  if (base) candidates.push(`${base}USD`, `${base}USDT`, `${base}XUSD`);
@@ -2146,6 +2192,7 @@
  MAX_SIGNAL_PERSISTENCE_POINTS,
  SECTORS,
  DELTA_BASE_ASSET_NAMES,
+ RWA_ASSET_TYPES,
  TOKENIZED_STOCK_PRODUCTS,
  TIER_PRIORITY,
  buildDecisionShortlist,
@@ -2176,8 +2223,6 @@
  sanitizeAlertTone,
  sanitizeAutoTradeSettings,
  sanitizeDcaBotSettings,
- sanitizeBacktestMinScore,
- sanitizeBacktestLookbackDays,
  sanitizeChartCacheEnabled,
  sanitizeChartDefaults,
  sanitizeMarketDataMode,
@@ -2190,10 +2235,8 @@
  sanitizeVarMaxPositions,
  sanitizeText,
  sanitizeBlockedSymbolList,
- sanitizeSetupFamilyBacktestOverrides,
  normalizeSymbolList,
  classifySymbolMaturity,
- resolveAutoTradeSetupFamilyBacktestThresholds,
  resolveRiskTemplateForSymbol,
  detectVolatilityRegime,
  getMarketRegimeMeta,
@@ -2201,6 +2244,7 @@
  getSetupFamilyMeta,
  formatThresholdSummary,
  normalizeBaseSymbol,
+ inferRwaAssetInfo,
  resolveTokenizedStockMeta,
  classifyDeltaInstrument,
  describeDeltaInstrument,

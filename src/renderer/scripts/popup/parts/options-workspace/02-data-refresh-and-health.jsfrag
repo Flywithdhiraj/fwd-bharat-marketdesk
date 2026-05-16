@@ -1,233 +1,82 @@
-// Universe, chain, straddle, skew and execution health refresh
- async function refreshStraddleSettings() {
+// Native Straddle-only data refresh
+async function refreshStraddleSettings() {
  const result = await send('v17:getStraddleSettings');
  if (result?.ok) {
- globalThis.__fwdTradeDeskOptionsAutoSettings = result.settings || {};
- setState({ straddleSettings: result.settings || {} }, { persist: false });
- return result.settings || {};
+  globalThis.__fwdTradeDeskOptionsAutoSettings = result.settings || {};
+  setState({ straddleSettings: result.settings || {} }, { persist: false, render: false });
+  return result.settings || {};
  }
  return state.straddleSettings || autoSettings();
- }
+}
 
- async function refreshExecutionHealth() {
- setState({ executionHealthLoading: true }, { persist: false });
- const result = await send('v17:getOptionsExecutionHealth');
+async function refreshNativeScannerSnapshot() {
+ const data = await localGet(['strategyResults.native_straddle', 'strategyStatus.native_straddle']);
  setState({
- executionHealthLoading: false,
- executionHealth: result?.ok ? result : { ok: false, locked: false, error: result?.error || 'Execution health unavailable' },
- }, { persist: false });
- return result;
- }
+  nativeScannerRows: Array.isArray(data['strategyResults.native_straddle']) ? data['strategyResults.native_straddle'] : [],
+  nativeScannerStatus: data['strategyStatus.native_straddle'] || null,
+  nativeScannerLoading: !!data['strategyStatus.native_straddle']?.active,
+ }, { persist: false, render: false });
+}
 
- async function refreshStraddleDashboard() {
+async function refreshStraddleDashboard() {
  setState({ straddleDashboardLoading: true }, { persist: false });
  const result = await send('v17:getStraddleDashboard', { underlying: state.underlying, nativeOnly: true });
  setState({
- straddleDashboardLoading: false,
- straddleDashboard: result?.ok ? result : { ok: false, entries: [], summary: null, error: result?.error || 'Failed to load active straddles' },
+  straddleDashboardLoading: false,
+  straddleDashboard: result?.ok ? result : { ok: false, entries: [], summary: null, error: result?.error || 'Failed to load active straddles' },
  }, { persist: false });
- }
+}
 
- async function refreshStraddlePreview(contract = null) {
- const selected = contract || getSelectedStraddleContract();
- if (!selected) {
- setState({ straddlePreview: null, straddlePreviewLoading: false }, { persist: false });
- return null;
- }
- const requestId = ++straddlePreviewRequestId;
- const qty = estimateStraddleQty(selected);
- setState({ straddlePreviewLoading: true }, { persist: false });
- const result = await send('v17:getStraddleTicketPreview', {
- symbol: selected.symbol,
- qty,
- underlying: selected.underlying || state.underlying,
- spotPrice: n(state.straddleChain?.underlyingPrice),
- markPrice: n(selected.markPrice),
- contractMultiplier: n(selected.contractMultiplier || 1),
- strike: n(selected.strike),
- expiryTs: n(selected.expiryTs),
- expiryKey: selected.expiryKey || state.straddleChain?.expiryKey || '',
- productId: n(selected.productId),
+async function refreshStraddleChain(forceExpiryKey = '') {
+ setState({ straddleLoading: true, straddleError: '', error: '' }, { persist: false });
+ await refreshStraddleSettings();
+ const result = await send('v17:getStraddleChain', {
+  underlying: state.underlying,
+  expiryKey: forceExpiryKey || state.expiryKey || '',
  });
- if (requestId !== straddlePreviewRequestId) return null;
- if (result?.ok) {
- globalThis.__fwdTradeDeskOptionsAutoSettings = { ...(globalThis.__fwdTradeDeskOptionsAutoSettings || {}), ...(result.settings || {}) };
+ if (!result?.ok) {
+  setState({
+   straddleLoading: false,
+   straddleError: result?.error || 'Failed to load native straddle chain',
+  }, { persist: false });
+  return null;
  }
+ const scored = scoredStraddleContracts(result);
+ const selected = scored.find(contract => contract.symbol === state.straddleSelectedSymbol) || scored[0] || null;
  setState({
- straddlePreviewLoading: false,
- straddlePreview: result?.ok
- ? { ...(result.preview || {}), settings: result.settings || {} }
- : { ok: false, error: result?.error || 'Failed to build straddle preview', symbol: selected.symbol },
- straddleSettings: result?.ok ? (result.settings || state.straddleSettings || autoSettings()) : (state.straddleSettings || autoSettings()),
- }, { persist: false });
- return result?.preview || null;
- }
+  straddleLoading: false,
+  straddleChain: result,
+  expiryKey: result.expiryKey || state.expiryKey,
+  straddleSelectedSymbol: selected?.symbol || '',
+  straddleError: '',
+ }, { persist: true, render: false });
+ await Promise.all([refreshNativeScannerSnapshot(), refreshStraddleDashboard()]);
+ render();
+ return result;
+}
 
- async function refreshVolatilitySkew(force = false) {
- if (!state.expiryKey && !state.chain?.expiryKey) return;
- const expiryKey = state.expiryKey || state.chain?.expiryKey || '';
- setState({ skewLoading: true, skewError: '' }, { persist: false });
- const result = await send('v17:getVolatilitySkew', {
- underlying: state.underlying,
- expiryKey,
- force: !!force,
+async function runNativeStraddleScan(force = true) {
+ setState({ nativeScannerLoading: true, error: '' }, { persist: false });
+ const result = await send('native-straddle:startScan', {
+  force,
+  underlyings: [state.underlying],
  });
- if (result?.ok) {
+ await refreshNativeScannerSnapshot();
  setState({
- skewLoading: false,
- skewData: result,
- skewError: '',
- skewHoveredStrike: n(result.atmStrike),
+  nativeScannerLoading: false,
+  error: result?.ok ? '' : (result?.error || 'Native Straddle scan failed'),
  }, { persist: false });
  return result;
- }
- setState({
- skewLoading: false,
- skewError: result?.error || 'Failed to load volatility skew',
- }, { persist: false });
- return null;
- }
+}
 
- async function refreshUniverse(force = false) {
- setState({ loadingUniverse: true, error: '' }, { persist: false });
- const response = await send('v17:getOptionUniverse', { underlying: state.underlying, force });
- if (response?.previewRuntimeUnavailable) return setState({ loadingUniverse: false, error: '', universe: [], expiryKey: '' }, { persist: false });
- if (!response?.ok) return setState({ loadingUniverse: false, error: response?.error || 'Failed to load option universe' }, { persist: false });
- const universe = Array.isArray(response.underlyings) ? response.underlyings : [];
- const meta = universe.find(item => item.underlying === state.underlying) || universe[0] || null;
- setState({ loadingUniverse: false, universe, underlying: meta?.underlying || state.underlying, expiryKey: meta?.expiries?.some(item => item.key === state.expiryKey) ? state.expiryKey : (meta?.expiries?.[0]?.key || ''), error: '' }, { persist: false });
- await refreshChain(force);
+async function ensureBooted() {
+ if (!bootPromise) {
+  bootPromise = loadState()
+  .then(() => Promise.all([refreshNativeScannerSnapshot(), refreshStraddleChain(state.expiryKey)]))
+  .catch(error => {
+   state = normalize({ ...state, initialized: true, straddleLoading: false, error: error?.message || 'Native Straddle desk failed to boot' });
+   render();
+  });
  }
-
- async function refreshChain(force = false) {
- if (!state.expiryKey) return;
- setState({ loadingChain: true, chainError: '' }, { persist: false });
- const response = await send('v17:getOptionsChain', { underlying: state.underlying, expiryKey: state.expiryKey, force });
- if (!response?.ok) return setState({ loadingChain: false, chainError: response?.error || 'Failed to load options chain' }, { persist: false });
- state.chain = decorateChain(response);
- state.loadingChain = false;
- state.chainError = '';
- if (!(n(state.targetPrice) > 0)) state.targetPrice = n(state.chain?.underlyingPrice);
- if (state.pendingRollSnapshot) {
- state.legs = state.pendingRollSnapshot.map(spec => {
- const contract = bySpec({ underlying: state.underlying, expiryKey: state.expiryKey, optionType: spec.optionType, strike: spec.strike });
- return contract ? (api.sanitizeOptionLeg?.({ ...contract, side: spec.side, qty: spec.quantity, quantity: spec.quantity, entryPrice: contract.markPrice, premium: contract.markPrice, entryMode: state.entryMode }) || null) : null;
- }).filter(Boolean);
- state.pendingRollSnapshot = null;
- } else if (!(state.legs || []).length) {
- state.legs = buildPreset(state.presetId);
- } else {
- state.legs = state.legs.map(leg => {
- const contract = bySpec({ underlying: state.underlying, expiryKey: state.expiryKey, optionType: leg.optionType, strike: leg.strike });
- return contract ? (api.sanitizeOptionLeg?.({ ...contract, side: leg.side, qty: leg.quantity || leg.qty || 1, quantity: leg.quantity || leg.qty || 1, entryPrice: contract.markPrice, premium: contract.markPrice, entryMode: state.entryMode }) || null) : null;
- }).filter(Boolean);
- }
- hydrate();
- void localSet({ [KEY]: snapshot() });
- render();
- if (state.workspaceMode === 'volatility') await refreshVolatilitySkew(force);
- }
-
- async function ensureBooted() {
- if (!bootPromise) bootPromise = loadState().then(() => Promise.all([refreshUniverse(), refreshExecutionHealth()])).catch(error => { state = normalize({ ...state, loadingUniverse: false, loadingChain: false, error: error?.message || 'Options desk failed to boot' }); render(); });
  return bootPromise;
- }
-
- function addOrReplace(nextLeg) {
- if (!nextLeg) return;
- const legs = state.legs.slice();
- const index = legs.findIndex(leg => leg.symbol === nextLeg.symbol && leg.side === nextLeg.side);
- if (index >= 0) legs[index] = nextLeg; else legs.push(nextLeg);
- setState({ legs, presetId: 'custom' });
- }
-
- function addLeg(symbol = '', side = 'sell') { addOrReplace(legFrom(bySymbol(symbol), side)); }
- function addHedge(symbol = '') {
- const contract = bySymbol(symbol);
- if (!contract) return;
- const list = contracts().filter(item => item.underlying === contract.underlying && item.expiryKey === contract.expiryKey && String(item.optionType || '').toLowerCase() === String(contract.optionType || '').toLowerCase());
- const hedge = nearest(list, item => String(contract.optionType || '').toLowerCase() === 'call' ? n(item.strike) > n(contract.strike) : n(item.strike) < n(contract.strike), hedgeTarget(contract));
- if (!hedge) return globalThis.showSystemToast?.('No hedge found', 'Could not find a suitable hedge strike on the current expiry.', 'warn', 2800);
- addOrReplace(legFrom(hedge, 'buy'));
- }
-
- function addStraddle(strike) {
- const rows = state.chain?.rows || [];
- const row = rows.find(r => n(r.strike) === n(strike));
- if (!row) return;
- const legs = state.legs.slice();
- if (row.call) { const cl = legFrom(row.call, 'sell'); if (cl) legs.push(cl); }
- if (row.put) { const pl = legFrom(row.put, 'sell'); if (pl) legs.push(pl); }
- setState({ legs, presetId: 'custom' });
- }
-
- function shiftLegs(direction = 1) {
- const move = step() * direction;
- setState({ legs: state.legs.map(leg => {
- const contract = bySpec({ underlying: state.underlying, expiryKey: state.expiryKey, optionType: leg.optionType, strike: n(leg.strike) + move });
- return contract ? (api.sanitizeOptionLeg?.({ ...contract, side: leg.side, qty: leg.quantity || leg.qty || 1, quantity: leg.quantity || leg.qty || 1, entryPrice: contract.markPrice, premium: contract.markPrice }) || leg) : leg;
- }), presetId: 'custom' });
- }
-
- function widenWings(direction = 1) {
- const spot = n(state.chain?.underlyingPrice);
- const move = step();
- setState({ legs: state.legs.map(leg => {
- if (String(leg.side || '').toLowerCase() !== 'buy') return leg;
- const nextStrike = n(leg.strike) + ((n(leg.strike) >= spot ? 1 : -1) * move * direction);
- const contract = bySpec({ underlying: state.underlying, expiryKey: state.expiryKey, optionType: leg.optionType, strike: nextStrike });
- return contract ? (api.sanitizeOptionLeg?.({ ...contract, side: leg.side, qty: leg.quantity || leg.qty || 1, quantity: leg.quantity || leg.qty || 1, entryPrice: contract.markPrice, premium: contract.markPrice }) || leg) : leg;
- }), presetId: 'custom' });
- }
-
- function equalize() { setState({ legs: state.legs.map(leg => api.sanitizeOptionLeg?.({ ...leg, entryPrice: n(leg.markPrice || leg.premium), premium: n(leg.markPrice || leg.premium) }) || leg), presetId: 'custom' }); }
- function defineRisk() {
- const next = state.legs.slice();
- state.legs.filter(leg => String(leg.side || '').toLowerCase() === 'sell').forEach(shortLeg => {
- const hasWing = next.some(candidate => String(candidate.optionType || '').toLowerCase() === String(shortLeg.optionType || '').toLowerCase() && String(candidate.side || '').toLowerCase() === 'buy' && (String(shortLeg.optionType || '').toLowerCase() === 'call' ? n(candidate.strike) > n(shortLeg.strike) : n(candidate.strike) < n(shortLeg.strike)));
- if (!hasWing) {
- const list = contracts().filter(item => item.underlying === shortLeg.underlying && item.expiryKey === shortLeg.expiryKey && String(item.optionType || '').toLowerCase() === String(shortLeg.optionType || '').toLowerCase());
- const hedge = nearest(list, item => String(shortLeg.optionType || '').toLowerCase() === 'call' ? n(item.strike) > n(shortLeg.strike) : n(item.strike) < n(shortLeg.strike), hedgeTarget(shortLeg));
- if (hedge) next.push(legFrom(hedge, 'buy'));
- }
- });
- setState({ legs: next, presetId: 'custom' });
- }
-
- async function rollNext() {
- const expiries = underlyingMeta()?.expiries || [];
- const index = expiries.findIndex(item => item.key === state.expiryKey);
- const next = index >= 0 ? expiries[index + 1] : null;
- if (!next) return globalThis.showSystemToast?.('No later expiry', 'The current expiry is already the farthest one in the loaded universe.', 'warn', 2800);
- setState({ expiryKey: next.key, pendingRollSnapshot: state.legs.map(leg => ({ optionType: leg.optionType, strike: leg.strike, side: leg.side, quantity: Math.max(1, n(leg.quantity || leg.qty, 1)) })), chain: null, analysis: null }, { persist: true });
- await refreshChain();
- }
-
- async function placeStrategy() {
- if (!state.legs.length || !state.analysis?.summary) return globalThis.showSystemToast?.('No strategy', 'Add one or more option legs before placing the basket.', 'warn', 3200);
- const health = state.executionHealth || await refreshExecutionHealth();
- if (health?.locked) return setState({ error: health?.repair?.message || 'Options execution is locked until the repair state is reviewed.' }, { persist: false });
- const s = state.analysis.summary;
- const legLines = state.legs.map(leg => `${String(leg.side || '').toUpperCase()} ${Math.max(1, n(leg.qty || leg.quantity, 1))}x ${leg.symbol} @ ${money(leg.entryPrice || leg.premium || leg.markPrice)}`).join('\n');
- const riskLine = `Max Profit: ${s.maxProfit == null ? 'Open' : money(s.maxProfit)} | Max Loss: ${s.maxLoss == null ? 'Undefined' : money(Math.abs(n(s.maxLoss)))}`;
- const greekLine = `Delta ${n(s.totalDelta).toFixed(3)} | Theta ${n(s.totalTheta).toFixed(4)} | Vega ${n(s.totalVega).toFixed(4)}`;
- const beLine = `Breakevens: ${(Array.isArray(s.breakevens) && s.breakevens.length) ? s.breakevens.map(value => `$${n(value).toFixed(0)}`).join(' / ') : 'NA'}`;
- if (!confirm(`FINAL OPTIONS ORDER PREVIEW\n\n${legLines}\n\n${riskLine}\n${greekLine}\n${beLine}\nEntry Mode: ${state.entryMode.toUpperCase()}\n\nProceed to submit this basket?`)) return;
- setState({ placing: true }, { persist: false });
- const expiry = expiryMeta();
- const response = await send('v17:placeOptionStrategyOrders', { legs: state.legs, underlyingPrice: n(state.chain?.underlyingPrice), daysToExpiry: n(expiry?.daysToExpiry), targetDays: n(state.targetDays), entryMode: state.entryMode, allowUndefinedRisk: state.allowUndefinedRisk, maxRiskUSD: autoSettings().maxRiskUSD, strategyLabel: state.presetId || 'custom_options_strategy', previewAccepted: true });
- setState({ placing: false }, { persist: false });
- if (!response?.ok) return globalThis.reportUiError?.('Options order failed', response?.error || 'Could not place option strategy');
- await refreshExecutionHealth();
- globalThis.showSystemToast?.('Options basket sent', `${response.results?.length || state.legs.length} legs submitted for ${state.underlying}.`, 'success', 3600);
- }
-
- function hoveredRow() { return n(state.chainHoverStrike) > 0 ? filteredRows().find(row => n(row.strike) === n(state.chainHoverStrike)) || null : null; }
- function selectedContract() { return bySymbol(state.selectedContract) || null; }
-
- function togglePresetFilter(filter = '') { const next = new Set(state.presetFilters); if (next.has(filter)) next.delete(filter); else next.add(filter); setState({ presetFilters: Array.from(next) }); }
- function loadPreset() { const legs = buildPreset(state.presetId); if (!legs.length) return globalThis.showSystemToast?.('Preset unavailable', 'This preset needs a loaded chain with matching strikes.', 'warn', 3200); setState({ legs }); }
-
- /* ===================================================================
- RENDER: Compact top bar (shared across all modes)
- =================================================================== */
+}

@@ -6,8 +6,6 @@
  configured: false,
  unlocked: false,
  totpEnabled: false,
- autoLockMinutes: 15,
- autoLockTimer: null,
  setupResult: null,
  };
 
@@ -39,6 +37,16 @@
  if (login) login.hidden = mode !== 'login';
  if (recovery) recovery.hidden = mode !== 'recovery';
  if (unlocked) unlocked.hidden = mode !== 'unlocked';
+ const title = $('appLockFormTitle');
+ const copy = $('appLockFormCopy');
+ const content = {
+ setup: ['Set up secure access', 'Create a local password before opening private trading data and order controls.'],
+ login: ['Unlock Futures', 'Use one password. Open the desk only when the setup, risk, and action are clear.'],
+ recovery: ['Reset access', 'Enter your recovery code and create a new password for this device.'],
+ unlocked: ['Security details', 'Save these details now. They are shown only after setup or reset.'],
+ }[mode] || ['Unlock Futures', 'Use one password. Open the desk only when the setup, risk, and action are clear.'];
+ if (title) title.textContent = content[0];
+ if (copy) copy.textContent = content[1];
  }
 
  function showOverlay(show) {
@@ -64,37 +72,32 @@
  if (!state.configured) {
  showOverlay(true);
  setMode('setup');
- setMessage('Create a local app password before using this workspace.', '');
+ setMessage('Create a local password before using this workspace.', '');
  return;
  }
  if (!state.unlocked) {
- clearAutoLockTimer();
- showOverlay(true);
- setMode('login');
+  showOverlay(true);
+  setMode('login');
  const codeField = $('appLockLoginCodeWrap');
  if (codeField) codeField.hidden = !state.totpEnabled;
  setMessage(state.totpEnabled
  ? 'Enter your password and Microsoft Authenticator code.'
- : 'Enter your app password to unlock the workspace.', '');
+ : 'Enter your password to continue.', '');
  return;
  }
  showOverlay(false);
  setMode('unlocked');
- scheduleAutoLock();
  }
 
  function applyStatus(result = {}) {
  state.configured = !!result.configured;
  state.unlocked = !!result.unlocked;
  state.totpEnabled = !!result.totpEnabled;
- state.autoLockMinutes = Number(result.autoLockMinutes || 15);
  if (!state.configured || state.unlocked) {
- globalThis.FWDDesktopRuntime?.start?.();
+  globalThis.FWDDesktopRuntime?.start?.();
  } else {
- globalThis.FWDDesktopRuntime?.stop?.();
+  globalThis.FWDDesktopRuntime?.stop?.();
  }
- const autoLockInput = $('appLockAutoLockMinutes');
- if (autoLockInput) autoLockInput.value = String(state.autoLockMinutes);
  renderStatus();
  }
 
@@ -137,32 +140,11 @@
  launchGroup.appendChild(button);
  }
 
- function clearAutoLockTimer() {
- if (state.autoLockTimer) clearTimeout(state.autoLockTimer);
- state.autoLockTimer = null;
- }
-
- function scheduleAutoLock() {
- clearAutoLockTimer();
- if (state.configured !== true || state.unlocked !== true || !native?.sendNativeMessage) return;
- const minutes = Math.min(240, Math.max(1, Number(state.autoLockMinutes || 15)));
- state.autoLockTimer = setTimeout(async () => {
- const result = await send('auth_logout');
- applyStatus(result);
- setMessage(`Locked after ${minutes} minute${minutes === 1 ? '' : 's'} of inactivity.`, '');
- }, minutes * 60 * 1000);
- }
-
- function touchActivity() {
- if (state.configured && state.unlocked) scheduleAutoLock();
- }
-
  async function setupAppLock(event) {
  event?.preventDefault();
  const password = $('appLockSetupPassword')?.value || '';
  const confirm = $('appLockSetupConfirm')?.value || '';
  const totpEnabled = !!$('appLockSetupTotp')?.checked;
- const autoLockMinutes = Number($('appLockSetupAutoLock')?.value || 15);
  if (password.length < 8) {
  setMessage('Use at least 8 characters for the app password.', 'bad');
  return;
@@ -171,7 +153,7 @@
  setMessage('Password and confirm password do not match.', 'bad');
  return;
  }
- const result = await send('auth_setup', { password, totpEnabled, autoLockMinutes });
+ const result = await send('auth_setup', { password, totpEnabled });
  if (!result.ok) {
  setMessage(result.error || 'Could not set app lock.', 'bad');
  return;
@@ -252,35 +234,26 @@
  setMessage('Password reset. Save the new recovery code now.', 'good');
  }
 
- async function saveAutoLock() {
- const minutes = Number($('appLockAutoLockMinutes')?.value || 15);
- const result = await send('auth_update_auto_lock', { autoLockMinutes: minutes });
- if (!result.ok) {
- setMessage(result.error || 'Could not save auto-lock.', 'bad');
- return;
- }
- applyStatus(result);
- setMessage(`Auto-lock saved: ${state.autoLockMinutes} minute${state.autoLockMinutes === 1 ? '' : 's'}.`, 'good');
- }
-
  function bind() {
  installLogoutButton();
  $('appLockSetup')?.addEventListener('submit', setupAppLock);
  $('appLockLogin')?.addEventListener('submit', loginAppLock);
  $('appLockRecovery')?.addEventListener('submit', resetPassword);
+ document.querySelector('.app-lock-nav-login')?.addEventListener('click', () => {
+ $('appLockLoginPassword')?.focus();
+ });
  $('appLockShowRecovery')?.addEventListener('click', () => {
  setMode('recovery');
  setMessage('Use your recovery code to set a new app password.', '');
  });
  $('appLockBackToLogin')?.addEventListener('click', () => {
  setMode('login');
- setMessage('Enter your app password to unlock the workspace.', '');
+ setMessage('Enter your password to unlock the workspace.', '');
  });
  $('appLockContinue')?.addEventListener('click', () => {
  clearSetupSecrets();
  showOverlay(false);
  setMode('unlocked');
- scheduleAutoLock();
  });
  $('appLockCopyKey')?.addEventListener('click', async () => {
  const text = $('appLockManualKey')?.textContent || '';
@@ -293,10 +266,6 @@
  if (!text) return;
  await navigator.clipboard?.writeText(text).catch(() => {});
  setMessage('Recovery code copied.', 'good');
- });
- $('appLockSaveAutoLock')?.addEventListener('click', saveAutoLock);
- ['pointerdown', 'keydown', 'wheel'].forEach(type => {
- window.addEventListener(type, touchActivity, { passive: true });
  });
  }
 
@@ -313,12 +282,11 @@
  applyStatus(result);
  return result;
  },
- updateSecurity: async (payload = {}) => {
- const result = await send('auth_update_security', payload);
- if (result?.ok) applyStatus(result);
- return result;
- },
- touchActivity,
+  updateSecurity: async (payload = {}) => {
+  const result = await send('auth_update_security', payload);
+  if (result?.ok) applyStatus(result);
+  return result;
+  },
  clearSetupSecrets,
  });
 }());

@@ -419,7 +419,7 @@
  };
  }
 
- function wizardBacktestRule(candles = []) {
+ function wizardRuleEvidence(candles = []) {
  const rows = Array.isArray(candles) ? candles : [];
  const samples = [];
  for (let i = 220; i < rows.length - 21; i += 5) {
@@ -517,7 +517,7 @@
  const actionLabel = wizardActionLabel(signal, finalScore);
  const priorityLabel = wizardPriorityLabel(signal, finalScore, checks);
  const decision = wizardReasonPack(signal, { trend, vcp, breakout, risk }, row);
- const ruleBacktest = wizardBacktestRule(row.candles);
+ const ruleEvidence = wizardRuleEvidence(row.candles);
  const reasons = [
  ...trend.reasons,
  shortTrend ? 'Short-side downtrend confirmed' : '',
@@ -550,7 +550,7 @@
  close: wizardRound(ind.close, 8),
  priorityLabel,
  decision,
- ruleBacktest,
+ ruleEvidence,
  shortScore,
  rsScore: row.rsScore,
  weightedReturn: wizardRound(row.weightedReturn, 2),
@@ -687,6 +687,95 @@
  return results;
  }
 
+ async function runWizardScanFromContext(context) {
+ if (!global.FWDTradeDeskStrategies?.normalizeStrategyResult) throw new Error('Strategy registry not loaded');
+ if (!context?.scanId) throw new Error('Fresh main scan context is required');
+ await wizardSetStatus('Deriving Wizard rows from main scan...', { active: true, progress: 5, scanId: context.scanId });
+ await chrome.storage.local.set({ 'strategyResults.wizard': [] });
+ const settings = await wizardLoadSettings();
+ const tickerMap = context.tickerMap || {};
+ const products = Array.isArray(context.products) ? context.products : [];
+ const productSymbols = new Set(products.map(item => String(item.symbol || '').toUpperCase()));
+ const universe = Object.entries(tickerMap)
+ .filter(([symbol, ticker]) => {
+ const sym = String(symbol || '').toUpperCase();
+ if (!sym || productSymbols.size && !productSymbols.has(sym)) return false;
+ if (!sym.endsWith('USD') && !sym.endsWith('USDT')) return false;
+ return Number(ticker?.price || 0) > 0;
+ })
+ .map(([symbol, ticker]) => ({ symbol, ticker }))
+ .sort((a, b) => Number(b.ticker?.usdVol24h || 0) - Number(a.ticker?.usdVol24h || 0))
+ .slice(0, Math.max(20, Number(settings.maxCoins || WIZARD_DEFAULT_SETTINGS.maxCoins)));
+ const getContextCandles = globalThis.FWDTradeDeskScanContext?.getCandles;
+ const btcSymbol = ['BTCUSD', 'BTCUSDT', 'XBTUSD'].find(symbol => (getContextCandles?.(context, symbol, '1d', settings.preferredCandles) || []).length >= 20) || '';
+ const btcCandles = btcSymbol ? getContextCandles(context, btcSymbol, '1d', settings.preferredCandles) : [];
+ const marketHealth = wizardMarketHealth(btcCandles);
+ const btcInd = wizardCalculateIndicators(btcCandles || []);
+ const rows = [];
+ const skipped = { noContextCandles: 0 };
+ for (let i = 0; i < universe.length; i += 1) {
+ const item = universe[i];
+ if (i % 10 === 0 || i === universe.length - 1) {
+ await wizardSetStatus(`Deriving ${item.symbol} (${i + 1}/${universe.length})`, {
+ active: true,
+ progress: Math.round(8 + (i / Math.max(1, universe.length)) * 82),
+ scanned: i + 1,
+ total: universe.length,
+ marketHealth,
+ scanId: context.scanId,
+ });
+ }
+ const candles = getContextCandles?.(context, item.symbol, '1d', settings.preferredCandles) || [];
+ if (!Array.isArray(candles) || candles.length < settings.minCandles) {
+ skipped.noContextCandles += 1;
+ continue;
+ }
+ const indicators = wizardCalculateIndicators(candles);
+ const weightedReturn = (0.5 * indicators.return90d) + (0.3 * indicators.return30d) + (0.2 * indicators.return180d);
+ rows.push({ ...item, candles, indicators, weightedReturn });
+ }
+ const ranks = wizardPercentileRanks(rows);
+ const builtResults = rows.map(row => {
+ row.rsScore = ranks.get(row.symbol) || 0;
+ return wizardBuildResult(row, {
+ settings,
+ marketHealth,
+ btcReturn30d: btcInd.return30d || 0,
+ btcReturn90d: btcInd.return90d || 0,
+ });
+ })
+ .sort((a, b) => {
+ const signalRank = { BUY: 5, WATCHLIST: 4, SELL: 3, IGNORE: 1 };
+ return (signalRank[b.signal] || 0) - (signalRank[a.signal] || 0)
+ || Number(b.score || 0) - Number(a.score || 0)
+ || Number(b.raw?.rsScore || 0) - Number(a.raw?.rsScore || 0);
+ })
+ .slice(0, Math.max(20, Number(settings.outputLimit || WIZARD_DEFAULT_SETTINGS.outputLimit)));
+ const results = await wizardUpdateWatchAging('wizard', builtResults);
+ const signalCounts = wizardSignalCounts(results);
+ await chrome.storage.local.set({
+ 'strategyResults.wizard': results,
+ 'strategyStatus.wizard': {
+ strategyId: 'wizard',
+ status: `Derived - ${results.length} Wizard rows from main scan | Buy ${signalCounts.BUY || 0}, Watch ${signalCounts.WATCHLIST || 0}, Sell ${signalCounts.SELL || 0}`,
+ active: false,
+ progress: 100,
+ scanned: rows.length,
+ total: universe.length,
+ signalCounts,
+ marketHealth,
+ skipped,
+ source: 'main_scan_context',
+ scanId: context.scanId,
+ lastScanTs: wizardNow(),
+ ts: wizardNow(),
+ },
+ wizardLastScanTs: wizardNow(),
+ wizardMarketHealth: marketHealth,
+ });
+ return results;
+ }
+
  function getWizardSnapshot(callback) {
  chrome.storage.local.get([
  'strategyResults.wizard',
@@ -701,18 +790,31 @@
 'strategyResults.reversal',
 'strategyStatus.reversal',
 'strategySettings.reversal',
+'strategyResults.darvas',
+'strategyStatus.darvas',
+'strategySettings.darvas',
+'strategyResults.pullback',
+'strategyStatus.pullback',
+'strategySettings.pullback',
+'strategyResults.native_straddle',
+'strategyStatus.native_straddle',
+'strategySettings.native_straddle',
 'scanResults',
 'scanStatus',
 'lastScanTs',
+'strategyLabUnifiedScanStatus',
+'lastMainScanContextMeta',
  ], data => {
  callback({
  ok: true,
  registry: global.FWDTradeDeskStrategies?.listStrategies?.() || [],
- current: {
- results: Array.isArray(data.scanResults) ? data.scanResults : [],
- status: data.scanStatus || '',
- lastScanTs: data.lastScanTs || 0,
- },
+current: {
+results: Array.isArray(data.scanResults) ? data.scanResults : [],
+status: data.scanStatus || '',
+lastScanTs: data.lastScanTs || 0,
+ unifiedStatus: data.strategyLabUnifiedScanStatus || {},
+ scanContextMeta: data.lastMainScanContextMeta || null,
+},
  wizard: {
  results: Array.isArray(data['strategyResults.wizard']) ? data['strategyResults.wizard'] : [],
  status: data['strategyStatus.wizard'] || {},
@@ -733,6 +835,21 @@ reversal: {
  status: data['strategyStatus.reversal'] || {},
  settings: data['strategySettings.reversal'] || {},
 },
+darvas: {
+ results: Array.isArray(data['strategyResults.darvas']) ? data['strategyResults.darvas'] : [],
+ status: data['strategyStatus.darvas'] || {},
+ settings: data['strategySettings.darvas'] || {},
+},
+pullback: {
+ results: Array.isArray(data['strategyResults.pullback']) ? data['strategyResults.pullback'] : [],
+ status: data['strategyStatus.pullback'] || {},
+ settings: data['strategySettings.pullback'] || {},
+},
+native_straddle: {
+ results: Array.isArray(data['strategyResults.native_straddle']) ? data['strategyResults.native_straddle'] : [],
+ status: data['strategyStatus.native_straddle'] || {},
+ settings: data['strategySettings.native_straddle'] || {},
+},
 });
  });
 }
@@ -743,7 +860,14 @@ reversal: {
  return false;
  }
  if (msg?.action === 'wizard:startScan') {
- runWizardScan()
+ const context = globalThis.FWDTradeDeskScanContext?.getFresh?.();
+ const runner = context ? () => runWizardScanFromContext(context) : (msg?.forceIndependent === true ? runWizardScan : null);
+ if (!runner) {
+ wizardSetStatus('Run main scan first - Wizard will derive from shared scan data', { active: false, progress: 0 })
+ .finally(() => sendResponse({ ok: false, error: 'Run main scan first' }));
+ return true;
+ }
+ runner()
  .then(results => sendResponse({ ok: true, count: results.length }))
  .catch(async error => {
  await wizardSetStatus(`Wizard scan failed - ${error?.message || error}`, { active: false, progress: 0 });
@@ -779,9 +903,10 @@ reversal: {
  wizardActionLabel,
  wizardSignalCounts,
  wizardPriorityLabel,
- wizardBacktestRule,
+ wizardRuleEvidence,
  wizardUpdateWatchAging,
  wizardPercentileRanks,
  runWizardScan,
+ runWizardScanFromContext,
  });
 })(globalThis);

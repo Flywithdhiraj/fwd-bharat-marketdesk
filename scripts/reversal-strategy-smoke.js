@@ -148,6 +148,7 @@ const reversalText = fs.readFileSync(path.join(root, 'src/renderer/scripts/backg
 const wizardText = fs.readFileSync(path.join(root, 'src/renderer/scripts/background/08-wizard-scanner.js'), 'utf8');
 const popupText = fs.readFileSync(path.join(root, 'src/renderer/scripts/popup/09-strategy-lab.js'), 'utf8');
 const backgroundText = fs.readFileSync(path.join(root, 'src/renderer/desktop-background.html'), 'utf8');
+const lazyLoaderText = fs.readFileSync(path.join(root, 'src/renderer/scripts/background/00-lazy-modules.js'), 'utf8');
 const packageText = fs.readFileSync(path.join(root, 'package.json'), 'utf8');
 
 assert('registry exposes reversal lab', strategies.getStrategy('reversal').id === 'reversal');
@@ -164,5 +165,5 @@ assert('reversal scanner does not write current scanResults key', !/chrome\.stor
 assert('strategy snapshot includes reversal rows', wizardText.includes("'strategyResults.reversal'") && wizardText.includes('reversal:'));
 assert('strategy lab UI includes reversal filters and detail drawer', popupText.includes("activeStrategyLabId === 'reversal'") && popupText.includes("['liquidation', 'Liq Reversal']") && popupText.includes('buildReversalDetail'));
 assert('strategy lab UI includes reversal chart draft handoff', popupText.includes('buildReversalChartDraft') && popupText.includes('data-reversal-chart-draft'));
-assert('desktop background loads reversal scanner', backgroundText.includes('scripts/background/11-reversal-scanner.js'));
+assert('desktop background lazy-loads reversal scanner', backgroundText.includes('scripts/background/00-lazy-modules.js') && lazyLoaderText.includes('scripts/background/11-reversal-scanner.js') && lazyLoaderText.includes("'reversal:startScan'"));
 assert('package exposes reversal smoke check', packageText.includes('check:reversal') && packageText.includes('reversal-strategy-smoke.js'));

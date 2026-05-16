@@ -148,10 +148,27 @@ const POPUP_LAZY_SCRIPT_PATHS = Object.freeze({
  chartEngine: 'scripts/popup/chart-engine.js',
  chart: 'scripts/popup/07-chart-workspace.js',
  options: 'scripts/popup/08-options-workspace.js',
+ strategyLab: 'scripts/popup/09-strategy-lab.js',
+});
+const POPUP_LAZY_STYLE_PATHS = Object.freeze({
+ chart: 'styles/05-chart-workspace.css',
+ options: 'styles/06-options-workspace.css',
 });
 const popupLazyScriptPromises = new Map();
+const popupLazyStylePromises = new Map();
 let popupV16InitPromise = null;
 let popupV16Initialized = false;
+const POPUP_V16_TABS = new Set([
+ 'liveanalytics',
+ 'funds',
+ 'positions',
+ 'orders',
+ 'tradecheck',
+ 'riskcalc',
+ 'strategy',
+]);
+const POPUP_OPTIONS_TABS = new Set(['options']);
+const POPUP_STRATEGY_LAB_TABS = new Set(['strategies']);
 
 function popupRequestIdleCallback(task, timeout = 1200) {
  if (typeof window.requestIdleCallback === 'function') {
@@ -202,6 +219,51 @@ function loadPopupScriptOnce(src) {
  throw error;
  });
  popupLazyScriptPromises.set(safeSrc, promise);
+ return promise;
+}
+
+function loadPopupStyleOnce(href) {
+ const safeHref = String(href || '').trim();
+ if (!safeHref) return Promise.resolve();
+ if (popupLazyStylePromises.has(safeHref)) return popupLazyStylePromises.get(safeHref);
+ const existing = Array.from(document.querySelectorAll('link[rel="stylesheet"]'))
+ .find(link => link.getAttribute('href') === safeHref);
+ if (existing && existing.dataset.loaded === 'true') return Promise.resolve();
+ const promise = new Promise((resolve, reject) => {
+ let settled = false;
+ const link = existing || document.createElement('link');
+ const finish = () => {
+ if (settled) return;
+ settled = true;
+ link.dataset.loaded = 'true';
+ resolve();
+ };
+ const fail = () => {
+ if (settled) return;
+ settled = true;
+ reject(new Error(`Failed to load ${safeHref}`));
+ };
+ link.addEventListener('load', finish, { once: true });
+ link.addEventListener('error', fail, { once: true });
+ if (!existing) {
+ link.rel = 'stylesheet';
+ link.href = safeHref;
+ link.dataset.popupLazyStyle = 'true';
+ document.head.appendChild(link);
+ }
+ if (existing && (existing.dataset.loaded === 'true' || document.readyState === 'complete')) {
+ queueMicrotask(finish);
+ }
+ setTimeout(() => {
+ if (settled) return;
+ if (existing) finish();
+ else fail();
+ }, 15000);
+ }).catch(error => {
+ popupLazyStylePromises.delete(safeHref);
+ throw error;
+ });
+ popupLazyStylePromises.set(safeHref, promise);
  return promise;
 }
 
@@ -259,6 +321,7 @@ async function ensureV16CapabilityUpgradeLoaded() {
 }
 
 async function ensureChartWorkspaceLoaded() {
+ await loadPopupStyleOnce(POPUP_LAZY_STYLE_PATHS.chart);
  await loadPopupScriptOnce(POPUP_LAZY_SCRIPT_PATHS.chartVendor);
  await loadPopupScriptOnce(POPUP_LAZY_SCRIPT_PATHS.chartIndicators);
  await loadPopupScriptOnce(POPUP_LAZY_SCRIPT_PATHS.chartEngine);
@@ -266,17 +329,27 @@ async function ensureChartWorkspaceLoaded() {
 }
 
 async function ensureOptionsWorkspaceLoaded() {
+ await loadPopupStyleOnce(POPUP_LAZY_STYLE_PATHS.options);
  await loadPopupScriptOnce(POPUP_LAZY_SCRIPT_PATHS.options);
+}
+
+async function ensureStrategyLabLoaded() {
+ await loadPopupScriptOnce(POPUP_LAZY_SCRIPT_PATHS.strategyLab);
 }
 
 async function ensurePopupFeatureModulesForTab(tab) {
  const safeTab = String(tab || '').trim().toLowerCase();
- if (safeTab === 'liveanalytics' || safeTab === 'funds' || safeTab === 'positions' || safeTab === 'orders' || safeTab === 'strategy') {
+ if (POPUP_STRATEGY_LAB_TABS.has(safeTab)) {
+ renderLazyPaneState(safeTab);
+ await ensureStrategyLabLoaded();
+ return;
+ }
+ if (POPUP_V16_TABS.has(safeTab)) {
  renderLazyPaneState(safeTab);
  await ensureV16CapabilityUpgradeLoaded();
  return;
  }
- if (safeTab === 'options') {
+ if (POPUP_OPTIONS_TABS.has(safeTab)) {
  await ensureOptionsWorkspaceLoaded();
  }
  if (safeTab === 'chart') {
@@ -339,10 +412,11 @@ function warmPopupFeatureModules(params, activeTab) {
  if (params.get('chart') === '1') return;
  popupRequestIdleCallback(() => {
  const tasks = [];
- if (params.get('desktop') === '1' || ['liveanalytics', 'funds', 'positions', 'orders'].includes(String(activeTab || ''))) {
+ const safeActiveTab = String(activeTab || '').trim().toLowerCase();
+ if (POPUP_V16_TABS.has(safeActiveTab)) {
  tasks.push(ensureV16CapabilityUpgradeLoaded());
  }
- if (params.get('desktop') === '1' || String(activeTab || '') === 'options') {
+ if (POPUP_OPTIONS_TABS.has(safeActiveTab)) {
  tasks.push(ensureOptionsWorkspaceLoaded());
  }
  Promise.all(tasks).catch(error => {
@@ -355,6 +429,7 @@ globalThis.ensurePopupFeatureModulesForTab = ensurePopupFeatureModulesForTab;
 globalThis.ensureV16CapabilityUpgradeLoaded = ensureV16CapabilityUpgradeLoaded;
 globalThis.ensureChartWorkspaceLoaded = ensureChartWorkspaceLoaded;
 globalThis.ensureOptionsWorkspaceLoaded = ensureOptionsWorkspaceLoaded;
+globalThis.ensureStrategyLabLoaded = ensureStrategyLabLoaded;
 globalThis.renderChartWorkspacePane = renderChartWorkspacePane;
 globalThis.openSignalInChartWorkspace = openSignalInChartWorkspace;
 
@@ -407,10 +482,11 @@ document.addEventListener('DOMContentLoaded', () => {
  desktopZoomMode = !!d.desktopZoomMode;
  applyStoredFilterUi();
  const storedTab = String(d.activeWorkspaceTab || '');
- const desiredTab = TAB_TITLES[storedTab === 'analytics' ? 'liveanalytics' : storedTab]
+ const restoreLastTab = params.get('restoreLastTab') === '1';
+ const desiredTab = restoreLastTab && TAB_TITLES[storedTab === 'analytics' ? 'liveanalytics' : storedTab]
  ? (storedTab === 'analytics' ? 'liveanalytics' : storedTab)
  : 'home';
- const desiredGroup = WORKSPACE_GROUP_META[d.workspaceGroup] ? d.workspaceGroup : getWorkspaceGroupForTab(desiredTab);
+ const desiredGroup = restoreLastTab && WORKSPACE_GROUP_META[d.workspaceGroup] ? d.workspaceGroup : getWorkspaceGroupForTab(desiredTab);
  workspaceGroup = desiredGroup;
  activeWorkspaceTab = WORKSPACE_GROUP_META[desiredGroup].tabs.includes(desiredTab)
  ? desiredTab

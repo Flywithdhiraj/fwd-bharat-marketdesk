@@ -122,6 +122,7 @@ positionsFilter: 'all',
   lastPositionMetrics: null,
   positionAlertState: {},
   positionNotificationsEnabled: false,
+  notificationSourceFilter: 'all',
   uxHintDismissals: {},
 };
 let v16LiveAnalyticsView = {
@@ -130,6 +131,11 @@ let v16LiveAnalyticsView = {
  instrument: 'all',
  setupMode: 'all',
  setupSort: 'impact',
+ tradeCheckSymbol: '',
+ tradeCheckSide: 'long',
+ tradeCheckEntry: '',
+ tradeCheckStop: '',
+ tradeCheckTarget: '',
  autoRefresh: false,
  legend: {
  deposits: true,
@@ -447,7 +453,6 @@ function v16ResolveTradeEntryBlockReason({ symbol = '', preview = null, profile 
  const activeProfile = profile || getV16ActiveAccountProfile();
  const resolvedSymbol = String(symbol || preview?.symbol || '').trim().toUpperCase();
  if (!resolvedSymbol) return '';
- if (draft?.manualOverride === true) return '';
  const blockedSymbols = new Set(v16ResolveBlockedSymbols(activeProfile));
  if (blockedSymbols.has(resolvedSymbol)) {
  return `${resolvedSymbol} is blocked for live trading in the active profile.`;
@@ -459,9 +464,8 @@ function v16ResolveTradeEntryBlockReason({ symbol = '', preview = null, profile 
  ? Math.min(profileCapUSD, requestedCapUSD)
  : profileCapUSD;
  const estimatedNotional = Number(preview?.estimatedNotional || 0);
- // Allow 5% rounding buffer so contract-size rounding never hard-blocks an order
  if (estimatedNotional > maxOrderUSD * 1.05) {
- return `Order blocked: actual notional $${v16FmtNumber(estimatedNotional, 2)} exceeds the allowed cap of $${v16FmtNumber(maxOrderUSD, 2)} after contract rounding.`;
+ return `Order blocked: actual notional $${v16FmtNumber(estimatedNotional, 2)} exceeds the allowed cap of $${v16FmtNumber(maxOrderUSD, 2)}. Exchange minimum contract size rounded this order above your limit.`;
  }
  }
  return '';
@@ -851,6 +855,11 @@ function v16RenderJournal(trades = []) {
  <div class="live-journal-meta">${v16Esc(tradeStory)}</div>
  <div class="live-journal-meta">${v16Esc(diagnosticSummary || 'Trade summary will become richer after more tracked closes.')}</div>
  <div class="live-journal-meta">${review.notes ? v16Esc(v16BuildJournalSummary(review)) : v16Esc(v16BuildJournalLessonStatus(review))}</div>
+ <div class="live-journal-row-actions" aria-hidden="true">
+ <span>Review</span>
+ <span>Replay</span>
+ <span>${review.notes ? 'Edit Lesson' : 'Add Lesson'}</span>
+ </div>
  </button>`;
  }).join('');
  wrap.querySelectorAll('[data-live-journal-id]').forEach(button => {
