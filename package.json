@@ -2,7 +2,7 @@
   "name": "fwd-tradedesk-pro-windows",
   "version": "0.1.0",
   "private": true,
-  "author": "FWD TradeDesk Pro",
+  "author": "Dhiraj Jha",
   "description": "FWD TradeDesk Pro Windows desktop shell.",
   "main": "src/main/main.js",
   "scripts": {
@@ -29,7 +29,7 @@
   "build": {
     "appId": "com.fwd.tradedeskpro",
     "productName": "FWD TradeDesk Pro",
-    "copyright": "Copyright (c) 2026 FWD TradeDesk Pro",
+    "copyright": "Copyright (c) 2026 Dhiraj Jha",
     "afterPack": "scripts/after-pack-branding.js",
     "directories": {
       "output": "release"
