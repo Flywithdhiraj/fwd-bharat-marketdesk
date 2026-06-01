@@ -100,6 +100,21 @@ function makeTickerMap(priceBySymbol = {}, options = {}) {
 const initial = calcMarketIndex(makeTickerMap(), null, { maxConstituents: 10 }, {});
 assert('initial basket starts at 10000', near(initial.composite, 10000), `composite=${initial.composite}`);
 assert('initial basket has 10 equal constituents', initial.topCoins.length === 10 && initial.topCoins.every(coin => near(coin.weight, 10)), JSON.stringify(initial.topCoins));
+assert('funding crowding index is available with bias and contributors', Number.isFinite(Number(initial.sentiment.fundingCrowdingIndex)) && initial.sentiment.fundingCrowdingBias === 'longs_crowded' && Array.isArray(initial.sentiment.topFundingCrowding), JSON.stringify(initial.sentiment));
+
+const crowdedFundingMap = makeTickerMap({}, { baseVolume: 25000000 });
+crowdedFundingMap.BTCUSD.fundingRate = -0.18;
+crowdedFundingMap.ETHUSD.fundingRate = -0.14;
+crowdedFundingMap.SOLUSD.fundingRate = -0.09;
+crowdedFundingMap.BTCUSD.oi = 1300000;
+crowdedFundingMap.ETHUSD.oi = 1250000;
+crowdedFundingMap.SOLUSD.oi = 1200000;
+const crowdedFunding = calcMarketIndex(crowdedFundingMap, initial, { maxConstituents: 10 }, {
+ BTCUSD: 1000000,
+ ETHUSD: 1000000,
+ SOLUSD: 1000000,
+});
+assert('funding crowding index captures magnitude direction and OI confirmation', crowdedFunding.sentiment.fundingCrowdingIndex > initial.sentiment.fundingCrowdingIndex && crowdedFunding.sentiment.fundingCrowdingBias === 'shorts_crowded' && crowdedFunding.sentiment.fundingCrowdingShock > 0 && crowdedFunding.sentiment.fundingOiConfirmationPct > 0, JSON.stringify(crowdedFunding.sentiment));
 
 const upOnePrices = Object.fromEntries(symbols.map(symbol => [symbol, 101]));
 const upOne = calcMarketIndex(makeTickerMap(upOnePrices), initial, { maxConstituents: 10 }, {});
@@ -169,10 +184,14 @@ const chartEngineText = fs.readFileSync(path.join(root, 'src/renderer/scripts/po
 const chartModelText = fs.readFileSync(path.join(root, 'src/renderer/scripts/popup/parts/chart-workspace/02-model-and-order-context.jsfrag'), 'utf8');
 const chartEventsText = fs.readFileSync(path.join(root, 'src/renderer/scripts/popup/parts/chart-workspace/04-surface-events.jsfrag'), 'utf8');
 const shellEntryText = fs.readFileSync(path.join(root, 'src/renderer/scripts/popup/01-shell.js'), 'utf8');
-assert('FWD100 chart workspace uses real Lightweight Charts container', chartShellText.includes('data-ds-lwc-chart="${chartId}"') && !chartShellText.includes('buildFwdIndexChart'));
-assert('FWD100 chart engine uses normal OHLC and volume path', chartEngineText.includes('const isSyntheticIndex = payload.dataset?.syntheticIndex === true') && !chartEngineText.includes('LightweightCharts.AreaSeries') && chartEngineText.includes('priceSeries.setData(visibleCandles)') && chartEngineText.includes('if (active.volume)'));
-assert('FWD100 chart button opens daily EMA OBV candle view', shellEntryText.includes("symbol: 'FWD100'") && shellEntryText.includes("preset: 'ema_obv'") && shellEntryText.includes("chartType: 'candles'") && shellEntryText.includes("timeframe: '1d'") && shellEntryText.includes('visibleCandleCount: 520'));
 const chartStateText = fs.readFileSync(path.join(root, 'src/renderer/scripts/popup/parts/chart-workspace/01-state-and-fetch.jsfrag'), 'utf8');
+assert('FWD100 chart workspace uses real Lightweight Charts container', chartShellText.includes('data-ds-lwc-chart="${chartId}"') && !chartShellText.includes('buildFwdIndexChart'));
+assert('FWD100 chart engine uses normal OHLC and volume path', chartEngineText.includes('const isSyntheticIndex = payload.dataset?.syntheticIndex === true') && !chartEngineText.includes('LightweightCharts.AreaSeries') && chartEngineText.includes("priceSeries.setData(chartType === 'line'") && chartEngineText.includes('if (active.volume)'));
+assert('FWD100 chart button opens daily EMA OBV candle view', shellEntryText.includes("openD10SyntheticChart('FWD100'") && shellEntryText.includes('symbol: normalizedSymbol') && shellEntryText.includes("preset: isMetricSymbol ? 'clean' : 'ema_obv'") && shellEntryText.includes("chartType: isMetricSymbol ? 'line' : 'candles'") && shellEntryText.includes("timeframe: '1d'") && shellEntryText.includes('visibleCandleCount: 520'));
+assert('FWD100 metric chart symbols use stored scan history', chartStateText.includes("FWD100-FUNDING") && chartStateText.includes("FWD100-BREADTH") && chartStateText.includes("FWD100-BREATH") && chartStateText.includes("FWD100-AD") && chartModelText.includes('buildFwdIndexMetricCandles') && chartModelText.includes('fundingCrowdingIndex') && chartModelText.includes('fundingStressPct') && chartModelText.includes('breadthPct') && chartModelText.includes('advanceDeclineRatio') && chartModelText.includes('syntheticMetric') && shellEntryText.includes('data-d10-synthetic-chart="FWD100-FUNDING"') && shellEntryText.includes('data-d10-synthetic-chart="FWD100-BREADTH"') && shellEntryText.includes('data-d10-synthetic-chart="FWD100-AD"'));
+assert('FWD100 metric charts stay clean and skip invalid legacy history', chartEventsText.includes('chartStateForDataset') && chartEventsText.includes("chartType: 'line'") && chartEventsText.includes('buildCleanIndicatorState({ volume: false })') && chartEventsText.includes("chartType === 'line' ? 'candles' : chartType") && chartModelText.includes('rawValue === undefined || rawValue === null ? null') && chartModelText.includes('!hasConstituentCounts && parsedBreadthPct <= 0') && chartModelText.includes('capValue: 10'));
+assert('FWD100 metric charts explain themselves', chartModelText.includes('guide:') && chartModelText.includes('0-20 calm') && chartModelText.includes('75+ extreme') && chartModelText.includes('70+ strong bullish') && chartModelText.includes('Display is capped at 10') && chartShellText.includes('buildFwdIndexMetricGuide') && chartShellText.includes('ds-metric-guide-main') && chartShellText.includes('ds-metric-guide-zones'));
+assert('Markets chart includes compact market bias panel', chartShellText.includes('buildMarketDecisionPanel') && chartShellText.includes('Market Bias') && chartShellText.includes('Prefer long scanner setups') && chartShellText.includes('Do not chase longs'));
 assert('chart supports weekly timeframe for regular symbols', chartShellText.includes('chartResolutions.map') && chartStateText.includes("'1w'") && chartStateText.includes("'1w': '1W'"));
 assert('clicking chart candles shows date and OHLC readout', chartEngineText.includes('showPinnedCandleReadout') && chartEngineText.includes('formatCandleDate') && chartEngineText.includes('ds-candle-click-readout'));
 assert('FWD index daily builder ranks historical candles by liquidity and anchors to live index', chartModelText.includes('historical_daily_liquidity_ranked') && chartModelText.includes('dollarVolume') && chartModelText.includes('fwdIndexConfiguredCount') && chartModelText.includes('targetClose / lastClose'));

@@ -30,7 +30,7 @@
  : (value => value !== false);
  const classifyDeltaInstrumentForChart = typeof shared.classifyDeltaInstrument === 'function'
  ? shared.classifyDeltaInstrument
- : (() => ({ assetClass: 'crypto_derivative', assetLabel: 'Crypto', assetBadge: 'Crypto', displayName: '', info: '' }));
+ : (() => ({ assetClass: 'nse_bse_derivative', assetLabel: 'NSE/BSE', assetBadge: 'NSE/BSE', displayName: '', info: '' }));
  const describeDeltaInstrumentForChart = typeof shared.describeDeltaInstrument === 'function'
  ? shared.describeDeltaInstrument
  : ((symbol, description = '') => String(description || symbol || '').trim());
@@ -39,41 +39,31 @@
  const DS_V17_CHART_CACHE_KEY = 'dsChartCacheV17';
  let chartRuntimeCache = {};
  let chartPersistentCacheCleared = false;
- const RESOLUTIONS = Object.freeze(['1m', '5m', '15m', '1h', '4h', '1d', '1w']);
+ const RESOLUTIONS = Object.freeze(['15m', '4h', '1d', '1w']);
  const RESOLUTION_LABELS = Object.freeze({
- '1m': '1m',
- '5m': '5m',
  '15m': '15m',
- '1h': '1h',
  '4h': '4h',
  '1d': '1D',
  '1w': '1W',
  });
  const TTL_MS = Object.freeze({
- '1m': 30000,
- '5m': 60000,
  '15m': 180000,
- '1h': 600000,
  '4h': 1800000,
  '1d': 14400000,
  '1w': 43200000,
  });
  const DEFAULT_VISIBLE_COUNTS = Object.freeze({
- '1m': 260,
- '5m': 320,
  '15m': 360,
- '1h': 420,
  '4h': 520,
  '1d': 520,
  '1w': 520,
  });
  const MAX_RENDER_CANDLES = 20000;
+ const MAX_15M_HISTORY_DAYS = 90;
+ const MAX_15M_HISTORY_CANDLES = MAX_15M_HISTORY_DAYS * 24 * 4;
  const DEFAULT_OBV_SMA_LENGTH = 100;
  const FETCH_BUFFER_COUNTS = Object.freeze({
- '1m': 80,
- '5m': 90,
  '15m': 100,
- '1h': 120,
  '4h': 140,
  '1d': 140,
  '1w': 80,
@@ -162,15 +152,68 @@
  const CHART_TRADING_MODES = Object.freeze(['select', 'entry', 'stop', 'target', 'adjust']);
  const DEFAULT_PANEL_WIDTHS = Object.freeze({ primary: 38, execution: 32, context: 30 });
  const CHART_RENDER_DEBOUNCE_MS = 90;
- const CHART_MARKET_SYMBOLS_KEY = 'dsChartMarketSymbolsV17';
+ const CHART_MARKET_SYMBOLS_KEY = 'dsChartMarketSymbolsDhanV18';
  const CHART_MARKET_SYMBOLS_TTL_MS = 6 * 60 * 60 * 1000;
  const FWD_INDEX_HISTORY_CACHE_KEY = 'dsFwdIndexDailyHistoryV17';
  const FWD_INDEX_HISTORY_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
  const FWD_INDEX_MAX_HISTORY_CANDIDATES = 360;
  const FWD_INDEX_CHART_HISTORY_LIMIT = 5000;
  const FWD_INDEX_DAILY_HISTORY_LIMIT = 730;
- const FWD_INDEX_SYMBOL = 'FWD100';
- const FWD_INDEX_ALIASES = Object.freeze(['FWD100', 'FWD-100', 'FWD100INDEX', 'FWD-100INDEX', 'F100', 'FWD10', 'FWD-10', 'FWD10INDEX', 'FWD-10INDEX', 'F10', 'FWDINDEX']);
+ const FWD_INDEX_SYMBOL = 'NIFTY';
+ const FWD_INDEX_FUNDING_SYMBOL = 'FNO-CARRY';
+ const FWD_INDEX_BREADTH_SYMBOL = 'FNO-BREADTH';
+ const FWD_INDEX_AD_SYMBOL = 'FNO-AD';
+ const FWD_INDEX_ALIASES = Object.freeze(['NIFTY', 'Nifty 50', 'NIFTYINDEX', 'Nifty 50INDEX', 'F100', 'NIFTY', 'Nifty 50', 'NIFTYINDEX', 'Nifty 50INDEX', 'F10', 'FWDINDEX']);
+ const FWD_INDEX_ALIAS_LOOKUP = Object.freeze({
+ NIFTY: FWD_INDEX_SYMBOL,
+ 'Nifty 50': FWD_INDEX_SYMBOL,
+ NIFTYINDEX: FWD_INDEX_SYMBOL,
+ 'Nifty 50INDEX': FWD_INDEX_SYMBOL,
+ F100: FWD_INDEX_SYMBOL,
+ NIFTY: FWD_INDEX_SYMBOL,
+ 'Nifty 50': FWD_INDEX_SYMBOL,
+ NIFTYINDEX: FWD_INDEX_SYMBOL,
+ 'Nifty 50INDEX': FWD_INDEX_SYMBOL,
+ F10: FWD_INDEX_SYMBOL,
+ FWDINDEX: FWD_INDEX_SYMBOL,
+ FNOCARRY: FWD_INDEX_FUNDING_SYMBOL,
+ 'FNO-CARRY': FWD_INDEX_FUNDING_SYMBOL,
+ NIFTYFUNDING: FWD_INDEX_FUNDING_SYMBOL,
+ 'NIFTY-FUNDING': FWD_INDEX_FUNDING_SYMBOL,
+ FWDFUNDING: FWD_INDEX_FUNDING_SYMBOL,
+ 'FWD-FUNDING': FWD_INDEX_FUNDING_SYMBOL,
+ FWDFUNDINGSTRESS: FWD_INDEX_FUNDING_SYMBOL,
+ 'FWD-FUNDING-STRESS': FWD_INDEX_FUNDING_SYMBOL,
+ FNOBREADTH: FWD_INDEX_BREADTH_SYMBOL,
+ 'FNO-BREADTH': FWD_INDEX_BREADTH_SYMBOL,
+ NIFTYBREADTH: FWD_INDEX_BREADTH_SYMBOL,
+ 'NIFTY-BREADTH': FWD_INDEX_BREADTH_SYMBOL,
+ NIFTYBREATH: FWD_INDEX_BREADTH_SYMBOL,
+ 'NIFTY-BREATH': FWD_INDEX_BREADTH_SYMBOL,
+ FWDBREADTH: FWD_INDEX_BREADTH_SYMBOL,
+ 'FWD-BREADTH': FWD_INDEX_BREADTH_SYMBOL,
+ FWDBREADTHPCT: FWD_INDEX_BREADTH_SYMBOL,
+ 'FWD-BREADTH-PCT': FWD_INDEX_BREADTH_SYMBOL,
+ FWDBREATH: FWD_INDEX_BREADTH_SYMBOL,
+ 'FWD-BREATH': FWD_INDEX_BREADTH_SYMBOL,
+ FNOAD: FWD_INDEX_AD_SYMBOL,
+ 'FNO-AD': FWD_INDEX_AD_SYMBOL,
+ FNOADVANCEDECLINE: FWD_INDEX_AD_SYMBOL,
+ 'FNO-ADVANCE-DECLINE': FWD_INDEX_AD_SYMBOL,
+ NIFTYAD: FWD_INDEX_AD_SYMBOL,
+ 'NIFTY-AD': FWD_INDEX_AD_SYMBOL,
+ NIFTYADVDEC: FWD_INDEX_AD_SYMBOL,
+ 'NIFTY-ADV-DEC': FWD_INDEX_AD_SYMBOL,
+ FWDAD: FWD_INDEX_AD_SYMBOL,
+ 'FWD-AD': FWD_INDEX_AD_SYMBOL,
+ FWDADVANCEDECLINE: FWD_INDEX_AD_SYMBOL,
+ 'FWD-ADVANCE-DECLINE': FWD_INDEX_AD_SYMBOL,
+ });
+ const FWD_INDEX_SYNTHETIC_PRODUCTS = Object.freeze([
+ { symbol: FWD_INDEX_FUNDING_SYMBOL, name: 'F&O Carry - Implied Basis', description: 'F&O Carry - Implied Basis', instrumentDescription: 'F&O Carry - Implied Basis', sector: 'Derivatives Context', synthetic: true },
+ { symbol: FWD_INDEX_BREADTH_SYMBOL, name: 'F&O Stock Breadth %', description: 'F&O Stock Breadth %', instrumentDescription: 'F&O Stock Breadth %', sector: 'Derivatives Context', synthetic: true },
+ { symbol: FWD_INDEX_AD_SYMBOL, name: 'F&O Advance Decline Ratio', description: 'F&O Advance Decline Ratio', instrumentDescription: 'F&O Advance Decline Ratio', sector: 'Derivatives Context', synthetic: true },
+ ]);
  let chartMarketSymbolsCache = null;
  let chartMarketSymbolsPromise = null;
  const detachedSurface = {
@@ -248,12 +291,33 @@
  });
  }
 
+ function normalizeFwdIndexSyntheticSymbol(value = '') {
+ const raw = String(value || '').trim().toUpperCase();
+ if (!raw) return '';
+ const direct = raw.includes(':') ? raw.split(':').pop() : raw;
+ const compact = direct.replace(/[^A-Z0-9]/g, '');
+ if (direct === 'NIFTY' || compact === 'NIFTY' || compact === 'NIFTY50') return '';
+ return FWD_INDEX_ALIAS_LOOKUP[direct] || FWD_INDEX_ALIAS_LOOKUP[compact] || '';
+ }
+
+ function fwdIndexSyntheticProduct(symbol = '') {
+ const normalized = normalizeFwdIndexSyntheticSymbol(symbol) || String(symbol || '').trim().toUpperCase();
+ return FWD_INDEX_SYNTHETIC_PRODUCTS.find(product => product.symbol === normalized) || null;
+ }
+
+ function fwdIndexSyntheticDisplayName(symbol = '', marketIndex = null) {
+ const product = fwdIndexSyntheticProduct(symbol);
+ if (product) return product.instrumentDescription || product.name || product.symbol;
+ return `FWD-${fwdIndexConfiguredCount(marketIndex)} Equal-Weight Index`;
+ }
+
  function normalizeChartSymbolInput(value = '', products = []) {
  const raw = String(value || '').trim().toUpperCase().replace(/[^A-Z0-9:_-]/g, '');
  if (!raw) return '';
  const direct = raw.includes(':') ? raw.split(':').pop() : raw;
  const compact = direct.replace(/[^A-Z0-9]/g, '');
- if (FWD_INDEX_ALIASES.includes(direct) || FWD_INDEX_ALIASES.includes(compact)) return FWD_INDEX_SYMBOL;
+ const syntheticSymbol = normalizeFwdIndexSyntheticSymbol(direct) || normalizeFwdIndexSyntheticSymbol(compact);
+ if (syntheticSymbol) return syntheticSymbol;
  const symbols = Array.isArray(products) ? products.map(item => String(item?.symbol || item || '').trim().toUpperCase()).filter(Boolean) : [];
  const exact = symbols.find(symbol => symbol === direct);
  if (exact) return exact;
@@ -274,8 +338,12 @@
  const cachedPayload = cached?.[CHART_MARKET_SYMBOLS_KEY] || {};
  const cachedRows = Array.isArray(cachedPayload?.products) ? cachedPayload.products : [];
  if (!force && cachedRows.length && Date.now() - Number(cachedPayload?.fetchedAt || 0) < CHART_MARKET_SYMBOLS_TTL_MS) {
- chartMarketSymbolsCache = cachedRows;
- return cachedRows;
+ const cachedWithIndex = [
+ ...FWD_INDEX_SYNTHETIC_PRODUCTS,
+ ...cachedRows.filter(product => !isFwdIndexSymbol(product?.symbol || product)),
+ ];
+ chartMarketSymbolsCache = cachedWithIndex;
+ return cachedWithIndex;
  }
  const response = await runtimeSend('v16:getPublicProducts');
  const products = (Array.isArray(response?.products) ? response.products : [])
@@ -311,17 +379,16 @@
  })
  .filter(product => product.symbol)
  .sort((a, b) => a.symbol.localeCompare(b.symbol));
- const indexProduct = { symbol: FWD_INDEX_SYMBOL, name: 'FWD-100 Equal-Weight Index', description: 'FWD-100 Equal-Weight Index', instrumentDescription: 'FWD-100 Equal-Weight Index', sector: 'Market Index', synthetic: true };
  const withIndex = [
- indexProduct,
- ...products.filter(product => product.symbol !== FWD_INDEX_SYMBOL),
+ ...FWD_INDEX_SYNTHETIC_PRODUCTS,
+ ...products.filter(product => !isFwdIndexSymbol(product.symbol)),
  ];
  if (withIndex.length) {
  chartMarketSymbolsCache = withIndex;
  await localSet({ [CHART_MARKET_SYMBOLS_KEY]: { products: withIndex, fetchedAt: Date.now() } });
  return withIndex;
  }
- chartMarketSymbolsCache = [indexProduct, ...cachedRows.filter(product => product.symbol !== FWD_INDEX_SYMBOL)];
+ chartMarketSymbolsCache = [...FWD_INDEX_SYNTHETIC_PRODUCTS, ...cachedRows.filter(product => !isFwdIndexSymbol(product?.symbol || product))];
  return chartMarketSymbolsCache;
  })().finally(() => {
  chartMarketSymbolsPromise = null;
@@ -330,9 +397,12 @@
  }
 
  function isFwdIndexSymbol(symbol = '') {
- const raw = String(symbol || '').trim().toUpperCase();
- const compact = raw.replace(/[^A-Z0-9]/g, '');
- return raw === FWD_INDEX_SYMBOL || FWD_INDEX_ALIASES.includes(raw) || FWD_INDEX_ALIASES.includes(compact);
+ return !!normalizeFwdIndexSyntheticSymbol(symbol);
+ }
+
+ function isFwdIndexMetricSymbol(symbol = '') {
+ const normalized = normalizeFwdIndexSyntheticSymbol(symbol);
+ return normalized === FWD_INDEX_FUNDING_SYMBOL || normalized === FWD_INDEX_BREADTH_SYMBOL || normalized === FWD_INDEX_AD_SYMBOL;
  }
 
  function updateChartSymbolDatalist(root = document, products = []) {
@@ -437,8 +507,8 @@
  orderType: draft?.orderType || 'market_order',
  entryMode: 'market',
  note: replay?.active
- ? `Chart replay ${label} preview from cursor. Live execution still requires this confirmation window.`
- : `Chart ${label} preview. Add stop loss and target, then place from this live order window.`,
+ ? `Chart replay ${label} preview from cursor. Manual action still requires review in your broker app.`
+ : `Chart ${label} preview. Add stop loss and target, then use it as a manual review ticket.`,
  source: 'chart-shortcut',
  };
  }
@@ -464,12 +534,12 @@
  }
  const available = await ensureLiveOrderPreviewAvailable();
  if (!available) {
- globalThis.showSystemToast?.('Live preview unavailable', 'Live order controls are not loaded yet.', 'warn', 3200);
+ globalThis.showSystemToast?.('Manual preview unavailable', 'Manual review controls are not loaded yet.', 'warn', 3200);
  return;
  }
  await globalThis.openV16LiveTradeOrderPreview(signal);
  const title = signal.side === 'sell' ? 'Sell preview opened' : 'Buy preview opened';
- globalThis.showSystemToast?.(title, `${signal.symbol} live order preview is ready.`, 'info', 1800);
+ globalThis.showSystemToast?.(title, `${signal.symbol} manual review preview is ready.`, 'info', 1800);
  }
 
  function bindChartTradeShortcuts() {
@@ -509,8 +579,10 @@
  const next = String(value || '').trim().toLowerCase();
  if (next === 'w' || next === '1wk' || next === 'week' || next === 'weekly') return '1w';
  if (next === '1d') return '1d';
- return RESOLUTIONS.includes(next) ? next : '5m';
- }
+ if (next === '1h' || next === '60m' || next === '60' || next === '240') return '4h';
+ if (next === '1m' || next === '3m' || next === '5m' || next === '15') return '15m';
+ return RESOLUTIONS.includes(next) ? next : '15m';
+}
 
  function normalizePreset(value = '') {
  const preset = String(value || '').trim().toLowerCase();
@@ -707,20 +779,17 @@
  return Math.round(numeric * 1000);
  }
 
- function resolutionStepMs(resolution = '5m') {
+function resolutionStepMs(resolution = '15m') {
  const map = {
- '1m': 60 * 1000,
- '5m': 5 * 60 * 1000,
  '15m': 15 * 60 * 1000,
- '1h': 60 * 60 * 1000,
  '4h': 4 * 60 * 60 * 1000,
  '1d': 24 * 60 * 60 * 1000,
  '1w': 7 * 24 * 60 * 60 * 1000,
  };
- return map[normalizeTimeframe(resolution)] || map['5m'];
- }
+ return map[normalizeTimeframe(resolution)] || map['15m'];
+}
 
- function defaultVisibleCount(resolution = '5m') {
+function defaultVisibleCount(resolution = '15m') {
  const key = normalizeTimeframe(resolution);
  return DEFAULT_VISIBLE_COUNTS[key] || 120;
  }
@@ -827,6 +896,7 @@
  function normalizeChartType(raw = '') {
  const value = String(raw || '').trim().toLowerCase();
  if (value === 'candle' || value === 'candles' || value === 'candlestick') return 'candles';
+ if (value === 'line' || value === 'lines') return 'line';
  return 'bars';
  }
 
@@ -999,7 +1069,7 @@
  intelligenceOverlays: Object.prototype.hasOwnProperty.call(raw, 'intelligenceOverlays') ? raw.intelligenceOverlays !== false : base.intelligenceOverlays !== false,
  deskLayoutMode: String(raw.deskLayoutMode || base.deskLayoutMode || 'threePart').trim() === 'single' ? 'single' : 'threePart',
  primaryTimeframe: normalizeTimeframe(raw.primaryTimeframe || base.primaryTimeframe || '1d'),
- executionTimeframe: normalizeTimeframe(raw.executionTimeframe || raw.timeframe || base.executionTimeframe || '5m'),
+ executionTimeframe: normalizeTimeframe(raw.executionTimeframe || raw.timeframe || base.executionTimeframe || '15m'),
  syncCharts: Object.prototype.hasOwnProperty.call(raw, 'syncCharts') ? raw.syncCharts !== false : true,
  contextTab: normalizeContextTab(raw.contextTab || base.contextTab),
  watchlistTab: normalizeWatchlistTab(raw.watchlistTab || base.watchlistTab),
@@ -1105,9 +1175,9 @@
  .sort((a, b) => scoreSignalForChart(b) - scoreSignalForChart(a))[0] || null;
  }
 
-function signalTimeframe(signal = {}, fallback = '5m') {
+function signalTimeframe(signal = {}, fallback = '15m') {
  const lowerLabel = String(signal?.lower?.label || '').trim().toLowerCase();
- return normalizeTimeframe(lowerLabel || signal?.timeframe || signal?.raw?.timeframe || fallback || '5m');
+ return normalizeTimeframe(lowerLabel || signal?.timeframe || signal?.raw?.timeframe || fallback || '15m');
 }
 
  async function setChartSymbolFromSignal(signal = {}, options = {}) {
@@ -1378,12 +1448,13 @@ function signalTimeframe(signal = {}, fallback = '5m') {
 
  function resolutionCoverageRequirement(state = {}) {
  const timeframe = normalizeTimeframe(state.timeframe);
+ const maxHistoryCount = timeframe === '15m' ? MAX_15M_HISTORY_CANDLES : MAX_RENDER_CANDLES;
  const baseVisible = state.replaySeed?.baselineVisibleCount || defaultVisibleCount(timeframe);
  const visible = Math.max(baseVisible, Math.round(Number(state.visibleCandleCount || baseVisible) || baseVisible));
- const paddedCount = Math.min(MAX_RENDER_CANDLES, Math.max(80, visible + (FETCH_BUFFER_COUNTS[timeframe] || 80)));
+ const paddedCount = Math.min(maxHistoryCount, Math.max(80, visible + (FETCH_BUFFER_COUNTS[timeframe] || 80)));
  if (!state.replaySeed) {
  return {
- count: MAX_RENDER_CANDLES,
+ count: maxHistoryCount,
  startMs: 0,
  endMs: 0,
  };
@@ -1424,7 +1495,7 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  nextCache[cacheKey] = payload;
  Object.keys(nextCache).forEach(key => {
  const entry = nextCache[key];
- const timeframe = normalizeTimeframe(key.split(':')[1] || '5m');
+ const timeframe = normalizeTimeframe(key.split(':')[1] || '15m');
  const ttl = (TTL_MS[timeframe] || 60000) * 4;
  if ((Date.now() - Number(entry?.fetchedAt || 0)) > ttl) delete nextCache[key];
  });
@@ -1433,7 +1504,7 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  .slice(0, 8));
  }
 
- function cacheEntryFresh(entry = null, timeframe = '5m') {
+ function cacheEntryFresh(entry = null, timeframe = '15m') {
  if (!entry || typeof entry !== 'object') return false;
  return (Date.now() - Number(entry.fetchedAt || 0)) < ((TTL_MS[normalizeTimeframe(timeframe)] || 60000) * 4);
  }
@@ -1572,8 +1643,8 @@ function signalTimeframe(signal = {}, fallback = '5m') {
 
  function fwdIndexConfiguredCount(marketIndex = null) {
  const sanitized = typeof shared.sanitizeMarketIndexSettings === 'function'
- ? shared.sanitizeMarketIndexSettings({ maxConstituents: marketIndex?.configuredMaxConstituents || marketIndex?.topCount || marketIndex?.topCoins?.length || 10 })
- : { maxConstituents: Math.max(3, Math.min(100, Number(marketIndex?.configuredMaxConstituents || marketIndex?.topCoins?.length || 10) || 10)) };
+ ? shared.sanitizeMarketIndexSettings({ maxConstituents: marketIndex?.configuredMaxConstituents || marketIndex?.topCount || marketIndex?.topStocks?.length || 10 })
+ : { maxConstituents: Math.max(3, Math.min(100, Number(marketIndex?.configuredMaxConstituents || marketIndex?.topStocks?.length || 10) || 10)) };
  return Math.max(3, Math.min(100, Math.round(Number(sanitized.maxConstituents || 10) || 10)));
  }
 
@@ -1607,8 +1678,8 @@ function signalTimeframe(signal = {}, fallback = '5m') {
 
  async function fwdIndexHistoryCandidateSymbols(marketIndex = null) {
  const excludedSymbols = fwdIndexExcludedSymbols(marketIndex);
- const topSymbols = (Array.isArray(marketIndex?.topCoins) ? marketIndex.topCoins : [])
- .map(coin => String(coin?.sym || coin?.symbol || '').trim().toUpperCase());
+ const topSymbols = (Array.isArray(marketIndex?.topStocks) ? marketIndex.topStocks : [])
+ .map(stock => String(stock?.sym || stock?.symbol || '').trim().toUpperCase());
  const products = await loadChartMarketSymbols(false).catch(() => []);
  const productSymbols = (Array.isArray(products) ? products : [])
  .map(product => String(product?.symbol || product || '').trim().toUpperCase());
@@ -1860,18 +1931,18 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  function classifyIndexCorrelation(value) {
  const numeric = Number(value);
  if (!Number.isFinite(numeric)) return { label: 'Index correlation unavailable', tone: 'neutral' };
- if (numeric >= 0.75) return { label: 'Strong same as FWD-100', tone: 'good' };
- if (numeric >= 0.5) return { label: 'Mostly same as FWD-100', tone: 'good' };
+ if (numeric >= 0.75) return { label: 'Strong same as Nifty 50', tone: 'good' };
+ if (numeric >= 0.5) return { label: 'Mostly same as Nifty 50', tone: 'good' };
  if (numeric >= 0.25) return { label: 'Some index alignment', tone: 'neutral' };
  if (numeric > -0.25) return { label: 'Low index link', tone: 'neutral' };
- if (numeric > -0.5) return { label: 'Mild inverse to FWD-100', tone: 'warn' };
- return { label: 'Inverse to FWD-100', tone: 'bad' };
+ if (numeric > -0.5) return { label: 'Mild inverse to Nifty 50', tone: 'warn' };
+ return { label: 'Inverse to Nifty 50', tone: 'bad' };
  }
 
  async function buildIndexCorrelation(symbol = '', marketIndex = null, indexDatasetOverride = null) {
  const normalized = String(symbol || '').trim().toUpperCase();
  if (!normalized || isFwdIndexSymbol(normalized)) return null;
- const [coinResponse, indexDataset] = await Promise.all([
+ const [stockResponse, indexDataset] = await Promise.all([
  runtimeSend('v16:getPublicCandles', {
  symbol: normalized,
  resolution: '1d',
@@ -1879,12 +1950,12 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  }),
  indexDatasetOverride || loadFwdIndexChartDataset({ symbol: FWD_INDEX_SYMBOL, timeframe: '1d' }),
  ]);
- const coinReturns = dailyReturnMapFromCandles(coinResponse?.candles || []);
+ const stockReturns = dailyReturnMapFromCandles(stockResponse?.candles || []);
  const indexReturns = dailyReturnMapFromCandles(indexDataset?.candles || []);
- const days = Array.from(coinReturns.keys()).filter(day => indexReturns.has(day)).sort();
+ const days = Array.from(stockReturns.keys()).filter(day => indexReturns.has(day)).sort();
  const calcWindow = size => {
  const selected = days.slice(-size);
- const xs = selected.map(day => coinReturns.get(day)).filter(Number.isFinite);
+ const xs = selected.map(day => stockReturns.get(day)).filter(Number.isFinite);
  const ys = selected.map(day => indexReturns.get(day)).filter(Number.isFinite);
  const value = xs.length === ys.length ? pearsonCorrelation(xs, ys) : null;
  return {
@@ -1968,13 +2039,243 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  }).filter(candle => candle.time > 0 && candle.close > 0);
  }
 
+ function clampFwdIndexMetricPct(value = 0, fallback = 0) {
+ const numeric = finiteChartNumber(value, fallback);
+ return Math.max(0, Math.min(100, numeric));
+ }
+
+ function buildFwdIndexMetricSnapshot(source = {}) {
+ const ts = finiteChartNumber(source?.ts, 0);
+ const advancing = finiteChartNumber(source?.advancing, 0);
+ const declining = finiteChartNumber(source?.declining, 0);
+ const topCount = finiteChartNumber(source?.topCount, advancing + declining);
+ const hasConstituentCounts = topCount > 0 && (advancing > 0 || declining > 0);
+ const hasBreadthPct = source?.breadthPct !== undefined && source?.breadthPct !== null && Number.isFinite(Number(source.breadthPct));
+ const derivedBreadth = hasConstituentCounts ? (advancing / topCount) * 100 : null;
+ const parsedBreadthPct = hasBreadthPct ? clampFwdIndexMetricPct(source.breadthPct, derivedBreadth ?? 0) : derivedBreadth;
+ const breadthPct = parsedBreadthPct == null || (!hasConstituentCounts && parsedBreadthPct <= 0) ? null : clampFwdIndexMetricPct(parsedBreadthPct, 0);
+ const hasAdvancingVolumePct = source?.advancingVolumePct !== undefined && source?.advancingVolumePct !== null && Number.isFinite(Number(source.advancingVolumePct));
+ const advancingVolumePct = hasAdvancingVolumePct ? clampFwdIndexMetricPct(source.advancingVolumePct, breadthPct ?? 0) : breadthPct;
+ const hasFundingStressPct = source?.fundingStressPct !== undefined && source?.fundingStressPct !== null && Number.isFinite(Number(source.fundingStressPct));
+ const fundingStressPct = hasFundingStressPct ? clampFwdIndexMetricPct(source.fundingStressPct, 0) : null;
+ const hasFundingCrowdingIndex = source?.fundingCrowdingIndex !== undefined && source?.fundingCrowdingIndex !== null && Number.isFinite(Number(source.fundingCrowdingIndex));
+ const fundingCrowdingIndex = hasFundingCrowdingIndex ? clampFwdIndexMetricPct(source.fundingCrowdingIndex, fundingStressPct ?? 0) : fundingStressPct;
+ const carryAnnualPct = source?.carryAnnualPct !== undefined && source?.carryAnnualPct !== null && Number.isFinite(Number(source.carryAnnualPct))
+ ? Number(source.carryAnnualPct)
+ : null;
+ const rawRatio = finiteChartNumber(source?.advanceDeclineRatio, null);
+ const advanceDeclineRatio = rawRatio != null
+ ? rawRatio
+ : (hasConstituentCounts ? advancing / Math.max(1, declining) : null);
+ return {
+ ts,
+ breadthPct,
+ advancingVolumePct,
+ fundingStressPct,
+ fundingCrowdingIndex,
+ fundingCrowdingShock: finiteChartNumber(source?.fundingCrowdingShock, 0),
+ fundingLongPressure: clampFwdIndexMetricPct(source?.fundingLongPressure, 0),
+ fundingShortPressure: clampFwdIndexMetricPct(source?.fundingShortPressure, 0),
+ fundingOiConfirmationPct: clampFwdIndexMetricPct(source?.fundingOiConfirmationPct, 0),
+ extremeFundingPct: clampFwdIndexMetricPct(source?.extremeFundingPct, 0),
+ fundingCrowdingBias: String(source?.fundingCrowdingBias || 'balanced'),
+ topFundingCrowding: Array.isArray(source?.topFundingCrowding) ? source.topFundingCrowding : [],
+ carryAnnualPct,
+ carryUsableRows: Math.max(0, finiteChartNumber(source?.carryUsableRows, 0)),
+ carryExecutableRows: Math.max(0, finiteChartNumber(source?.carryExecutableRows, 0)),
+ carrySource: String(source?.carrySource || ''),
+ advanceDeclineRatio: advanceDeclineRatio == null ? null : Math.max(0, advanceDeclineRatio),
+ advancing,
+ declining,
+ topCount,
+ };
+ }
+
+ function buildCurrentFwdIndexMetricSource(marketIndex = null) {
+ if (!marketIndex?.ts) return null;
+ const topStocks = Array.isArray(marketIndex.fnoConstituents)
+ ? marketIndex.fnoConstituents
+ : (Array.isArray(marketIndex.topStocks) ? marketIndex.topStocks : (Array.isArray(marketIndex.topCoins) ? marketIndex.topCoins : []));
+ const advancing = topStocks.filter(stock => Number(stock?.change || 0) > 0).length;
+ const declining = topStocks.filter(stock => Number(stock?.change || 0) < 0).length;
+ return {
+ ts: finiteChartNumber(marketIndex.ts, Date.now()),
+ breadthPct: marketIndex.sentiment?.breadthPct,
+ advancingVolumePct: marketIndex.sentiment?.advancingVolumePct,
+ fundingStressPct: marketIndex.sentiment?.fundingStressPct,
+ fundingCrowdingIndex: marketIndex.sentiment?.fundingCrowdingIndex,
+ fundingCrowdingShock: marketIndex.sentiment?.fundingCrowdingShock,
+ fundingLongPressure: marketIndex.sentiment?.fundingLongPressure,
+ fundingShortPressure: marketIndex.sentiment?.fundingShortPressure,
+ fundingOiConfirmationPct: marketIndex.sentiment?.fundingOiConfirmationPct,
+ extremeFundingPct: marketIndex.sentiment?.extremeFundingPct,
+ fundingCrowdingBias: marketIndex.sentiment?.fundingCrowdingBias,
+ topFundingCrowding: marketIndex.sentiment?.topFundingCrowding,
+ advanceDeclineRatio: advancing / Math.max(1, declining),
+ advancing,
+ declining,
+ topCount: topStocks.length,
+ };
+ }
+
+ function buildFwdIndexMetricRows(history = [], marketIndex = null) {
+ const rows = (Array.isArray(history) ? history : [])
+ .map(buildFwdIndexMetricSnapshot)
+ .filter(row => row.ts > 0)
+ .sort((a, b) => a.ts - b.ts);
+ const current = buildCurrentFwdIndexMetricSource(marketIndex);
+ if (current) {
+ const currentMetric = buildFwdIndexMetricSnapshot(current);
+ const last = rows[rows.length - 1] || null;
+ if (!last || Math.abs(finiteChartNumber(last.ts, 0) - currentMetric.ts) > 1000) rows.push(currentMetric);
+ }
+ const seen = new Set();
+ return rows.filter(row => {
+ const key = Math.floor(row.ts / 1000);
+ if (seen.has(key)) return false;
+ seen.add(key);
+ return true;
+ });
+ }
+
+ function fwdIndexMetricDefinition(symbol = '') {
+ const normalized = normalizeFwdIndexSyntheticSymbol(symbol);
+ if (normalized === FWD_INDEX_FUNDING_SYMBOL) {
+ return {
+ symbol: FWD_INDEX_FUNDING_SYMBOL,
+ key: 'carryAnnualPct',
+ displayName: 'F&O Carry - Implied Basis',
+ historyMode: 'fno_carry_snapshot_history',
+ minWick: 0.02,
+ volumeKey: 'carryUsableRows',
+ allowNegative: true,
+ guide: {
+ title: 'Implied carry %',
+ text: 'Median annualized cash-futures basis from stored F&O snapshots. This is not a funding rate.',
+ zones: ['Below 0 discount', '0-5 mild premium', '5-10 carry watch', '10+ elevated basis', 'Manual review only'],
+ },
+ };
+ }
+ if (normalized === FWD_INDEX_BREADTH_SYMBOL) {
+ return {
+ symbol: FWD_INDEX_BREADTH_SYMBOL,
+ key: 'breadthPct',
+ displayName: 'F&O Stock Breadth %',
+ historyMode: 'scan_breadth_history',
+ minWick: 0.05,
+ visualFloor: 0.0001,
+ volumeKey: 'topCount',
+ guide: {
+ title: 'Breadth %',
+ text: 'Percent of scanned F&O stock constituents advancing in the latest scan. This is a participation chart, not Nifty 50 breadth.',
+ zones: ['70+ strong bullish', '55-70 positive', '45-55 neutral', '30-45 weak', 'Below 30 risk-off'],
+ },
+ };
+ }
+ if (normalized === FWD_INDEX_AD_SYMBOL) {
+ return {
+ symbol: FWD_INDEX_AD_SYMBOL,
+ key: 'advanceDeclineRatio',
+ displayName: 'F&O Advance Decline Ratio (capped)',
+ historyMode: 'scan_advance_decline_history_capped',
+ minWick: 0.01,
+ capValue: 10,
+ volumeKey: 'advancingVolumePct',
+ guide: {
+ title: 'Raw A/D ratio',
+ text: 'Advancing F&O stock names divided by declining names. Display is capped at 10 so rare spikes do not crush the chart.',
+ zones: ['Below 1 weak', '1-2 normal', '2-5 strong', '5-10 stretched', '10+ shown as capped'],
+ },
+ };
+ }
+ return null;
+ }
+
+ function buildFwdIndexMetricCandles(history = [], marketIndex = null, definition = null) {
+ if (!definition?.key) return [];
+ const rows = buildFwdIndexMetricRows(history, marketIndex)
+ .map(row => {
+ const rawValue = row?.[definition.key];
+ const parsedValue = rawValue === undefined || rawValue === null ? null : finiteChartNumber(rawValue, null);
+  return {
+  ...row,
+ rawValue: parsedValue,
+ value: parsedValue == null ? null : Math.min(Number(definition.capValue || Number.POSITIVE_INFINITY), parsedValue),
+  };
+  })
+ .filter(row => row.ts > 0 && row.value != null && Number.isFinite(Number(row.value)))
+ .sort((a, b) => a.ts - b.ts);
+ return rows.slice(-FWD_INDEX_CHART_HISTORY_LIMIT).map((point, index, source) => {
+ const previousValue = finiteChartNumber(source[index - 1]?.value, point.value);
+ const visualFloor = Number(definition.visualFloor || 0.0001);
+ const open = definition.allowNegative ? previousValue : Math.max(visualFloor, previousValue);
+ const close = definition.allowNegative ? point.value : Math.max(visualFloor, point.value);
+ const moveAbs = Math.abs(close - open);
+ const wick = moveAbs > 0 ? Math.max(Number(definition.minWick || 0.01), moveAbs * 0.18) : 0;
+ const high = Math.max(open, close) + wick;
+ const low = definition.allowNegative ? Math.min(open, close) - wick : Math.max(visualFloor, Math.min(open, close) - wick);
+ const rawVolume = finiteChartNumber(point?.[definition.volumeKey || 'topCount'], finiteChartNumber(point.topCount, 1));
+ return normalizeCandle({
+ time: point.ts,
+ open,
+ high,
+ low,
+ close,
+ volume: Math.max(1, rawVolume),
+ });
+ }).filter(candle => candle.time > 0 && Number.isFinite(Number(candle.close)));
+ }
+
  async function loadFwdIndexChartDataset(state = {}, strategy = {}) {
- const data = await localGet(['marketIndex', 'marketIndexHistory']);
+ const syntheticSymbol = normalizeFwdIndexSyntheticSymbol(state.symbol || FWD_INDEX_SYMBOL) || FWD_INDEX_SYMBOL;
+ const data = await localGet(['marketIndex', 'marketIndexHistory', 'fnoCarryMetricHistoryV1']);
+ const metricDefinition = fwdIndexMetricDefinition(syntheticSymbol);
+ if (metricDefinition) {
+ const metricHistory = metricDefinition.key === 'carryAnnualPct' ? (data.fnoCarryMetricHistoryV1 || []) : (data.marketIndexHistory || []);
+ const metricMarketIndex = metricDefinition.key === 'carryAnnualPct' ? null : (data.marketIndex || null);
+ const candles = buildFwdIndexMetricCandles(metricHistory, metricMarketIndex, metricDefinition).slice(-FWD_INDEX_DAILY_HISTORY_LIMIT);
+ const metricSnapshot = Array.isArray(metricHistory) ? metricHistory[metricHistory.length - 1] || null : null;
+ if (!candles.length) {
+ return {
+ ok: false,
+ symbol: metricDefinition.symbol,
+ timeframe: '1d',
+ candles: [],
+ studies: {},
+ keyLevels: null,
+ fetchedAt: 0,
+ syntheticIndex: true,
+ syntheticMetric: metricDefinition.key,
+ error: metricDefinition.key === 'carryAnnualPct'
+ ? 'Refresh F&O Carry first. This chart uses stored cash-futures carry snapshots.'
+ : 'Run Scan Now first. This F&O participation chart uses stored scan history.',
+ };
+ }
+ return {
+ ok: true,
+ symbol: metricDefinition.symbol,
+ timeframe: '1d',
+ candles,
+ studies: {},
+ keyLevels: null,
+ fetchedAt: Date.now(),
+ syntheticIndex: true,
+ syntheticMetric: metricDefinition.key,
+ historyMode: metricDefinition.historyMode,
+ historyMetadata: { mode: metricDefinition.historyMode, samples: candles.length },
+ displayName: metricDefinition.displayName,
+ metricGuide: metricDefinition.guide || null,
+ metricDisplayCap: Number(metricDefinition.capValue || 0) || null,
+ metricSnapshot,
+ marketIndex: data.marketIndex || null,
+ };
+ }
  const historicalDaily = await buildFwdIndexDailyCandlesFromConstituents(data.marketIndex || null).catch(() => ({ candles: [], metadata: { mode: 'build_failed' } }));
  const historicalCandles = Array.isArray(historicalDaily?.candles) ? historicalDaily.candles : [];
  const candles = historicalCandles.length >= 20
  ? historicalCandles
  : buildFwdIndexSyntheticCandles(data.marketIndexHistory || [], data.marketIndex || null).slice(-FWD_INDEX_DAILY_HISTORY_LIMIT);
+ const historyMode = historicalCandles.length >= 20 ? (historicalDaily?.metadata?.mode || 'historical_daily_liquidity_ranked') : 'scan_snapshot_fallback';
  if (!candles.length) {
  return {
  ok: false,
@@ -1985,7 +2286,7 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  keyLevels: null,
  fetchedAt: 0,
  syntheticIndex: true,
- error: 'Run Scan Now first. FWD-100 chart uses stored market-index history from scans.',
+ error: 'Run Scan Now first. Nifty 50 chart uses stored market-index history from scans.',
  };
  }
  return {
@@ -1997,7 +2298,7 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  keyLevels: null,
  fetchedAt: Date.now(),
  syntheticIndex: true,
- historyMode: historicalCandles.length >= 20 ? (historicalDaily?.metadata?.mode || 'historical_daily_liquidity_ranked') : 'scan_snapshot_fallback',
+ historyMode,
  historyMetadata: historicalDaily?.metadata || {},
  displayName: fwdIndexDisplayName(data.marketIndex || null),
  marketIndex: data.marketIndex || null,
@@ -2006,7 +2307,7 @@ function signalTimeframe(signal = {}, fallback = '5m') {
 
  async function loadChartDataset(state = {}, strategy = {}, options = {}) {
  const symbol = String(state.symbol || '').trim().toUpperCase();
- const timeframe = normalizeTimeframe(state.timeframe || '5m');
+ const timeframe = normalizeTimeframe(state.timeframe || '15m');
  if (!symbol) {
  return {
  ok: false,
@@ -2018,7 +2319,7 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  };
  }
  if (isFwdIndexSymbol(symbol)) {
- return loadFwdIndexChartDataset({ ...state, symbol: FWD_INDEX_SYMBOL, timeframe: '1d' }, strategy);
+ return loadFwdIndexChartDataset({ ...state, symbol: normalizeFwdIndexSyntheticSymbol(symbol) || FWD_INDEX_SYMBOL, timeframe: '1d' }, strategy);
  }
  const requirement = resolutionCoverageRequirement(state);
  const cacheKey = `${symbol}:${timeframe}`;
@@ -2675,7 +2976,7 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  };
  }
 
- function rankSahiKeyZones(zones = [], settings = {}, referencePrice = 0, chartTimeframe = '5m') {
+ function rankSahiKeyZones(zones = [], settings = {}, referencePrice = 0, chartTimeframe = '15m') {
  const limit = 4;
  const byKind = ['resistance', 'support'].flatMap(kind => {
  return mergeNearbyKeyZones(
@@ -2740,14 +3041,14 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  .sort((a, b) => kind === 'resistance' ? Number(a.price || 0) - Number(b.price || 0) : Number(b.price || 0) - Number(a.price || 0));
  }
 
- function mapChartTfToKeyLevelTf(chartTimeframe = '5m') {
+ function mapChartTfToKeyLevelTf(chartTimeframe = '15m') {
  const tf = normalizeTimeframe(chartTimeframe);
  if (tf === '1d') return '1D';
  if (['4h', '1h'].includes(tf)) return '1D';
  return '15m';
  }
 
- function collectVisibleKeyZones(keyLevels = null, settings = {}, referencePrice = 0, chartTimeframe = '5m') {
+ function collectVisibleKeyZones(keyLevels = null, settings = {}, referencePrice = 0, chartTimeframe = '15m') {
  if (!keyLevels || typeof keyLevels !== 'object') return [];
  const smartSettings = { ...settings, chartTimeframe };
  const brokerZones = [
@@ -2869,11 +3170,10 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  const openedAt = normalizeTsMs(trade.openedAt || trade.entryTs || trade.entryTime);
  const closedAt = normalizeTsMs(trade.closedAt || trade.exitTs || trade.exitTime);
  const durationMs = Math.max(0, closedAt - openedAt);
- if (durationMs <= 8 * 60 * 60 * 1000) return '5m';
  if (durationMs <= 3 * 24 * 60 * 60 * 1000) return '15m';
- if (durationMs <= 14 * 24 * 60 * 60 * 1000) return '1h';
+ if (durationMs <= 14 * 24 * 60 * 60 * 1000) return '4h';
  return '4h';
- }
+}
 
  function buildReplaySeedFromTrade(trade = {}) {
  const entryTs = normalizeTsMs(trade.openedAt || trade.entryTs || trade.entryTime);
@@ -2912,7 +3212,7 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  });
  }
 
- function buildAxisLabels(candles = [], timeframe = '5m', startIndex = 0) {
+ function buildAxisLabels(candles = [], timeframe = '15m', startIndex = 0) {
  const labels = [];
  const verticals = [];
  if (!candles.length) return { labels, verticals };
@@ -2932,14 +3232,14 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  ) : false;
  const yearChanged = prev ? date.getUTCFullYear() !== prev.getUTCFullYear() : false;
  let label = '';
- if (['1m', '5m', '15m'].includes(timeframe)) {
+ if (timeframe === '15m') {
  if (dayChanged) {
  label = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
  verticals.push({ leftPct, label });
  } else if (index % every === 0 || index === candles.length - 1) {
  label = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
  }
- } else if (['1h', '4h'].includes(timeframe)) {
+ } else if (timeframe === '4h') {
  if (monthChanged || index % every === 0 || index === candles.length - 1) {
  label = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
  }
@@ -2970,7 +3270,7 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  }
 
  function formatIntelMetric(metric = {}) {
- if (metric.format === 'price') return `$${formatPrice(metric.value)}`;
+ if (metric.format === 'price') return `Rs ${formatPrice(metric.value)}`;
  return String(metric.value == null ? '-' : metric.value);
  }
 
@@ -3173,7 +3473,7 @@ function buildChartDraftLines(draft = null) {
  const amount = unitMove * (size > 0 ? size : 1);
  const percent = entry > 0 ? (unitMove / entry) * 100 : 0;
  const sign = amount >= 0 ? '+' : '-';
- const money = `${sign}$${Math.abs(amount).toFixed(2)}`;
+ const money = `${sign}Rs ${Math.abs(amount).toFixed(2)}`;
  const pct = `${percent >= 0 ? '+' : '-'}${Math.abs(percent).toFixed(2)}%`;
  return size > 0 ? `${money} / ${pct}` : `${money} est / ${pct}`;
  }
@@ -3231,7 +3531,7 @@ function buildChartDraftLines(draft = null) {
 function buildChartTradeButtons(state = {}, model = null) {
  if (isFwdIndexSymbol(state.symbol || '')) {
  return `<div class="live-order-chart-timeframes ds-chart-trade-controls">
- <span class="account-inline-note">FWD-100 is a market index. Use it for regime and scanner context, not order placement.</span>
+ <span class="account-inline-note">Nifty 50 is a market index. Use it for regime and scanner context, not order placement.</span>
  </div>`;
  }
  const mode = normalizeChartTradingMode(state.chartTradingMode);
@@ -3326,7 +3626,7 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  ${panel.levels.map(level => `
  <div class="ds-trade-read-row ${escapeHtml(level.tone || '')}">
  <span>${escapeHtml(level.label || '')}</span>
- <strong>$${escapeHtml(formatPrice(level.value))}${level.meta ? ` <em>${escapeHtml(level.meta)}</em>` : ''}</strong>
+ <strong>Rs ${escapeHtml(formatPrice(level.value))}${level.meta ? ` <em>${escapeHtml(level.meta)}</em>` : ''}</strong>
  </div>`).join('')}
  </div>` : ''}
  <div class="ds-trade-read-block">
@@ -3436,8 +3736,8 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  ].filter(Boolean), 'No setup context yet')}</div>`;
  }
  if (activeTab === 'levels') {
- return `<div class="ds-context-section"><h4>Nearest Levels</h4>${levels.length ? levels.map(level => `<div class="ds-trade-read-row ${escapeHtml(level.tone || '')}"><span>${escapeHtml(level.label || '')}</span><strong>$${escapeHtml(formatPrice(level.value))}${level.meta ? ` <em>${escapeHtml(level.meta)}</em>` : ''}</strong></div>`).join('') : '<div class="ds-context-empty">No level data yet.</div>'}</div>
- <div class="ds-context-section"><h4>Order Context</h4>${(Array.isArray(state.orderContext?.lines) && state.orderContext.lines.length) ? state.orderContext.lines.map(line => `<div class="ds-trade-read-row ${escapeHtml(line.tone || '')}"><span>${escapeHtml(line.label || line.role || 'Line')}</span><strong>$${escapeHtml(formatPrice(line.price))}</strong></div>`).join('') : '<div class="ds-context-empty">No order lines active.</div>'}</div>`;
+ return `<div class="ds-context-section"><h4>Nearest Levels</h4>${levels.length ? levels.map(level => `<div class="ds-trade-read-row ${escapeHtml(level.tone || '')}"><span>${escapeHtml(level.label || '')}</span><strong>Rs ${escapeHtml(formatPrice(level.value))}${level.meta ? ` <em>${escapeHtml(level.meta)}</em>` : ''}</strong></div>`).join('') : '<div class="ds-context-empty">No level data yet.</div>'}</div>
+ <div class="ds-context-section"><h4>Order Context</h4>${(Array.isArray(state.orderContext?.lines) && state.orderContext.lines.length) ? state.orderContext.lines.map(line => `<div class="ds-trade-read-row ${escapeHtml(line.tone || '')}"><span>${escapeHtml(line.label || line.role || 'Line')}</span><strong>Rs ${escapeHtml(formatPrice(line.price))}</strong></div>`).join('') : '<div class="ds-context-empty">No order lines active.</div>'}</div>`;
  }
  return `<div class="ds-trade-read-grid">${metrics.map(metric => `<div class="ds-trade-read-metric"><span>${escapeHtml(metric.label || '')}</span><strong>${escapeHtml(formatIntelMetric(metric))}</strong></div>`).join('')}</div>
  <div class="ds-context-section"><h4>Market Regime</h4><p>${escapeHtml(String(signal?.marketRegime || marketIndex?.regime || 'Unknown').replace(/_/g, ' '))}</p></div>
@@ -3463,19 +3763,20 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  }
 
  function buildDeskChartPanel(panelKey, title, panelState = {}, dataset = {}, model = null, intelligence = null, state = {}, calculatedIndicators = {}) {
- const tf = normalizeTimeframe(panelState.timeframe || state.timeframe || '5m');
+ const tf = normalizeTimeframe(panelState.timeframe || state.timeframe || '15m');
  const isFwdIndex = dataset?.syntheticIndex === true;
  const panelResolutions = isFwdIndex ? ['1d'] : RESOLUTIONS;
  const statusText = !panelState.symbol
  ? 'Choose a symbol'
  : dataset?.ok
  ? (dataset?.syntheticIndex
- ? `Equal-weight benchmark | ${model?.totalCount || dataset?.candles?.length || 0} bars`
+ ? `${dataset?.displayName || fwdIndexSyntheticDisplayName(dataset?.symbol || panelState.symbol)} | ${model?.totalCount || dataset?.candles?.length || 0} ${dataset?.syntheticMetric ? 'points' : 'bars'}`
  : `${RESOLUTION_LABELS[tf]} | ${model?.visibleCount || 0}/${model?.totalCount || 0}`)
  : (dataset?.error || 'Chart unavailable');
  const chartId = `${state.chartViewMode || 'tab'}-${panelKey}`;
+ const thinCandleCount = !model && dataset?.ok && Array.isArray(dataset?.candles) ? dataset.candles.length : 0;
  const chartMarkup = !model
- ? `<div class="empty compact"><div class="ei">--</div><div class="eh">${escapeHtml(dataset?.ok ? 'No visible candles' : 'Chart unavailable')}</div><div class="es">${escapeHtml(dataset?.error || 'Public candles will appear here once a symbol is available.')}</div></div>`
+ ? `<div class="empty compact"><div class="ei">--</div><div class="eh">${escapeHtml(thinCandleCount > 0 ? 'Limited candle history' : dataset?.ok ? 'No visible candles' : 'Chart unavailable')}</div><div class="es">${escapeHtml(thinCandleCount > 0 ? `${thinCandleCount} candle${thinCandleCount === 1 ? '' : 's'} loaded. The chart can still render, but indicators need more history.` : dataset?.error || 'Public candles will appear here once a symbol is available.')}</div></div>`
  : `<div class="live-order-chart-shell ds-chart-shell ds-lwc-shell" data-ds-chart-shell="${chartId}">
  ${buildChartIndicatorLegend(panelState, getPresetMeta(panelState.preset || state.preset), calculatedIndicators, model)}
  <div class="ds-lwc-chart" data-ds-lwc-chart="${chartId}" role="img" aria-label="${escapeHtml(`${panelState.symbol || 'Symbol'} ${title}`)}"></div>
@@ -3496,8 +3797,33 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  </div>
  </div>
  ${buildNearestKeyLevelStrip(model)}
+ ${buildFwdIndexMetricGuide(dataset)}
  ${chartMarkup}
  </section>`;
+ }
+
+ function buildFwdIndexMetricGuide(dataset = {}) {
+ if (!dataset?.syntheticMetric || !dataset?.metricGuide) return '';
+ const guide = dataset.metricGuide || {};
+ const zones = Array.isArray(guide.zones) ? guide.zones : [];
+ const cap = Number(dataset.metricDisplayCap || 0);
+ const capLabel = cap > 0 ? `Display cap ${cap}` : '';
+ const title = String(guide.title || dataset.displayName || 'Metric').trim();
+ const text = String(guide.text || '').trim();
+ const carrySnapshot = dataset?.syntheticMetric === 'carryAnnualPct' ? (dataset?.metricSnapshot || null) : null;
+ const dynamicZones = carrySnapshot
+ ? [
+ `Usable ${Number(carrySnapshot.carryUsableRows || 0)}`,
+ `Executable ${Number(carrySnapshot.carryExecutableRows || 0)}`,
+ String(carrySnapshot.carrySource || '') === 'executable_depth' ? 'Depth based' : 'Indicative only',
+ ]
+ : [];
+ const tooltip = [title, text, ...zones, ...dynamicZones, capLabel].filter(Boolean).join(' | ');
+ return `<div class="ds-chart-meta-row ds-metric-guide-row" title="${escapeHtml(tooltip)}">
+ <span class="ds-metric-guide-main"><strong>${escapeHtml(title)}</strong>${text ? `<em>${escapeHtml(text)}</em>` : ''}</span>
+ <span class="ds-metric-guide-zones">${[...dynamicZones, ...zones].slice(0, 5).map(zone => `<em>${escapeHtml(zone)}</em>`).join('')}</span>
+ ${capLabel ? `<span class="ds-metric-guide-cap">${escapeHtml(capLabel)}</span>` : ''}
+ </div>`;
  }
 
  function buildExecutionPulse(intelligence = null) {
@@ -3517,6 +3843,87 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  <span>${escapeHtml(`${Math.round(Number(decision.confidence || 0))}% confidence`)}</span>
  <span>${escapeHtml(decision.reason || '')}</span>
  </div>`;
+ }
+
+ function clampMarketDecisionScore(value = 0, min = -100, max = 100) {
+ const numeric = Number(value);
+ if (!Number.isFinite(numeric)) return 0;
+ return Math.max(min, Math.min(max, numeric));
+ }
+
+ function marketDecisionRiskLabel(fundingCrowding = 0) {
+ const value = Number(fundingCrowding || 0);
+ if (value >= 75) return { label: 'Extreme', tone: 'danger' };
+ if (value >= 60) return { label: 'Squeeze risk', tone: 'danger' };
+ if (value >= 40) return { label: 'Crowded', tone: 'watch' };
+ if (value >= 20) return { label: 'Watch', tone: 'watch' };
+ return { label: 'Calm', tone: 'good' };
+ }
+
+ function buildMarketDecision(marketIndex = null) {
+ if (!marketIndex?.sentiment) return null;
+ const sentiment = marketIndex.sentiment || {};
+ const indexMove = Number(marketIndex.indexChangePct || 0);
+ const breadth = Number(sentiment.breadthPct ?? 50);
+ const advancingVolume = Number(sentiment.advancingVolumePct ?? breadth);
+ const indexLeadership = Number(sentiment.indexLeadership || sentiment.breadthPct || 50);
+ const fundingCrowding = Number(sentiment.fundingCrowdingIndex ?? sentiment.fundingStressPct ?? 0);
+ const fundingBias = String(sentiment.fundingCrowdingBias || 'balanced');
+ const fundingShock = Number(sentiment.fundingCrowdingShock || 0);
+ const trendScore = clampMarketDecisionScore(indexMove * 16, -24, 24);
+ const breadthScore = clampMarketDecisionScore((breadth - 50) * 0.85, -24, 24);
+ const volumeScore = clampMarketDecisionScore((advancingVolume - 50) * 0.38, -14, 14);
+ const leadershipScore = indexLeadership >= 58 ? 8 : indexLeadership <= 42 ? -8 : 0;
+ const rawBiasScore = trendScore + breadthScore + volumeScore + leadershipScore;
+ const risk = marketDecisionRiskLabel(fundingCrowding);
+ let bias = Math.abs(rawBiasScore) < 14 ? 'Neutral' : rawBiasScore > 0 ? 'Long' : 'Short';
+ let action = bias === 'Long' ? 'Prefer long scanner setups' : bias === 'Short' ? 'Prefer short scanner setups' : 'Wait for scanner confirmation';
+ if (fundingCrowding >= 60 && fundingBias === 'longs_crowded' && rawBiasScore > 8) {
+ bias = 'Contrarian';
+ action = 'Do not chase longs';
+ } else if (fundingCrowding >= 60 && fundingBias === 'shorts_crowded' && rawBiasScore < -8) {
+ bias = 'Contrarian';
+ action = 'Do not chase shorts';
+ } else if (fundingShock >= 18) {
+ action = 'Reduce size until crowding cools';
+ }
+ const confirmationBonus = Math.min(16, Math.abs(rawBiasScore) * 0.28);
+ const riskPenalty = fundingCrowding >= 75 ? 24 : fundingCrowding >= 60 ? 16 : fundingCrowding >= 40 ? 8 : 0;
+ const confidence = Math.round(clampMarketDecisionScore(42 + confirmationBonus + Math.abs(rawBiasScore) * 0.42 - riskPenalty, 20, 92));
+ const tone = bias === 'Long'
+ ? 'long'
+ : bias === 'Short'
+ ? 'short'
+ : bias === 'Contrarian'
+ ? 'contrarian'
+ : 'neutral';
+ const reasons = [
+ indexMove >= 0.35 ? `FWD trend +${indexMove.toFixed(2)}%` : indexMove <= -0.35 ? `FWD trend ${indexMove.toFixed(2)}%` : 'FWD trend flat',
+ breadth >= 55 ? `Breadth ${breadth.toFixed(1)}% rising support` : breadth <= 45 ? `Breadth ${breadth.toFixed(1)}% weak` : `Breadth ${breadth.toFixed(1)}% neutral`,
+ advancingVolume >= 55 ? `Advancing volume ${advancingVolume.toFixed(1)}%` : advancingVolume <= 45 ? `Advancing volume ${advancingVolume.toFixed(1)}% weak` : `Advancing volume ${advancingVolume.toFixed(1)}% mixed`,
+ fundingCrowding >= 40 ? `Activity ${fundingCrowding.toFixed(1)}/100 ${String(fundingBias).replace(/_/g, ' ')}` : `Activity ${fundingCrowding.toFixed(1)}/100 calm`,
+ fundingShock >= 10 ? `Shock +${fundingShock.toFixed(1)}` : '',
+ ].filter(Boolean).slice(0, 4);
+ return { bias, confidence, risk, action, tone, reasons };
+ }
+
+ function buildMarketDecisionPanel(marketIndex = null) {
+ const decision = buildMarketDecision(marketIndex);
+ if (!decision) return '';
+ return `<section class="ds-market-decision-strip ${escapeHtml(decision.tone)}" title="${escapeHtml(decision.reasons.join(' | '))}">
+ <div class="ds-market-decision-main">
+ <span>Market Bias</span>
+ <strong>${escapeHtml(decision.bias)}</strong>
+ <em>${escapeHtml(decision.action)}</em>
+ </div>
+ <div class="ds-market-decision-metrics">
+ <span><em>Confidence</em><strong>${escapeHtml(`${decision.confidence}%`)}</strong></span>
+ <span class="${escapeHtml(decision.risk.tone)}"><em>Risk</em><strong>${escapeHtml(decision.risk.label)}</strong></span>
+ </div>
+ <div class="ds-market-decision-reasons">
+ ${decision.reasons.map(reason => `<span>${escapeHtml(reason)}</span>`).join('')}
+ </div>
+ </section>`;
  }
 
 function buildIntelligenceOverlay(model = null, intelligence = null, state = {}) {
@@ -3624,7 +4031,7 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  function buildChartModel(dataset = {}, state = {}, strategy = {}, orderContext = null) {
  const candles = Array.isArray(dataset.candles) ? dataset.candles : [];
  if (!candles.length) return null;
- const timeframe = normalizeTimeframe(state.timeframe || dataset.timeframe || '5m');
+ const timeframe = normalizeTimeframe(state.timeframe || dataset.timeframe || '15m');
  const eventCandleTimes = getEventCandleTimes(candles, state);
  const chartCandles = eventCandleTimes.size
  ? candles.filter(candle => !eventCandleTimes.has(Number(candle.time || 0)))
@@ -3884,7 +4291,7 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  const priceAxis = gridLines.map((line, index) => ({
  key: `price_axis_${index}`,
  topPct: ((line.y - chartTop) / Math.max(1, chartHeight)) * 100,
- label: `$${formatPrice(line.value)}`,
+ label: `Rs ${formatPrice(line.value)}`,
  }));
  const axis = buildAxisLabels(visibleCandles, timeframe, visibleWindow.startIndex);
  const draftForAmounts = normalizeChartTradingDraft(state.chartTradingDraft);
@@ -3995,7 +4402,7 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
   const activeReviewId = String(state.activeChartReviewTabId || '').trim();
   const activeReviewTab = reviewTabs.find(tab => tab.id === activeReviewId) || reviewTabs[0] || null;
   const closeTitle = state.chartReviewOverlayOpen ? 'Close chart review' : 'Close chart and return to Strategy Lab';
-  const tfButton = (tf, label) => `<button class="bsm ds-chart-review-tf ${currentTf === tf ? 'active' : ''}" type="button" data-ds-chart-tf="${escapeHtml(tf)}" data-ds-chart-all-candles="1">${escapeHtml(label)}</button>`;
+  const tfButton = (tf, label) => `<button class="bsm ds-chart-review-tf ${currentTf === tf ? 'active' : ''}" type="button" data-ds-chart-tf="${escapeHtml(tf)}">${escapeHtml(label)}</button>`;
   const navButton = (action, label, title) => `<button class="bsm ds-chart-review-nav" type="button" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}" data-ds-chart-nav="${escapeHtml(action)}" data-ds-chart-nav-target="${SURFACE_REVIEW}">${escapeHtml(label)}</button>`;
   const closeButton = activeReviewTab
   ? `<button class="bsm ds-chart-review-close" type="button" title="${escapeHtml(closeTitle)}" aria-label="${escapeHtml(closeTitle)}" data-ds-review-tab-close="${escapeHtml(activeReviewTab.id)}">Close Review</button>`
@@ -4005,6 +4412,7 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  ${tfButton('15m', '15m')}
  ${tfButton('4h', '4H')}
  ${tfButton('1d', '1D')}
+ ${tfButton('1w', '1W')}
  </div>
  <div class="ds-chart-review-navs" aria-label="Quick View navigation">
  ${navButton('zoom-out', '-', 'Zoom out')}
@@ -4033,6 +4441,7 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  <div class="ds-chart-settings-options">
  <button class="bsm ${chartType === 'bars' ? 'active' : ''}" type="button" data-ds-chart-setting="chartType" data-ds-chart-setting-value="bars">Bars</button>
  <button class="bsm ${chartType === 'candles' ? 'active' : ''}" type="button" data-ds-chart-setting="chartType" data-ds-chart-setting-value="candles">Candles</button>
+ <button class="bsm ${chartType === 'line' ? 'active' : ''}" type="button" data-ds-chart-setting="chartType" data-ds-chart-setting-value="line">Line</button>
  </div>
  </div>
  <div class="ds-chart-settings-section">
@@ -4067,11 +4476,11 @@ function buildChartTabPicker(state = {}, options = {}) {
  if (state.chartReviewOverlayOpen) return reviewClose;
  if (compact) {
  return `<details class="ds-symbol-menu ds-chart-tab-picker ${state.symbol ? 'is-loaded' : ''} is-compact">
- <summary class="bsm ds-symbol-summary">${escapeHtml(state.symbol || 'Coin')}</summary>
+ <summary class="bsm ds-symbol-summary">${escapeHtml(state.symbol || 'Stock')}</summary>
  <div class="ds-symbol-menu-panel">
  <form class="ds-chart-symbol-form" data-ds-chart-symbol-form>
- <label>Coin</label>
- <input class="si" type="search" data-ds-chart-symbol-input list="dsChartSymbolList" placeholder="Search coin or index..." autocomplete="off" value="${escapeHtml(state.symbol || '')}" />
+ <label>Stock</label>
+ <input class="si" type="search" data-ds-chart-symbol-input list="dsChartSymbolList" placeholder="Search stock or index..." autocomplete="off" value="${escapeHtml(state.symbol || '')}" />
  <datalist id="dsChartSymbolList" data-ds-chart-symbol-list></datalist>
  <button class="bsm primary" type="submit">Load</button>
  </form>
@@ -4081,7 +4490,7 @@ function buildChartTabPicker(state = {}, options = {}) {
  }
  return `<div class="ds-chart-tab-picker ${state.symbol ? 'is-loaded' : ''} ${compact ? 'is-compact' : ''}">
  <form class="ds-chart-symbol-form" data-ds-chart-symbol-form>
- <input class="si" type="search" data-ds-chart-symbol-input list="dsChartSymbolList" placeholder="Search coin or index, e.g. FWD100, BTC, ETH..." autocomplete="off" value="${escapeHtml(state.symbol || '')}" />
+ <input class="si" type="search" data-ds-chart-symbol-input list="dsChartSymbolList" placeholder="Search stock or index, e.g. NIFTY, RELIANCE, TCS..." autocomplete="off" value="${escapeHtml(state.symbol || '')}" />
  <datalist id="dsChartSymbolList" data-ds-chart-symbol-list></datalist>
  <button class="bsm primary" type="submit">Search</button>
  </form>
@@ -4099,15 +4508,20 @@ function buildChartTabPicker(state = {}, options = {}) {
  ? ''
  : '<button type="button" class="bsm" data-ds-desk-collapse="context">Show Context</button>';
  return `<div class="ds-chart-command-strip ${state.chartFullscreen ? 'is-fullscreen' : ''}">
+ <div class="ds-chart-command-group ds-chart-command-group-symbol">
  ${symbolPicker}
  ${contextButton}
+ </div>
+ <div class="ds-chart-command-group ds-chart-command-group-view">
  <div class="live-order-chart-timeframes ds-chart-command-presets">
  ${buildPresetMenu(state)}
  </div>
-  <div class="live-order-chart-timeframes ds-fullscreen-control-group">
-  <button class="bsm ds-fullscreen-toggle ${state.chartFullscreen ? 'active' : ''}" type="button" data-ds-chart-fullscreen="1">${state.chartFullscreen ? 'Exit Full Screen' : 'Full Screen'}</button>
-  <button class="bsm ${state.deskLayoutMode !== 'single' && normalizeTimeframe(state.primaryTimeframe || '') === '1d' && normalizeTimeframe(state.executionTimeframe || '') === '15m' ? 'active' : ''}" type="button" title="Compare daily structure with the 15 minute execution chart" data-ds-desk-compare="1d-15m">1D + 15m</button>
-  </div>
+ <div class="live-order-chart-timeframes ds-fullscreen-control-group">
+ <button class="bsm ds-fullscreen-toggle ${state.chartFullscreen ? 'active' : ''}" type="button" data-ds-chart-fullscreen="1">${state.chartFullscreen ? 'Exit Full Screen' : 'Full Screen'}</button>
+ <button class="bsm ${state.deskLayoutMode !== 'single' && normalizeTimeframe(state.primaryTimeframe || '') === '1d' && normalizeTimeframe(state.executionTimeframe || '') === '15m' ? 'active' : ''}" type="button" title="Compare daily structure with the 15 minute execution chart" data-ds-desk-compare="1d-15m">1D + 15m</button>
+ </div>
+ </div>
+ <div class="ds-chart-command-group ds-chart-command-group-tools">
  <div class="live-order-chart-timeframes ds-chart-command-tools">
  ${buildChartSettingsMenu(state, strategy)}
  </div>
@@ -4115,15 +4529,16 @@ function buildChartTabPicker(state = {}, options = {}) {
  <div class="live-order-chart-timeframes ds-chart-command-tools">
  ${buildChartIndicatorMenu(state)}
  </div>
- ${reviewClose}
  <button class="bsm ds-chart-refresh-compact" type="button" data-ds-chart-refresh="1">Refresh</button>
+ ${reviewClose}
+ </div>
  </div>`;
  }
 
  function resolveChartInstrumentDescription(symbol = '') {
  const normalized = String(symbol || '').trim().toUpperCase();
  if (!normalized) return '';
- if (isFwdIndexSymbol(normalized)) return 'FWD-100 Equal-Weight Index';
+ if (isFwdIndexSymbol(normalized)) return fwdIndexSyntheticDisplayName(normalized);
  const cached = Array.isArray(chartMarketSymbolsCache) ? chartMarketSymbolsCache : [];
  const product = cached.find(item => String(item?.symbol || '').trim().toUpperCase() === normalized) || null;
  const description = product?.instrumentDescription || product?.description || product?.name || '';
@@ -4138,7 +4553,7 @@ function buildChartTabPicker(state = {}, options = {}) {
  if (!indexCorrelation || !Number.isFinite(Number(indexCorrelation.primary))) return '';
  const tone = String(indexCorrelation.tone || 'neutral').replace(/[^a-z0-9_-]/gi, '') || 'neutral';
  return `<div class="ds-chart-meta-row ds-index-correlation-row">
- <span class="${escapeHtml(tone)}"><strong>FWD-100 Correlation</strong> ${escapeHtml(formatCorrelationValue(indexCorrelation.primary))}</span>
+ <span class="${escapeHtml(tone)}"><strong>Nifty 50 Correlation</strong> ${escapeHtml(formatCorrelationValue(indexCorrelation.primary))}</span>
  <span>${escapeHtml(indexCorrelation.label || 'Index behavior')}</span>
  <span>30D ${escapeHtml(formatCorrelationValue(indexCorrelation.c30?.value))}</span>
  <span>90D ${escapeHtml(formatCorrelationValue(indexCorrelation.c90?.value))}</span>
@@ -4186,6 +4601,7 @@ function buildChartTabPicker(state = {}, options = {}) {
  </div>
  ${deskStatusBlock}
  ${deskInstrumentBlock}
+ ${buildMarketDecisionPanel(marketIndex || primaryPayload.dataset?.marketIndex || executionPayload.dataset?.marketIndex || null)}
  ${!primaryIndex ? buildIndexCorrelationStrip(primaryPayload.indexCorrelation || executionPayload.indexCorrelation) : ''}
  ${isSingleChart ? '' : buildDecisionBadges(executionPayload.intelligence || primaryPayload.intelligence)}
  ${collapsed.primary || (!isSingleChart && collapsed.execution) ? `<div class="ds-desk-collapsed-bar">
@@ -4217,15 +4633,15 @@ function buildChartTabPicker(state = {}, options = {}) {
  : dataset?.ok
  ? (dataset?.stale ? 'account-inline-note warn' : 'account-inline-note good')
  : 'account-inline-note bad';
- const chartInstrumentDescription = isFwdIndex ? (dataset?.displayName || fwdIndexDisplayName(dataset?.marketIndex || marketIndex || null)) : resolveChartInstrumentDescription(state.symbol || '');
- const chartInstrumentNote = '';
+ const chartInstrumentDescription = isFwdIndex ? (dataset?.displayName || fwdIndexSyntheticDisplayName(dataset?.symbol || state.symbol, dataset?.marketIndex || marketIndex || null)) : resolveChartInstrumentDescription(state.symbol || '');
+ const chartInstrumentNote = buildFwdIndexMetricGuide(dataset);
  const statusText = isReview
  ? ''
  : !state.symbol
  ? 'Choose a symbol to load the chart.'
  : dataset?.ok
  ? (dataset?.syntheticIndex
- ? `${FWD_INDEX_SYMBOL} | ${chartInstrumentDescription} | ${model?.totalCount || dataset?.candles?.length || 0} bars | ${String(dataset?.historyMode || 'daily index history').replace(/_/g, ' ')}${dataset?.marketIndex?.regime ? ` | ${String(dataset.marketIndex.regime).replace(/_/g, ' ')}` : ''}`
+ ? `${dataset?.symbol || FWD_INDEX_SYMBOL} | ${chartInstrumentDescription} | ${model?.totalCount || dataset?.candles?.length || 0} ${dataset?.syntheticMetric ? 'points' : 'bars'} | ${String(dataset?.historyMode || 'daily index history').replace(/_/g, ' ')}${dataset?.marketIndex?.regime ? ` | ${String(dataset.marketIndex.regime).replace(/_/g, ' ')}` : ''}`
  : `${RESOLUTION_LABELS[normalizeTimeframe(state.timeframe)]} | loaded ${model?.totalCount || 0} candles${dataset?.candles?.[0]?.time ? ` from ${formatChartDate(dataset.candles[0].time)}` : ''}${dataset?.candles?.length ? ` to ${formatChartDate(dataset.candles[dataset.candles.length - 1].time)}` : ''} | visible ${model?.visibleCount || 0}${dataset?.stale ? ' | using cached data' : ''}`)
  : (dataset?.error || 'Failed to load chart data.');
  const hasReplay = !!state.replaySeed || !!normalizeReplayMode(state.replayMode);
@@ -4294,16 +4710,17 @@ function buildChartTabPicker(state = {}, options = {}) {
  const studyLegend = !isFwdIndex && !isReview && !isJournalMode && model
  ? `
  <div class="live-order-study-legend">
- ${isIndicatorGroupActive(state, presetMeta, 'ema') ? model.studyLines.filter(line => line.key !== 'vwap').map(line => `<span class="live-order-study-pill ${escapeHtml(line.className)}"><strong>${escapeHtml(line.label)}</strong> $${escapeHtml(formatPrice(line.latestValue))}</span>`).join('') : ''}
- ${isIndicatorGroupActive(state, presetMeta, 'vwap') ? model.studyLines.filter(line => line.key === 'vwap').map(line => `<span class="live-order-study-pill vwap"><strong>VWAP</strong> $${escapeHtml(formatPrice(line.latestValue))}</span>`).join('') : ''}
+ ${isIndicatorGroupActive(state, presetMeta, 'ema') ? model.studyLines.filter(line => line.key !== 'vwap').map(line => `<span class="live-order-study-pill ${escapeHtml(line.className)}"><strong>${escapeHtml(line.label)}</strong> Rs ${escapeHtml(formatPrice(line.latestValue))}</span>`).join('') : ''}
+ ${isIndicatorGroupActive(state, presetMeta, 'vwap') ? model.studyLines.filter(line => line.key === 'vwap').map(line => `<span class="live-order-study-pill vwap"><strong>VWAP</strong> Rs ${escapeHtml(formatPrice(line.latestValue))}</span>`).join('') : ''}
  ${presetMeta.showKeyLevels ? model.keyZones.map(zone => `<span class="live-order-study-pill key"><strong>${escapeHtml(zone.tf)} ${zone.kind === 'resistance' ? 'R' : 'S'}</strong> <em>${escapeHtml(formatStrength(zone, keyLevelSettings.displayStrengthAs))}</em></span>`).join('') : ''}
  </div>`
  : '';
+ const thinCandleCount = !model && dataset?.ok && Array.isArray(dataset?.candles) ? dataset.candles.length : 0;
  const chartMarkup = !model
  ? `<div class="empty compact">
  <div class="ei">--</div>
- <div class="eh">${escapeHtml(dataset?.ok ? 'No visible candles' : 'Chart unavailable')}</div>
- <div class="es">${escapeHtml(dataset?.error || 'Public candles will appear here once a symbol is available.')}</div>
+ <div class="eh">${escapeHtml(thinCandleCount > 0 ? 'Limited candle history' : dataset?.ok ? 'No visible candles' : 'Chart unavailable')}</div>
+ <div class="es">${escapeHtml(thinCandleCount > 0 ? `${thinCandleCount} candle${thinCandleCount === 1 ? '' : 's'} loaded. The chart can still render, but indicators need more history.` : dataset?.error || 'Public candles will appear here once a symbol is available.')}</div>
  </div>`
  : `
  ${studyLegend}
@@ -4315,8 +4732,8 @@ function buildChartTabPicker(state = {}, options = {}) {
  ${presetMeta.showKeyLevels ? buildKeyLevelVisualLayer(model, keyLevelSettings) : ''}
  ${isReview ? '' : buildIntelligenceOverlay(model, intelligence, state)}
  <div class="live-order-chart-tags">
- ${isReview ? '' : model.orderTags.map(tag => `<div class="live-order-chart-tag ${escapeHtml(tag.tone)} ${escapeHtml(tag.source || '')}" data-ds-chart-line-role="${escapeHtml(tag.displayRole || tag.role || tag.kind || tag.tone || '')}" data-ds-chart-line-source="${escapeHtml(tag.source || '')}" data-ds-chart-line-order-id="${escapeHtml(tag.orderId || '')}" data-ds-chart-line-price="${escapeHtml(tag.price || '')}" data-ds-chart-line-top="${Math.max(0, Math.min(100, tag.topPct)).toFixed(2)}" title="${escapeHtml((tag.displayRole === 'stop' || tag.displayRole === 'target') ? (tag.source === 'linked' ? `Drag to modify ${tag.label || tag.displayRole || 'order'}` : `Drag to adjust ${tag.label || 'draft line'}`) : `${tag.label || 'Order line'} is read only on chart`)}" style="top:${Math.max(0, Math.min(100, tag.topPct)).toFixed(2)}%"><strong>${escapeHtml(tag.label)}</strong><em>$${escapeHtml(formatPrice(tag.price))}${tag.amountLabel ? ` | ${escapeHtml(tag.amountLabel)}` : ''}${tag.meta ? ` | ${escapeHtml(tag.meta)}` : ''}</em></div>`).join('')}
- ${!isReview && model.lastPrice ? `<div class="live-order-chart-tag ds-last-price-tag ${escapeHtml(model.lastPrice.tone)}" style="top:${Math.max(0, Math.min(100, model.lastPrice.topPct)).toFixed(2)}%"><strong>Last</strong><em>$${escapeHtml(formatPrice(model.lastPrice.price))}</em></div>` : ''}
+ ${isReview ? '' : model.orderTags.map(tag => `<div class="live-order-chart-tag ${escapeHtml(tag.tone)} ${escapeHtml(tag.source || '')}" data-ds-chart-line-role="${escapeHtml(tag.displayRole || tag.role || tag.kind || tag.tone || '')}" data-ds-chart-line-source="${escapeHtml(tag.source || '')}" data-ds-chart-line-order-id="${escapeHtml(tag.orderId || '')}" data-ds-chart-line-price="${escapeHtml(tag.price || '')}" data-ds-chart-line-top="${Math.max(0, Math.min(100, tag.topPct)).toFixed(2)}" title="${escapeHtml((tag.displayRole === 'stop' || tag.displayRole === 'target') ? (tag.source === 'linked' ? `Drag to modify ${tag.label || tag.displayRole || 'order'}` : `Drag to adjust ${tag.label || 'draft line'}`) : `${tag.label || 'Order line'} is read only on chart`)}" style="top:${Math.max(0, Math.min(100, tag.topPct)).toFixed(2)}%"><strong>${escapeHtml(tag.label)}</strong><em>Rs ${escapeHtml(formatPrice(tag.price))}${tag.amountLabel ? ` | ${escapeHtml(tag.amountLabel)}` : ''}${tag.meta ? ` | ${escapeHtml(tag.meta)}` : ''}</em></div>`).join('')}
+ ${!isReview && model.lastPrice ? `<div class="live-order-chart-tag ds-last-price-tag ${escapeHtml(model.lastPrice.tone)}" style="top:${Math.max(0, Math.min(100, model.lastPrice.topPct)).toFixed(2)}%"><strong>Last</strong><em>Rs ${escapeHtml(formatPrice(model.lastPrice.price))}</em></div>` : ''}
  ${model.replayCursor ? `<div class="live-order-chart-tag replay-cursor" style="top:4%"><strong>Replay Cursor</strong><em>${escapeHtml(new Date(model.replayCursor.time).toLocaleString())}</em></div>` : ''}
  </div>
  </div>`;
@@ -4331,8 +4748,8 @@ function buildChartTabPicker(state = {}, options = {}) {
  <div class="live-order-chart-card ${isDetached ? 'chart-only ds-chart-card-detached' : isReview ? 'chart-only ds-chart-card-tab ds-chart-card-review' : isTab ? 'chart-only ds-chart-card-tab' : 'ds-chart-card-preview'} ${isJournalMode ? 'ds-chart-card-journal' : ''}">
  <div class="live-order-chart-head">
  <div>
- <div class="mo-section">${isJournalMode ? 'TRADE REPLAY CHART' : (isDetached ? 'DETACHED DECISION CHART' : isReview ? `QUICK VIEW | ${state.symbol || 'CHART'}` : isTab ? 'ADVANCED DECISION CHART' : 'LIVE PRICE WORKSPACE')}</div>
- ${isReview ? '' : `<div class="live-order-chart-copy">${escapeHtml(
+ <div class="mo-section">${isJournalMode ? 'TRADE REPLAY CHART' : (isDetached ? 'DETACHED DECISION CHART' : isReview ? `QUICK VIEW | ${state.symbol || 'CHART'}` : isTab ? 'MARKETS CHART' : 'LIVE PRICE WORKSPACE')}</div>
+ ${isReview || isTab ? '' : `<div class="live-order-chart-copy">${escapeHtml(
  isDetached && !isJournalMode
  ? (hasReplay
  ? 'Detached workspace with setup context, key zones, order lines, replay controls, and storage sync.'
@@ -4463,24 +4880,53 @@ function buildChartTabPicker(state = {}, options = {}) {
  return [...new Set(keys)];
  }
 
+ function chartStateForDataset(state = {}, dataset = {}) {
+ if (!dataset?.syntheticIndex) return state;
+ if (!dataset?.syntheticMetric) {
+ const chartType = normalizeChartType(state.chartType || 'candles');
+ const preset = normalizePreset(state.preset || 'ema_obv');
+ const inheritedCleanMetricState = preset === 'clean' && state.indicators?.volume === false;
+ if (chartType !== 'line' && !inheritedCleanMetricState) return state;
+ return {
+ ...state,
+ preset: inheritedCleanMetricState ? 'ema_obv' : preset,
+ chartType: chartType === 'line' ? 'candles' : chartType,
+ showIndicatorLegend: true,
+ indicators: inheritedCleanMetricState ? presetIndicatorDefaults('ema_obv', state.indicators || {}) : state.indicators,
+ };
+ }
+ return {
+ ...state,
+ preset: 'clean',
+ chartType: 'line',
+ showOrders: false,
+ showVwap: false,
+ showIndicatorLegend: false,
+ intelligenceOverlays: false,
+ overlayDensity: 'minimal',
+ indicators: buildCleanIndicatorState({ volume: false }),
+ };
+ }
+
  async function buildChartPayload(surface = SURFACE_PREVIEW, state = {}, strategy = {}, orderContext = null, signal = null, marketIndex = null, force = false) {
  const dataset = await loadChartDataset(state, strategy, { force });
- const model = dataset?.ok ? buildChartModel(dataset, state, strategy, orderContext) : null;
+ const chartState = chartStateForDataset(state, dataset);
+ const model = dataset?.ok ? buildChartModel(dataset, chartState, strategy, orderContext) : null;
  const indicatorApi = globalThis.FWDTradeDeskIndicators;
  const normalizedCandles = indicatorApi?.normalizeCandles(dataset?.candles || []) || [];
- const presetMeta = getPresetMeta(state.preset);
+ const presetMeta = getPresetMeta(chartState.preset);
  const shouldBuildIntelligence = model
  && indicatorApi?.buildAdvancedChartIntelligence
- && state.intelligenceOverlays !== false
- && normalizePreset(state.preset) !== 'clean'
- && normalizePreset(state.preset) !== 'key';
- const indicators = normalizedCandles.length && indicatorApi?.calculate && (chartNeedsIndicators(state, presetMeta) || shouldBuildIntelligence)
- ? indicatorApi.calculate(normalizedCandles, dataset?.studies || {}, { only: requestedIndicatorKeys(state, presetMeta), obvSmaLength: sanitizeIndicatorState(state.indicators || {}).obvSmaLength })
+ && chartState.intelligenceOverlays !== false
+ && normalizePreset(chartState.preset) !== 'clean'
+ && normalizePreset(chartState.preset) !== 'key';
+ const indicators = normalizedCandles.length && indicatorApi?.calculate && (chartNeedsIndicators(chartState, presetMeta) || shouldBuildIntelligence)
+ ? indicatorApi.calculate(normalizedCandles, dataset?.studies || {}, { only: requestedIndicatorKeys(chartState, presetMeta), obvSmaLength: sanitizeIndicatorState(chartState.indicators || {}).obvSmaLength })
  : {};
  const intelligence = shouldBuildIntelligence
  ? indicatorApi.buildAdvancedChartIntelligence(normalizedCandles, indicators, {
  surface,
- state,
+ state: chartState,
  strategy,
  dataset,
  model,
@@ -4495,10 +4941,10 @@ function buildChartTabPicker(state = {}, options = {}) {
  ? await loadFwdIndexChartDataset({ symbol: FWD_INDEX_SYMBOL, timeframe: '1d' }, strategy).catch(() => null)
  : null;
  const indexCorrelation = shouldLoadIndexContext
- ? await buildIndexCorrelation(state.symbol, marketIndex, indexDataset).catch(() => null)
+ ? await buildIndexCorrelation(chartState.symbol, marketIndex, indexDataset).catch(() => null)
  : null;
- const indexComparison = shouldLoadIndexContext ? buildIndexComparison(state.symbol, marketIndex, indexDataset) : null;
- return { state, dataset, model, indicators, intelligence, indexCorrelation, indexComparison };
+ const indexComparison = shouldLoadIndexContext ? buildIndexComparison(chartState.symbol, marketIndex, indexDataset) : null;
+ return { state: chartState, dataset, model, indicators, intelligence, indexCorrelation, indexComparison };
  }
 
  async function renderDeskSurface(surface = SURFACE_TAB, surfaceRef, state = {}, strategy = {}, orderContext = null, signalState = {}, activeSignal = null, force = false) {
@@ -4551,7 +4997,7 @@ function buildChartTabPicker(state = {}, options = {}) {
  intelligence: item.payload.intelligence,
  indicators: item.payload.indicators,
  indexComparison: item.payload.indexComparison,
- presetMeta: getPresetMeta(state.preset),
+ presetMeta: getPresetMeta(item.payload.state?.preset || state.preset),
  });
  if (typeof globalThis.recordPopupPerformanceMetric === 'function') {
  Promise.resolve(globalThis.recordPopupPerformanceMetric('chart', {
@@ -4597,22 +5043,23 @@ function buildChartTabPicker(state = {}, options = {}) {
  const dataset = await loadChartDataset(state, strategy, {
  force: force || refreshChanged,
  });
- const model = dataset?.ok ? buildChartModel(dataset, state, strategy, orderContext) : null;
+ const chartState = chartStateForDataset(state, dataset);
+ const model = dataset?.ok ? buildChartModel(dataset, chartState, strategy, orderContext) : null;
  const indicatorApi = globalThis.FWDTradeDeskIndicators;
  const normalizedCandles = indicatorApi?.normalizeCandles(dataset?.candles || []) || [];
- const presetMeta = getPresetMeta(state.preset);
+ const presetMeta = getPresetMeta(chartState.preset);
  const shouldBuildIntelligence = model
  && indicatorApi?.buildAdvancedChartIntelligence
- && state.intelligenceOverlays !== false
- && normalizePreset(state.preset) !== 'clean'
- && normalizePreset(state.preset) !== 'key';
- const calculatedIndicators = normalizedCandles.length && indicatorApi?.calculate && (chartNeedsIndicators(state, presetMeta) || shouldBuildIntelligence)
- ? indicatorApi.calculate(normalizedCandles, dataset?.studies || {}, { only: requestedIndicatorKeys(state, presetMeta), obvSmaLength: sanitizeIndicatorState(state.indicators || {}).obvSmaLength })
+ && chartState.intelligenceOverlays !== false
+ && normalizePreset(chartState.preset) !== 'clean'
+ && normalizePreset(chartState.preset) !== 'key';
+ const calculatedIndicators = normalizedCandles.length && indicatorApi?.calculate && (chartNeedsIndicators(chartState, presetMeta) || shouldBuildIntelligence)
+ ? indicatorApi.calculate(normalizedCandles, dataset?.studies || {}, { only: requestedIndicatorKeys(chartState, presetMeta), obvSmaLength: sanitizeIndicatorState(chartState.indicators || {}).obvSmaLength })
  : {};
  const intelligence = shouldBuildIntelligence
  ? indicatorApi.buildAdvancedChartIntelligence(normalizedCandles, calculatedIndicators, {
  surface,
- state,
+ state: chartState,
  strategy,
  dataset,
  model,
@@ -4627,12 +5074,12 @@ function buildChartTabPicker(state = {}, options = {}) {
  ? await loadFwdIndexChartDataset({ symbol: FWD_INDEX_SYMBOL, timeframe: '1d' }, strategy).catch(() => null)
  : null;
  const indexCorrelation = shouldLoadIndexContext
- ? await buildIndexCorrelation(state.symbol, signalState?.marketIndex || null, indexDataset).catch(() => null)
+ ? await buildIndexCorrelation(chartState.symbol, signalState?.marketIndex || null, indexDataset).catch(() => null)
  : null;
- const indexComparison = shouldLoadIndexContext ? buildIndexComparison(state.symbol, signalState?.marketIndex || null, indexDataset) : null;
+ const indexComparison = shouldLoadIndexContext ? buildIndexComparison(chartState.symbol, signalState?.marketIndex || null, indexDataset) : null;
  const markup = buildChartMarkup(
  surface,
- state,
+ chartState,
  strategy,
  dataset,
  model,
@@ -4653,7 +5100,7 @@ function buildChartTabPicker(state = {}, options = {}) {
  if (!chartContainer || !model || !dataset?.ok || !globalThis.FWDTradeDeskChartEngine?.render) return;
  globalThis.FWDTradeDeskChartEngine.render(chartContainer, {
  surface,
- state,
+ state: chartState,
  strategy,
  dataset,
  model,
@@ -4858,7 +5305,7 @@ function buildChartTabPicker(state = {}, options = {}) {
     <span><em>Current</em><b>${escapeHtml(from)}</b></span>
     <span><em>New</em><b>${escapeHtml(to)}</b></span>
    </div>
-   <small>${escapeHtml(isLive ? 'Next step: opens the Delta order edit/protection window. API changes require final confirmation there.' : 'This is only a planning line on the chart.')}</small>
+   <small>${escapeHtml(isLive ? 'Next step: opens the broker order review window. API changes require final confirmation there.' : 'This is only a planning line on the chart.')}</small>
   </div>
   <div class="ds-chart-confirm-actions">
    <button type="button" class="bsm" data-chart-confirm="cancel">Cancel</button>
@@ -5106,7 +5553,7 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  }
  root.querySelectorAll('[data-ds-chart-tf]').forEach(button => {
  button.addEventListener('click', async () => {
- const timeframe = normalizeTimeframe(button.dataset.dsChartTf || '5m');
+ const timeframe = normalizeTimeframe(button.dataset.dsChartTf || '15m');
  const allCandles = button.dataset.dsChartAllCandles === '1';
  await updateChartState(surface, currentState => {
  const nextVisible = allCandles ? MAX_RENDER_CANDLES : (currentState.replaySeed?.baselineVisibleCount || defaultVisibleCount(timeframe));
@@ -5452,7 +5899,7 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  root.querySelectorAll('[data-ds-desk-tf]').forEach(select => {
  select.addEventListener('change', async () => {
  const panel = String(select.dataset.dsDeskTf || '').trim();
- const timeframe = normalizeTimeframe(select.value || '5m');
+ const timeframe = normalizeTimeframe(select.value || '15m');
  await updateChartState(surface, currentState => ({
  timeframe: panel === 'execution' ? timeframe : currentState.timeframe,
  primaryTimeframe: panel === 'primary' ? timeframe : currentState.primaryTimeframe,
@@ -5824,7 +6271,7 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  const replaySeed = normalizeReplaySeed(options.replaySeed);
  const patch = {
  symbol: String(options.symbol || previewSurface.getDisplaySymbol?.() || '').trim().toUpperCase(),
- timeframe: normalizeTimeframe(options.timeframe || '5m'),
+ timeframe: normalizeTimeframe(options.timeframe || '15m'),
  preset: normalizePreset(options.preset || defaults.defaultPreset || 'clean'),
  showOrders: Object.prototype.hasOwnProperty.call(options, 'showOrders') ? !!options.showOrders : !!defaults.showOrders,
  showVwap: Object.prototype.hasOwnProperty.call(options, 'showVwap') ? !!options.showVwap : !!defaults.showVwap,
@@ -5836,7 +6283,7 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  orderContext: normalizeOrderContext(typeof options.getOrderContext === 'function' ? options.getOrderContext() : options.orderContext),
  visibleCandleCount: Math.max(
  24,
- Number(options.visibleCandleCount || replaySeed?.baselineVisibleCount || defaultVisibleCount(options.timeframe || '5m'))
+ Number(options.visibleCandleCount || replaySeed?.baselineVisibleCount || defaultVisibleCount(options.timeframe || '15m'))
  ),
  uiMode: previewSurface.uiMode,
  chartViewMode: 'preview',
@@ -5869,7 +6316,7 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  tabSurface.autoSelectedBest = true;
  }
  await setChartState(currentState => ({
- preset: currentState.keyDefaultAppliedV1 ? normalizePreset(currentState.preset || 'key') : 'key',
+ preset: currentState.keyDefaultAppliedV1 ? normalizePreset(currentState.preset || 'clean') : 'clean',
  timeframe: currentState.cleanDefaultAppliedV1 ? normalizeTimeframe(currentState.timeframe || '15m') : '15m',
  visibleCandleCount: currentState.cleanDefaultAppliedV1 ? (currentState.visibleCandleCount || defaultVisibleCount(currentState.timeframe || '15m')) : defaultVisibleCount('15m'),
  chartViewMode: 'tab',
@@ -6046,6 +6493,7 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  bindStorageListener();
  bindKeyboardShortcuts(SURFACE_DETACHED);
  await queueSurfaceRender(SURFACE_DETACHED, true);
+ globalThis.__fwdDetachedChartRenderComplete = true;
  }
 
  globalThis.DS_V17_CHART_STATE_KEY = DS_V17_CHART_STATE_KEY;

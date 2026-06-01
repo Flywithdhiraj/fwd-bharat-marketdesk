@@ -2,8 +2,8 @@
 
 (function initDarvasScanner(global) {
  const DARVAS_DEFAULT_SETTINGS = Object.freeze({
-  maxCoins: 160,
-  outputLimit: 180,
+  maxCoins: 500,
+  outputLimit: 500,
   minUsdVolume24h: 100000,
   preferredDailyCandles: 140,
   minDailyCandles: 45,
@@ -99,12 +99,15 @@
   });
  }
 
- async function darvasLoadSettings() {
-  const stored = await darvasLoadStored(['strategySettings.darvas']);
-  return {
+async function darvasLoadSettings() {
+ const stored = await darvasLoadStored(['strategySettings.darvas']);
+  const settings = {
    ...DARVAS_DEFAULT_SETTINGS,
    ...(stored['strategySettings.darvas'] || {}),
   };
+  settings.maxCoins = Math.max(DARVAS_DEFAULT_SETTINGS.maxCoins, Number(settings.maxCoins || 0));
+  settings.outputLimit = Math.max(DARVAS_DEFAULT_SETTINGS.outputLimit, Number(settings.outputLimit || 0));
+  return settings;
  }
 
  function darvasBuildUniverse(tickerMap = {}, products = [], settings = DARVAS_DEFAULT_SETTINGS) {
@@ -112,10 +115,10 @@
   return Object.entries(tickerMap || {})
   .filter(([symbol, ticker]) => {
    const sym = String(symbol || '').toUpperCase();
-   if (!sym || productSymbols.size && !productSymbols.has(sym)) return false;
-   if (!sym.endsWith('USD') && !sym.endsWith('USDT')) return false;
-   if (!(Number(ticker?.price || 0) > 0)) return false;
-   return Number(ticker?.usdVol24h || 0) >= Number(settings.minUsdVolume24h || 0);
+ if (!sym || productSymbols.size && !productSymbols.has(sym)) return false;
+ if (!(Number(ticker?.price || 0) > 0)) return false;
+   const turnover = Number(ticker?.inrTurnover24h || ticker?.turnover24h || ticker?.usdVol24h || 0);
+   return !(turnover > 0) || turnover >= Number(settings.minUsdVolume24h || 0);
   })
   .map(([symbol, ticker]) => ({ symbol: String(symbol || '').toUpperCase(), ticker }))
   .sort((a, b) => Number(b.ticker?.usdVol24h || 0) - Number(a.ticker?.usdVol24h || 0))
@@ -210,12 +213,13 @@
   const ema100 = darvasEma(closes, 100) || 0;
   const atr14 = darvasAtr(daily, 14);
   const avgVolume20 = darvasSma(volumes, 20, Math.max(0, volumes.length - 2)) || 0;
-  const latestQuoteVolume = darvasQuoteVolume(last) || Number(ticker?.usdVol24h || 0) / 24 || 0;
+  const tickerTurnover = Number(ticker?.inrTurnover24h || ticker?.turnover24h || ticker?.usdVol24h || 0);
+  const latestQuoteVolume = darvasQuoteVolume(last) || tickerTurnover / 24 || 0;
   const volumeRatio = avgVolume20 > 0 ? latestQuoteVolume / avgVolume20 : 0;
   const move1d = daily.length > 1 ? darvasPctChange(Number(last.close || price), Number(daily[daily.length - 2]?.close || 0)) : Number(ticker?.change24h || 0);
   const move4h = intraday.length > 16 ? darvasPctChange(Number(intraday[intraday.length - 1]?.close || price), Number(intraday[intraday.length - 17]?.close || 0)) : 0;
   const trendUp = price > ema20 && ema20 > ema50 && (!ema100 || ema50 >= ema100 * 0.97);
-  const lowLiquidity = Number(ticker?.usdVol24h || 0) < Number(settings.minUsdVolume24h || 0);
+  const lowLiquidity = tickerTurnover > 0 && tickerTurnover < Number(settings.minUsdVolume24h || 0);
   const boxTop = Number(box.boxTop || 0);
   const boxBottom = Number(box.boxBottom || 0);
   const boxHeightPct = Number(box.boxHeightPct || 0);

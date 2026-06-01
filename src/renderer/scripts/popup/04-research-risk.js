@@ -1018,24 +1018,29 @@ document.getElementById('btnScan')?.addEventListener('click', async () => {
 
  scanning = true;
 
- document.getElementById('btnScan').disabled = true;
+ const scanBtn = document.getElementById('btnScan');
+ const dotEl = document.getElementById('sdot');
+ const statusEl = document.getElementById('stxt');
+ const progressEl = document.getElementById('progwrap');
 
- document.getElementById('sdot').className = 'sdot pulse';
+ if (scanBtn) scanBtn.disabled = true;
 
- document.getElementById('stxt').textContent = 'Starting scan...';
+ if (dotEl) dotEl.className = 'sdot pulse';
 
- document.getElementById('progwrap').style.display = 'block';
+ if (statusEl) statusEl.textContent = 'Starting NSE/BSE scan...';
+
+ if (progressEl) progressEl.style.display = 'block';
 
  chrome.runtime.sendMessage({ action: 'startScan' }, resp => {
  if (chrome.runtime.lastError) {
- document.getElementById('stxt').textContent = 'Scan error: background not ready';
- document.getElementById('btnScan').disabled = false;
+ if (statusEl) statusEl.textContent = 'Scan error: background not ready';
+ if (scanBtn) scanBtn.disabled = false;
  scanning = false;
  return;
  }
  if (!resp?.ok) {
- document.getElementById('stxt').textContent = 'Scan error: ' + (resp?.error || 'unknown');
- document.getElementById('btnScan').disabled = false;
+ if (statusEl) statusEl.textContent = 'Scan error: ' + (resp?.error || 'unknown');
+ if (scanBtn) scanBtn.disabled = false;
  scanning = false;
  }
  });
@@ -1070,23 +1075,12 @@ function loadAutoScanState() {
 
 
 function loadAutoTradeState() {
- chrome.storage.local.get(['autoTrade', 'autoTradeLastSkipReason', 'autoTradeDailyCount', 'autoTradeDailyCountResetTs', 'autoTradeSettings', 'autoTradeLog', 'autoTradeDecisionAuditV16'], d => {
- const on = d.autoTrade ?? false;
+ chrome.storage.local.get(['autoTrade'], () => {
  const btn = document.getElementById('btnAutoTrade');
  if (!btn) return;
- btn.textContent = on ? 'Auto Trade On' : 'Auto Trade Off';
- btn.classList.toggle('active', on);
- btn.style.borderColor = on ? '#ff6b6b' : '';
- const reverseBtn = document.getElementById('btnAutoTradeReverse');
- const reverseOn = !!d.autoTradeSettings?.reverseSignals;
- if (reverseBtn) {
- reverseBtn.textContent = reverseOn ? 'Reverse On' : 'Reverse Off';
- reverseBtn.classList.toggle('active', reverseOn);
- reverseBtn.title = reverseOn
- ? 'Futures auto-trade will place the opposite side of each scanner signal.'
- : 'Futures auto-trade will follow the scanner signal side.';
- }
- // Show skip reason if auto-trade is on but blocked
+ btn.textContent = 'Manual Only';
+ btn.classList.remove('active');
+ btn.style.borderColor = '';
  let reasonEl = document.getElementById('autoTradeSkipReason');
  if (!reasonEl) {
  reasonEl = document.createElement('div');
@@ -1094,102 +1088,20 @@ function loadAutoTradeState() {
  reasonEl.className = 'auto-trade-safety-reason';
  btn.parentElement?.appendChild(reasonEl);
  }
- let reason = String(d.autoTradeLastSkipReason || '').trim();
- if (/^max (?:per day|daily attempts|trades per day) reached:/i.test(reason)) {
- const todayMidnight = new Date().setHours(0, 0, 0, 0);
- const maxPerDay = Number(d.autoTradeSettings?.maxPerDay || 0);
- const resetTs = Number(d.autoTradeDailyCountResetTs || 0);
- const storedDailyCount = resetTs < todayMidnight ? 0 : Number(d.autoTradeDailyCount || 0);
- const successfulTradesToday = (Array.isArray(d.autoTradeLog) ? d.autoTradeLog : []).filter(entry => {
- const ts = Number(entry?.ts || 0);
- if (ts < todayMidnight) return false;
- if (String(entry?.status || '').toLowerCase() === 'failed') return false;
- return !!(
- String(entry?.orderId || '').trim()
- || String(entry?.clientOrderId || '').trim()
- || Number(entry?.positionSeenAt || 0) > 0
- );
- }).length;
- const effectiveDailyCount = Math.min(storedDailyCount, successfulTradesToday || storedDailyCount);
- if (!(maxPerDay > 0 && effectiveDailyCount >= maxPerDay)) {
- reason = '';
- } else {
- reason = `Max trades per day reached: ${effectiveDailyCount}/${maxPerDay}`;
- }
- }
- const audit = d.autoTradeDecisionAuditV16 || {};
- const auditStatus = String(audit.status || '').trim().toLowerCase();
- if (!reason && on) {
- if (auditStatus && !['placed', 'no_place'].includes(auditStatus) && String(audit.reason || '').trim()) {
- reason = String(audit.reason || '').trim();
- }
- }
- if (!reason && on && auditStatus === 'last_engine_block') {
- const updatedAt = Number(audit.updatedAt || 0);
- if (updatedAt > 0 && (Date.now() - updatedAt) <= (5 * 60 * 1000)) {
- reason = `Last engine block: ${String(audit.lastBlockedReason || audit.reason || 'slot block cleared').trim()}`;
- }
- }
- if (/^max concurrent reached:/i.test(reason)) {
- const auditOpenCount = Number(audit.openCount || 0);
- const auditMaxConcurrent = Number(audit.maxConcurrent || d.autoTradeSettings?.maxConcurrent || 0);
- if (auditMaxConcurrent > 0 && (auditStatus !== 'blocked_concurrent' || auditOpenCount < auditMaxConcurrent)) {
- reason = '';
- } else {
- reason = reason.replace(
- /^Max concurrent reached:\s*/i,
- 'Max concurrent reached: '
- );
- if (!/reduce-only exits/i.test(reason)) {
- reason += ' Current open exposure counts live positions plus pending/open entry orders; reduce-only exits do not count.';
- }
- }
- }
- const tone = auditStatus === 'last_engine_block' ? '#ffc840' : '#ff6b6b';
- reasonEl.textContent = on && reason ? '\u26a0 ' + reason : '';
- reasonEl.title = on && reason ? reason : '';
- reasonEl.classList.toggle('warn', tone === '#ffc840');
- reasonEl.style.display = on && reason ? 'block' : 'none';
+ reasonEl.textContent = '';
+ reasonEl.title = '';
+ reasonEl.classList.remove('warn');
+ reasonEl.style.display = 'none';
  });
 }
 
 document.getElementById('btnAutoTrade')?.addEventListener('click', async () => {
- const d = await storeGet(['autoTrade']);
- const newState = !(d.autoTrade ?? false);
- if (newState && !confirm('\u26a0\ufe0f AUTO TRADE will place REAL orders on Delta Exchange automatically when signals qualify.\n\nMake sure your API keys are set and risk limits are configured in Settings.\n\nEnable auto-trade?')) return;
- chrome.storage.local.set({ autoTrade: newState }, () => {
- chrome.runtime.sendMessage({ action: 'toggleAutoTrade', enable: newState }, () => {
+ chrome.storage.local.set({ autoTrade: false, autoTradeLastSkipReason: 'Order placement is disabled in this manual-only build' }, () => {
+ chrome.runtime.sendMessage({ action: 'toggleAutoTrade', enable: false }, () => {
  void chrome.runtime?.lastError;
+ showSystemToast?.('Manual trading only', 'Order placement is disabled. Scanner signals are for review and manual execution.', 'info', 3500);
  loadAutoTradeState();
  });
- });
-});
-
-document.getElementById('btnAutoTradeReverse')?.addEventListener('click', async () => {
- const sanitizeAutoTradeSettingsFn = typeof globalThis.FWDTradeDeskShared?.sanitizeAutoTradeSettings === 'function'
- ? globalThis.FWDTradeDeskShared.sanitizeAutoTradeSettings
- : (value => value || {});
- const d = await storeGet(['autoTradeSettings']);
- const current = sanitizeAutoTradeSettingsFn(d.autoTradeSettings || {});
- const nextSettings = sanitizeAutoTradeSettingsFn({
- ...current,
- reverseSignals: !current.reverseSignals,
- });
- chrome.storage.local.set({ autoTradeSettings: nextSettings }, () => {
- void chrome.runtime?.lastError;
- const settingsToggle = document.getElementById('sAutoTradeReverseSignals');
- if (settingsToggle) settingsToggle.checked = !!nextSettings.reverseSignals;
- if (typeof showSystemToast === 'function') {
- showSystemToast(
- 'Auto-trade reverse mode',
- nextSettings.reverseSignals
- ? 'Live futures auto-trade will place the opposite side of scanner signals.'
- : 'Live futures auto-trade will follow scanner signal direction.',
- 'success',
- 2600
- );
- }
- loadAutoTradeState();
  });
 });
 

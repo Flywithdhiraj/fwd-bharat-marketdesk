@@ -398,7 +398,7 @@
  return clean.replace(/^popup\.html/i, 'index.html');
  },
  getManifest() {
- return { manifest_version: 3, name: 'FWD TradeDesk Pro', version: '0.1.0' };
+ return { manifest_version: 3, name: 'FWD Bharat MarketDesk', version: '0.1.0' };
  },
  sendMessage(message, callback) {
  return sendRuntimeMessage(message, callback);
@@ -483,14 +483,14 @@
  if (bridge?.sendNativeMessage) {
  bridge.sendNativeMessage({
  type: 'desktop_notification',
- title: options?.title || 'FWD TradeDesk Pro',
+ title: options?.title || 'FWD Bharat MarketDesk',
  message: options?.message || '',
  priority: options?.priority || 0,
  urgency: Number(options?.priority || 0) >= 2 ? 'high' : 'normal',
  }).catch(error => console.warn('[FWD desktop shim] native notification failed', error?.message || error));
  }
  if (typeof Notification === 'function' && Notification.permission === 'granted') {
- try { new Notification(options?.title || 'FWD TradeDesk Pro', { body: options?.message || '' }); } catch (_) {}
+ try { new Notification(options?.title || 'FWD Bharat MarketDesk', { body: options?.message || '' }); } catch (_) {}
  }
  if (typeof callback === 'function') callback(notificationId);
  return Promise.resolve(notificationId);

@@ -158,6 +158,7 @@ assert('downside flush creates a bounce reversal row', bounce.strategyId === 're
 assert('mean stretch stays visible for balance watch', mean.strategyId === 'reversal' && ['mean_reversion', 'fade_extreme', 'liquidation_reversal', 'avoid_chase'].includes(mean.eventType));
 assert('reversal rows include score explanation data', Array.isArray(fadeShort.raw.scoreParts.rows) && fadeShort.raw.scoreParts.rows.length > 0);
 assert('reversal rows include VWAP and stretch metrics', Number.isFinite(Number(fadeShort.raw.vwapDistancePct)) && Number.isFinite(Number(fadeShort.raw.rsi14)) && Number.isFinite(Number(fadeShort.raw.zScore)));
+assert('reversal scanner excludes unavailable crypto funding input', !reversalText.includes('Funding crowding') && !reversalText.includes('fundingCrowdedLong') && !reversalText.includes('fundingRate'));
 assert('reversal counts include event buckets', counts.liquidation_reversal + counts.fade_extreme + counts.mean_reversion + counts.avoid_chase >= 1);
 assert('reversal sort prioritizes reversal events over review', sorted === 'L,M,R');
 assert('reversal storage is namespaced', reversalText.includes("'strategyResults.reversal'") && reversalText.includes("'strategyStatus.reversal'") && registryText.includes("resultKey: 'strategyResults.reversal'"));

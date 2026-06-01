@@ -32,7 +32,9 @@ function createAuth({ app, safeStorage, credentialStore } = {}) {
 
  async function isConfigured() {
   const store = await readAuthStore();
-  return !!(store?.passwordHash && store?.salt);
+  if (!store?.passwordHash) return false;
+  if (store.passwordAlgorithm === 'argon2id') return true;
+  return !!store.salt;
  }
 
  function hashPassword(password, salt = crypto.randomBytes(16).toString('base64'), iterations = PBKDF2_ITERATIONS) {
@@ -265,7 +267,7 @@ function createAuth({ app, safeStorage, credentialStore } = {}) {
   ]);
   if (lockScreenMessages.has(type)) return null;
   if (await isUnlocked(eventOrId)) return null;
-  return { ok: false, status: 423, error: 'FWD TradeDesk Pro is locked. Login is required.' };
+  return { ok: false, status: 423, error: 'FWD Bharat MarketDesk is locked. Login is required.' };
  }
 
  async function setup(message = {}, eventOrId = null) {
@@ -277,7 +279,7 @@ function createAuth({ app, safeStorage, credentialStore } = {}) {
   const totpSecret = totpEnabled ? base32Encode(crypto.randomBytes(20)) : '';
   const recoveryCode = createRecoveryCode();
   const recovery = hashRecoveryCode(recoveryCode);
-  const accountLabel = encodeURIComponent('FWD TradeDesk Pro');
+  const accountLabel = encodeURIComponent('FWD Bharat MarketDesk');
   const issuer = encodeURIComponent('FWD');
   await writeAuthStore({
    version: 2,
@@ -397,7 +399,7 @@ function createAuth({ app, safeStorage, credentialStore } = {}) {
   }
   if (message.totpAction === 'enable') {
    const secret = base32Encode(crypto.randomBytes(20));
-   const accountLabel = encodeURIComponent('FWD TradeDesk Pro');
+   const accountLabel = encodeURIComponent('FWD Bharat MarketDesk');
    const issuer = encodeURIComponent('FWD');
    nextStore = { ...nextStore, totpEnabled: true, totpSecret: await credentialStore.protectSecret({ secret }), updatedAt: Date.now() };
    manualKey = secret;

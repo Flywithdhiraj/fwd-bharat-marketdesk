@@ -1,6 +1,6 @@
 // Order preview chart, protection orders and private account refresh
  }
- return 'USD Notional';
+ return 'INR Value';
 }
 
 function v16IsLiveOrderPreviewChartEnabled() {
@@ -14,10 +14,7 @@ function v16SyncLiveOrderDeltaButton(symbol = '') {
  const resolvedSymbol = String(symbol || '').trim().toUpperCase();
  button.hidden = !resolvedSymbol;
  button.dataset.liveOrderSymbol = resolvedSymbol;
- // Build and set the trade URL so the click handler can open it
- const tradeUrl = typeof buildDeltaTradeUrl === 'function'
- ? buildDeltaTradeUrl(resolvedSymbol)
- : (resolvedSymbol ? `https://www.delta.exchange/app/futures/trade/${encodeURIComponent(resolvedSymbol)}` : '');
+ const tradeUrl = resolvedSymbol ? `https://web.dhan.co/?symbol=${encodeURIComponent(resolvedSymbol)}` : '';
  button.dataset.tradeUrl = tradeUrl;
 }
 
@@ -25,23 +22,21 @@ function v16RenderTradeOrderPreviewCard(preview = {}) {
  const computedContracts = Math.max(1, Math.round(Number(preview.size || 0)));
  const requestedNotional = Number(preview.requestedNotional || 0);
  const estimatedNotional = Number(preview.estimatedNotional || 0);
- const roundedAboveRequest = requestedNotional > 0 && estimatedNotional > requestedNotional * 1.05;
  return `
  <div class="live-order-preview-metrics">
- <div><span>Computed Contracts</span><strong>${v16FmtNumber(computedContracts, 0)}</strong></div>
+ <div><span>Qty / Lots</span><strong>${v16FmtNumber(computedContracts, 0)}</strong></div>
  <div><span>Mode</span><strong>${preview.orderType === 'limit_order' ? 'Limit' : 'Market'}</strong></div>
  <div><span>Side</span><strong>${String(preview.side || '').toUpperCase()}</strong></div>
  <div><span>Entered Size</span><strong>${v16Esc(v16LiveOrderModeLabel(v16LiveAccountView.orderSignalMeta?.sizeMode || 'usd', v16LiveAccountView.orderSignalMeta?.definition || null))}</strong></div>
- <div><span>Mark</span><strong>${Number(preview.markPrice || 0) > 0 ? `$${v16FmtPrice(preview.markPrice)}` : '-'}</strong></div>
- <div><span>Notional</span><strong>${estimatedNotional > 0 ? `$${v16FmtNumber(estimatedNotional, 2)}` : '-'}</strong></div>
+ <div><span>Reference</span><strong>${Number(preview.markPrice || 0) > 0 ? `Rs ${v16FmtPrice(preview.markPrice)}` : '-'}</strong></div>
+ <div><span>Approx Value</span><strong>${estimatedNotional > 0 ? `Rs ${v16FmtNumber(estimatedNotional, 2)}` : '-'}</strong></div>
  <div><span>Risk / Reward</span><strong>${Number(preview.riskRewardRatio || 0) > 0 ? `1:${v16FmtNumber(preview.riskRewardRatio, 2)}` : '-'}</strong></div>
  </div>
- ${roundedAboveRequest ? `<div class="account-inline-note bad">${v16Esc(`Requested $${v16FmtNumber(requestedNotional, 2)}, but Delta minimum tradable size is ${computedContracts} contract here, making actual notional $${v16FmtNumber(estimatedNotional, 2)}.`)}</div>` : ''}
  <div class="account-inline-note ${Number(preview.estimatedRisk || 0) > 0 ? 'warn' : 'good'}">
  ${v16Esc([
- Number(preview.limitPrice || 0) > 0 ? `Limit $${v16FmtPrice(preview.limitPrice)}` : 'Market execution',
- Number(preview.stopLoss || 0) > 0 ? `SL $${v16FmtPrice(preview.stopLoss)}` : 'No SL',
- Number(preview.takeProfit || 0) > 0 ? `TP $${v16FmtPrice(preview.takeProfit)}` : 'No TP',
+ Number(preview.limitPrice || 0) > 0 ? `Limit Rs ${v16FmtPrice(preview.limitPrice)}` : 'Market reference',
+ Number(preview.stopLoss || 0) > 0 ? `SL Rs ${v16FmtPrice(preview.stopLoss)}` : 'No SL',
+ Number(preview.takeProfit || 0) > 0 ? `TP Rs ${v16FmtPrice(preview.takeProfit)}` : 'No TP',
  ].filter(Boolean).join(' | '))}
  </div>`;
 }
@@ -52,8 +47,8 @@ function v16RenderProtectionOrderPreviewCard(preview = {}) {
  <div><span>Kind</span><strong>${preview.kind === 'target' ? 'Target' : 'Stop'}</strong></div>
  <div><span>Side</span><strong>${String(preview.side || '').toUpperCase()}</strong></div>
  <div><span>Size</span><strong>${v16FmtNumber(Number(preview.size || 0), 0)}</strong></div>
- <div><span>Trigger</span><strong>${Number(preview.triggerPrice || 0) > 0 ? `$${v16FmtPrice(preview.triggerPrice)}` : '-'}</strong></div>
- <div><span>Mark</span><strong>${Number(preview.markPrice || 0) > 0 ? `$${v16FmtPrice(preview.markPrice)}` : '-'}</strong></div>
+ <div><span>Trigger</span><strong>${Number(preview.triggerPrice || 0) > 0 ? `Rs ${v16FmtPrice(preview.triggerPrice)}` : '-'}</strong></div>
+ <div><span>Mark</span><strong>${Number(preview.markPrice || 0) > 0 ? `Rs ${v16FmtPrice(preview.markPrice)}` : '-'}</strong></div>
  <div><span>Projected P&amp;L</span><strong class="${Number(preview.projectedPnl || 0) >= 0 ? 'good' : 'bad'}">${v16FmtSigned(Number(preview.projectedPnl || 0))}</strong></div>
  </div>
  <div class="account-inline-note ${preview.kind === 'target' ? 'good' : 'warn'}">
@@ -78,8 +73,8 @@ function v16RenderPositionActionPreviewCard(payload = {}, preview = {}) {
  <div><span>Exit Side</span><strong>${String(preview.side || '').toUpperCase()}</strong></div>
  <div><span>Reduce Size</span><strong>${v16FmtNumber(size, 0)}</strong></div>
  <div><span>Mode</span><strong>${v16Esc(modeLabel)}</strong></div>
- <div><span>Exit Limit</span><strong>${Number(preview.limitPrice || 0) > 0 ? `$${v16FmtPrice(preview.limitPrice)}` : '-'}</strong></div>
- <div><span>Mark</span><strong>${Number(preview.markPrice || 0) > 0 ? `$${v16FmtPrice(preview.markPrice)}` : '-'}</strong></div>
+ <div><span>Exit Limit</span><strong>${Number(preview.limitPrice || 0) > 0 ? `Rs ${v16FmtPrice(preview.limitPrice)}` : '-'}</strong></div>
+ <div><span>Mark</span><strong>${Number(preview.markPrice || 0) > 0 ? `Rs ${v16FmtPrice(preview.markPrice)}` : '-'}</strong></div>
  <div><span>Reduce Only</span><strong>${preview.reduceOnly ? 'Yes' : 'No'}</strong></div>
  </div>
  <div class="account-inline-note warn">${v16Esc(action === 'close' ? 'This sends a reduce-only close order and then attempts linked-order cleanup.' : 'This sends a reduce-only partial close order.')}</div>`;
@@ -217,42 +212,44 @@ async function v16RefreshLiveTradeOrderPreview() {
  submitBtn.disabled = true;
  return null;
  }
+ const entryPrice = Number(draft.entry || draft.limitPrice || draft.price || 0);
+ const stopLoss = Number(draft.stopLoss || 0);
+ const takeProfit = Number(draft.takeProfit || 0);
+ const risk = Math.abs(entryPrice - stopLoss);
+ const reward = Math.abs(takeProfit - entryPrice);
+ const manualPreview = {
+  symbol: draft.symbol,
+  side: draft.side,
+  size: Math.max(0, Number(draft.size || draft.sizeInput || 0)),
+  orderType: draft.orderType,
+  limitPrice: draft.limitPrice,
+  markPrice: entryPrice,
+  requestedNotional: Math.max(0, Number(draft.sizeInput || 0)),
+  estimatedNotional: Math.max(0, Number(draft.sizeInput || 0)),
+  stopLoss,
+  takeProfit,
+  riskRewardRatio: entryPrice > 0 && risk > 0 && reward > 0 ? reward / risk : 0,
+ };
  const protections = resolveBracketProtectionLevels(draft);
  const protectionWarning = !draft.reduceOnly && !protections.hasFullProtection
- ? 'Manual override: stop loss and take profit are not complete. The entry order can still be sent.'
+ ? 'Manual warning: stop loss and take profit are not complete.'
  : '';
- previewCard.innerHTML = '<div class="account-inline-note">Preparing live order preview...</div>';
- const response = await v16RuntimeSend('v16:getTradeOrderPreview', {
- profileId: getV16ActiveAccountProfile().id,
- ...draft,
- });
- if (!response?.ok) {
- previewCard.innerHTML = `<div class="account-inline-note bad">${v16Esc(response?.error || 'Failed to prepare order preview.')}</div>`;
- submitBtn.disabled = true;
- v16LiveAccountView.preview = null;
- return null;
- }
- v16LiveAccountView.preview = response.preview || null;
+ v16LiveAccountView.preview = manualPreview;
  v16LiveAccountView.orderSignalMeta = {
  ...(v16LiveAccountView.orderSignalMeta || {}),
  symbol: draft.symbol,
  definition,
  sizeMode,
- markPrice: Number(response.preview?.markPrice || 0),
- computedContracts: Math.max(1, Math.round(Number(response.preview?.size || draft.size || 1))),
+ markPrice: Number(manualPreview.markPrice || 0),
+ computedContracts: Math.max(1, Math.round(Number(manualPreview.size || draft.size || 1))),
  };
- const blockReason = v16ResolveTradeEntryBlockReason({
- symbol: draft.symbol,
- preview: response.preview || null,
- draft,
- });
  const settings = sanitizeAutoTradeSettings((await storeGet('autoTradeSettings'))?.autoTradeSettings || {});
  const riskQuality = resolveRiskQualityGate({
  ...(v16LiveAccountView.orderSignal || {}),
  symbol: draft.symbol,
  direction: draft.side,
- entry: draft.entry || draft.limitPrice || response.preview?.limitPrice,
- price: response.preview?.markPrice || draft.entry,
+ entry: draft.entry || draft.limitPrice || manualPreview.limitPrice,
+ price: manualPreview.markPrice || draft.entry,
  sl: draft.stopLoss,
  tp1: draft.takeProfit,
  }, settings);
@@ -261,10 +258,10 @@ async function v16RefreshLiveTradeOrderPreview() {
  : '';
  const riskNoteLabel = riskBlock ? riskBlock.replace(/^Risk quality blocked:/, 'Manual override warning:') : `${riskQuality.label}: ${(riskQuality.reasons || []).slice(0, 3).join(' | ') || `RR ${riskQuality.rr}`}`;
  const riskNote = `<div class="account-inline-note ${riskQuality.passed ? 'good' : 'warn'}">${v16Esc(riskNoteLabel)}</div>`;
- previewCard.innerHTML = `${v16RenderTradeOrderPreviewCard(response.preview || {})}${protectionWarning ? `<div class="account-inline-note warn">${v16Esc(protectionWarning)}</div>` : ''}${riskNote}${blockReason ? `<div class="account-inline-note bad">${v16Esc(blockReason)}</div>` : ''}`;
- submitBtn.disabled = !!blockReason || !v16CapabilityAllowsTrade();
+ previewCard.innerHTML = `${v16RenderTradeOrderPreviewCard(manualPreview)}${protectionWarning ? `<div class="account-inline-note warn">${v16Esc(protectionWarning)}</div>` : ''}${riskNote}<div class="account-inline-note good">Market Data Only | Manual Trading Only. No order will be placed from this app.</div>`;
+ submitBtn.disabled = false;
  await v16RefreshLiveOrderPreviewChart(true);
- return response;
+ return { ok: true, preview: manualPreview, manualOnly: true };
 }
 
 async function openV16ProtectionOrderPreview(position = null, kind = 'stop', seedOverrides = {}) {
@@ -287,8 +284,8 @@ async function openV16ProtectionOrderPreview(position = null, kind = 'stop', see
  <div class="live-order-preview-grid">
  <label class="account-field"><span>Symbol</span><input class="si" value="${v16Esc(seed.symbol)}" readonly></label>
  <label class="account-field"><span>Position Side</span><input class="si" value="${v16Esc(String(seed.positionSide || 'long').toUpperCase())}" readonly></label>
- <label class="account-field"><span>Entry</span><input class="si" value="${seed.entryPrice > 0 ? `$${v16FmtPrice(seed.entryPrice)}` : '-'}" readonly></label>
- <label class="account-field"><span>Mark</span><input class="si" value="${seed.markPrice > 0 ? `$${v16FmtPrice(seed.markPrice)}` : '-'}" readonly></label>
+ <label class="account-field"><span>Entry</span><input class="si" value="${seed.entryPrice > 0 ? `Rs ${v16FmtPrice(seed.entryPrice)}` : '-'}" readonly></label>
+ <label class="account-field"><span>Mark</span><input class="si" value="${seed.markPrice > 0 ? `Rs ${v16FmtPrice(seed.markPrice)}` : '-'}" readonly></label>
  <label class="account-field"><span>Reduce Size</span><input class="si" type="number" id="liveProtectionSize" min="1" step="1" value="${Math.max(1, Math.round(seed.size || 1))}"></label>
  <label class="account-field"><span>${kind === 'target' ? 'Target Trigger' : 'Stop Trigger'}</span><input class="si" type="number" id="liveProtectionTriggerPrice" min="0" step="any" value="${Number(seed.triggerPrice || 0) > 0 ? v16Esc(String(seed.triggerPrice)) : ''}"></label>
  </div>
@@ -360,8 +357,8 @@ async function openV16PositionActionPreview(position = null, action = 'close') {
  <label class="account-field"><span>Symbol</span><input class="si" value="${v16Esc(position.symbol)}" readonly></label>
  <label class="account-field"><span>Position</span><input class="si" value="${v16Esc(String(position.side || 'long').toUpperCase())}" readonly></label>
  <label class="account-field"><span>Position Size</span><input class="si" value="${v16FmtNumber(Number(position.size || 0), 0)}" readonly></label>
- <label class="account-field"><span>Entry</span><input class="si" value="${Number(position.entry || 0) > 0 ? `$${v16FmtPrice(position.entry)}` : '-'}" readonly></label>
- <label class="account-field"><span>Mark</span><input class="si" value="${Number(position.markPrice || 0) > 0 ? `$${v16FmtPrice(position.markPrice)}` : '-'}" readonly></label>
+ <label class="account-field"><span>Entry</span><input class="si" value="${Number(position.entry || 0) > 0 ? `Rs ${v16FmtPrice(position.entry)}` : '-'}" readonly></label>
+ <label class="account-field"><span>Mark</span><input class="si" value="${Number(position.markPrice || 0) > 0 ? `Rs ${v16FmtPrice(position.markPrice)}` : '-'}" readonly></label>
  <label class="account-field"><span>Action</span><input class="si" value="${v16Esc(v16PositionActionLabel(action))}" readonly></label>
  <label class="account-field"><span>Order Type</span><select class="si" id="livePositionActionOrderType"><option value="market_order" selected>Market</option><option value="limit_order">Limit</option></select></label>
  <label class="account-field"><span>Exit Mode</span><select class="si" id="livePositionActionEntryMode"><option value="market" selected>Market</option><option value="limit">Limit</option><option value="maker_only">Maker Only</option></select></label>

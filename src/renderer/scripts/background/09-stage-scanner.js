@@ -2,12 +2,12 @@
 
 (function initStageScanner(global) {
  const STAGE_DEFAULT_SETTINGS = Object.freeze({
- maxCoins: 180,
+ maxCoins: 500,
  minLatestQuoteVolume: 50000,
  minAvgQuoteVolume20: 30000,
  minWeeklyCandles: 42,
  preferredDailyCandles: 620,
- outputLimit: 220,
+ outputLimit: 500,
  maPeriodWeeks: 30,
  maSlopeWeeks: 5,
  rangeWeeks: 16,
@@ -603,12 +603,15 @@
  });
  }
 
- async function stageLoadSettings() {
+async function stageLoadSettings() {
  const stored = await new Promise(resolve => chrome.storage.local.get(['strategySettings.stage'], resolve));
- return {
- ...STAGE_DEFAULT_SETTINGS,
- ...(stored['strategySettings.stage'] || {}),
- };
+ const settings = {
+  ...STAGE_DEFAULT_SETTINGS,
+  ...(stored['strategySettings.stage'] || {}),
+  };
+ settings.maxCoins = Math.max(STAGE_DEFAULT_SETTINGS.maxCoins, Number(settings.maxCoins || 0));
+ settings.outputLimit = Math.max(STAGE_DEFAULT_SETTINGS.outputLimit, Number(settings.outputLimit || 0));
+ return settings;
  }
 
  function stageBuildUniverse(tickerMap = {}, products = [], settings = STAGE_DEFAULT_SETTINGS) {
@@ -617,10 +620,9 @@
  .filter(([symbol, ticker]) => {
  const sym = String(symbol || '').toUpperCase();
  if (!sym || productSymbols.size && !productSymbols.has(sym)) return false;
- if (!sym.endsWith('USD') && !sym.endsWith('USDT')) return false;
  if (!(Number(ticker?.price || 0) > 0)) return false;
- const latestQuoteVolume = Number(ticker?.usdVol24h || 0);
- return latestQuoteVolume >= Number(settings.minLatestQuoteVolume || 0);
+ const latestQuoteVolume = Number(ticker?.inrTurnover24h || ticker?.turnover24h || ticker?.usdVol24h || 0);
+ return !(latestQuoteVolume > 0) || latestQuoteVolume >= Number(settings.minLatestQuoteVolume || 0);
  })
  .map(([symbol, ticker]) => ({ symbol, ticker }))
  .sort((a, b) => Number(b.ticker?.usdVol24h || 0) - Number(a.ticker?.usdVol24h || 0))
@@ -642,11 +644,11 @@
  const sym = String(symbol || '').toUpperCase();
  if (!sym || productSymbols.size && !productSymbols.has(sym)) return;
  diagnostics.productMatched += 1;
- if (!sym.endsWith('USD') && !sym.endsWith('USDT')) return;
  diagnostics.usdPerpRows += 1;
  if (!(Number(ticker?.price || 0) > 0)) return;
  diagnostics.pricedRows += 1;
- if (Number(ticker?.usdVol24h || 0) < Number(settings.minLatestQuoteVolume || 0)) diagnostics.lowLatestLiquidity += 1;
+ const latestQuoteVolume = Number(ticker?.inrTurnover24h || ticker?.turnover24h || ticker?.usdVol24h || 0);
+ if (latestQuoteVolume > 0 && latestQuoteVolume < Number(settings.minLatestQuoteVolume || 0)) diagnostics.lowLatestLiquidity += 1;
  });
  return diagnostics;
  }
@@ -738,7 +740,7 @@
  if (!global.FWDTradeDeskStrategies?.normalizeStrategyResult) {
  throw new Error('Strategy registry not loaded');
  }
- await stageSetStatus('Loading Delta market data...', { active: true, progress: 2 });
+ await stageSetStatus('Loading market data...', { active: true, progress: 2 });
  await chrome.storage.local.set({ 'strategyResults.stage': [] });
  await detectAPI(true);
  const settings = await stageLoadSettings();

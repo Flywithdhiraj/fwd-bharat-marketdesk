@@ -28,7 +28,7 @@
  : (value => value !== false);
  const classifyDeltaInstrumentForChart = typeof shared.classifyDeltaInstrument === 'function'
  ? shared.classifyDeltaInstrument
- : (() => ({ assetClass: 'crypto_derivative', assetLabel: 'Crypto', assetBadge: 'Crypto', displayName: '', info: '' }));
+ : (() => ({ assetClass: 'nse_bse_derivative', assetLabel: 'NSE/BSE', assetBadge: 'NSE/BSE', displayName: '', info: '' }));
  const describeDeltaInstrumentForChart = typeof shared.describeDeltaInstrument === 'function'
  ? shared.describeDeltaInstrument
  : ((symbol, description = '') => String(description || symbol || '').trim());
@@ -37,41 +37,31 @@
  const DS_V17_CHART_CACHE_KEY = 'dsChartCacheV17';
  let chartRuntimeCache = {};
  let chartPersistentCacheCleared = false;
- const RESOLUTIONS = Object.freeze(['1m', '5m', '15m', '1h', '4h', '1d', '1w']);
+ const RESOLUTIONS = Object.freeze(['15m', '4h', '1d', '1w']);
  const RESOLUTION_LABELS = Object.freeze({
- '1m': '1m',
- '5m': '5m',
  '15m': '15m',
- '1h': '1h',
  '4h': '4h',
  '1d': '1D',
  '1w': '1W',
  });
  const TTL_MS = Object.freeze({
- '1m': 30000,
- '5m': 60000,
  '15m': 180000,
- '1h': 600000,
  '4h': 1800000,
  '1d': 14400000,
  '1w': 43200000,
  });
  const DEFAULT_VISIBLE_COUNTS = Object.freeze({
- '1m': 260,
- '5m': 320,
  '15m': 360,
- '1h': 420,
  '4h': 520,
  '1d': 520,
  '1w': 520,
  });
  const MAX_RENDER_CANDLES = 20000;
+ const MAX_15M_HISTORY_DAYS = 90;
+ const MAX_15M_HISTORY_CANDLES = MAX_15M_HISTORY_DAYS * 24 * 4;
  const DEFAULT_OBV_SMA_LENGTH = 100;
  const FETCH_BUFFER_COUNTS = Object.freeze({
- '1m': 80,
- '5m': 90,
  '15m': 100,
- '1h': 120,
  '4h': 140,
  '1d': 140,
  '1w': 80,
@@ -160,15 +150,68 @@
  const CHART_TRADING_MODES = Object.freeze(['select', 'entry', 'stop', 'target', 'adjust']);
  const DEFAULT_PANEL_WIDTHS = Object.freeze({ primary: 38, execution: 32, context: 30 });
  const CHART_RENDER_DEBOUNCE_MS = 90;
- const CHART_MARKET_SYMBOLS_KEY = 'dsChartMarketSymbolsV17';
+ const CHART_MARKET_SYMBOLS_KEY = 'dsChartMarketSymbolsDhanV18';
  const CHART_MARKET_SYMBOLS_TTL_MS = 6 * 60 * 60 * 1000;
  const FWD_INDEX_HISTORY_CACHE_KEY = 'dsFwdIndexDailyHistoryV17';
  const FWD_INDEX_HISTORY_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
  const FWD_INDEX_MAX_HISTORY_CANDIDATES = 360;
  const FWD_INDEX_CHART_HISTORY_LIMIT = 5000;
  const FWD_INDEX_DAILY_HISTORY_LIMIT = 730;
- const FWD_INDEX_SYMBOL = 'FWD100';
- const FWD_INDEX_ALIASES = Object.freeze(['FWD100', 'FWD-100', 'FWD100INDEX', 'FWD-100INDEX', 'F100', 'FWD10', 'FWD-10', 'FWD10INDEX', 'FWD-10INDEX', 'F10', 'FWDINDEX']);
+ const FWD_INDEX_SYMBOL = 'NIFTY';
+ const FWD_INDEX_FUNDING_SYMBOL = 'FNO-CARRY';
+ const FWD_INDEX_BREADTH_SYMBOL = 'FNO-BREADTH';
+ const FWD_INDEX_AD_SYMBOL = 'FNO-AD';
+ const FWD_INDEX_ALIASES = Object.freeze(['NIFTY', 'Nifty 50', 'NIFTYINDEX', 'Nifty 50INDEX', 'F100', 'NIFTY', 'Nifty 50', 'NIFTYINDEX', 'Nifty 50INDEX', 'F10', 'FWDINDEX']);
+ const FWD_INDEX_ALIAS_LOOKUP = Object.freeze({
+ NIFTY: FWD_INDEX_SYMBOL,
+ 'Nifty 50': FWD_INDEX_SYMBOL,
+ NIFTYINDEX: FWD_INDEX_SYMBOL,
+ 'Nifty 50INDEX': FWD_INDEX_SYMBOL,
+ F100: FWD_INDEX_SYMBOL,
+ NIFTY: FWD_INDEX_SYMBOL,
+ 'Nifty 50': FWD_INDEX_SYMBOL,
+ NIFTYINDEX: FWD_INDEX_SYMBOL,
+ 'Nifty 50INDEX': FWD_INDEX_SYMBOL,
+ F10: FWD_INDEX_SYMBOL,
+ FWDINDEX: FWD_INDEX_SYMBOL,
+ FNOCARRY: FWD_INDEX_FUNDING_SYMBOL,
+ 'FNO-CARRY': FWD_INDEX_FUNDING_SYMBOL,
+ NIFTYFUNDING: FWD_INDEX_FUNDING_SYMBOL,
+ 'NIFTY-FUNDING': FWD_INDEX_FUNDING_SYMBOL,
+ FWDFUNDING: FWD_INDEX_FUNDING_SYMBOL,
+ 'FWD-FUNDING': FWD_INDEX_FUNDING_SYMBOL,
+ FWDFUNDINGSTRESS: FWD_INDEX_FUNDING_SYMBOL,
+ 'FWD-FUNDING-STRESS': FWD_INDEX_FUNDING_SYMBOL,
+ FNOBREADTH: FWD_INDEX_BREADTH_SYMBOL,
+ 'FNO-BREADTH': FWD_INDEX_BREADTH_SYMBOL,
+ NIFTYBREADTH: FWD_INDEX_BREADTH_SYMBOL,
+ 'NIFTY-BREADTH': FWD_INDEX_BREADTH_SYMBOL,
+ NIFTYBREATH: FWD_INDEX_BREADTH_SYMBOL,
+ 'NIFTY-BREATH': FWD_INDEX_BREADTH_SYMBOL,
+ FWDBREADTH: FWD_INDEX_BREADTH_SYMBOL,
+ 'FWD-BREADTH': FWD_INDEX_BREADTH_SYMBOL,
+ FWDBREADTHPCT: FWD_INDEX_BREADTH_SYMBOL,
+ 'FWD-BREADTH-PCT': FWD_INDEX_BREADTH_SYMBOL,
+ FWDBREATH: FWD_INDEX_BREADTH_SYMBOL,
+ 'FWD-BREATH': FWD_INDEX_BREADTH_SYMBOL,
+ FNOAD: FWD_INDEX_AD_SYMBOL,
+ 'FNO-AD': FWD_INDEX_AD_SYMBOL,
+ FNOADVANCEDECLINE: FWD_INDEX_AD_SYMBOL,
+ 'FNO-ADVANCE-DECLINE': FWD_INDEX_AD_SYMBOL,
+ NIFTYAD: FWD_INDEX_AD_SYMBOL,
+ 'NIFTY-AD': FWD_INDEX_AD_SYMBOL,
+ NIFTYADVDEC: FWD_INDEX_AD_SYMBOL,
+ 'NIFTY-ADV-DEC': FWD_INDEX_AD_SYMBOL,
+ FWDAD: FWD_INDEX_AD_SYMBOL,
+ 'FWD-AD': FWD_INDEX_AD_SYMBOL,
+ FWDADVANCEDECLINE: FWD_INDEX_AD_SYMBOL,
+ 'FWD-ADVANCE-DECLINE': FWD_INDEX_AD_SYMBOL,
+ });
+ const FWD_INDEX_SYNTHETIC_PRODUCTS = Object.freeze([
+ { symbol: FWD_INDEX_FUNDING_SYMBOL, name: 'F&O Carry - Implied Basis', description: 'F&O Carry - Implied Basis', instrumentDescription: 'F&O Carry - Implied Basis', sector: 'Derivatives Context', synthetic: true },
+ { symbol: FWD_INDEX_BREADTH_SYMBOL, name: 'F&O Stock Breadth %', description: 'F&O Stock Breadth %', instrumentDescription: 'F&O Stock Breadth %', sector: 'Derivatives Context', synthetic: true },
+ { symbol: FWD_INDEX_AD_SYMBOL, name: 'F&O Advance Decline Ratio', description: 'F&O Advance Decline Ratio', instrumentDescription: 'F&O Advance Decline Ratio', sector: 'Derivatives Context', synthetic: true },
+ ]);
  let chartMarketSymbolsCache = null;
  let chartMarketSymbolsPromise = null;
  const detachedSurface = {
@@ -246,12 +289,33 @@
  });
  }
 
+ function normalizeFwdIndexSyntheticSymbol(value = '') {
+ const raw = String(value || '').trim().toUpperCase();
+ if (!raw) return '';
+ const direct = raw.includes(':') ? raw.split(':').pop() : raw;
+ const compact = direct.replace(/[^A-Z0-9]/g, '');
+ if (direct === 'NIFTY' || compact === 'NIFTY' || compact === 'NIFTY50') return '';
+ return FWD_INDEX_ALIAS_LOOKUP[direct] || FWD_INDEX_ALIAS_LOOKUP[compact] || '';
+ }
+
+ function fwdIndexSyntheticProduct(symbol = '') {
+ const normalized = normalizeFwdIndexSyntheticSymbol(symbol) || String(symbol || '').trim().toUpperCase();
+ return FWD_INDEX_SYNTHETIC_PRODUCTS.find(product => product.symbol === normalized) || null;
+ }
+
+ function fwdIndexSyntheticDisplayName(symbol = '', marketIndex = null) {
+ const product = fwdIndexSyntheticProduct(symbol);
+ if (product) return product.instrumentDescription || product.name || product.symbol;
+ return `FWD-${fwdIndexConfiguredCount(marketIndex)} Equal-Weight Index`;
+ }
+
  function normalizeChartSymbolInput(value = '', products = []) {
  const raw = String(value || '').trim().toUpperCase().replace(/[^A-Z0-9:_-]/g, '');
  if (!raw) return '';
  const direct = raw.includes(':') ? raw.split(':').pop() : raw;
  const compact = direct.replace(/[^A-Z0-9]/g, '');
- if (FWD_INDEX_ALIASES.includes(direct) || FWD_INDEX_ALIASES.includes(compact)) return FWD_INDEX_SYMBOL;
+ const syntheticSymbol = normalizeFwdIndexSyntheticSymbol(direct) || normalizeFwdIndexSyntheticSymbol(compact);
+ if (syntheticSymbol) return syntheticSymbol;
  const symbols = Array.isArray(products) ? products.map(item => String(item?.symbol || item || '').trim().toUpperCase()).filter(Boolean) : [];
  const exact = symbols.find(symbol => symbol === direct);
  if (exact) return exact;
@@ -272,8 +336,12 @@
  const cachedPayload = cached?.[CHART_MARKET_SYMBOLS_KEY] || {};
  const cachedRows = Array.isArray(cachedPayload?.products) ? cachedPayload.products : [];
  if (!force && cachedRows.length && Date.now() - Number(cachedPayload?.fetchedAt || 0) < CHART_MARKET_SYMBOLS_TTL_MS) {
- chartMarketSymbolsCache = cachedRows;
- return cachedRows;
+ const cachedWithIndex = [
+ ...FWD_INDEX_SYNTHETIC_PRODUCTS,
+ ...cachedRows.filter(product => !isFwdIndexSymbol(product?.symbol || product)),
+ ];
+ chartMarketSymbolsCache = cachedWithIndex;
+ return cachedWithIndex;
  }
  const response = await runtimeSend('v16:getPublicProducts');
  const products = (Array.isArray(response?.products) ? response.products : [])
@@ -309,17 +377,16 @@
  })
  .filter(product => product.symbol)
  .sort((a, b) => a.symbol.localeCompare(b.symbol));
- const indexProduct = { symbol: FWD_INDEX_SYMBOL, name: 'FWD-100 Equal-Weight Index', description: 'FWD-100 Equal-Weight Index', instrumentDescription: 'FWD-100 Equal-Weight Index', sector: 'Market Index', synthetic: true };
  const withIndex = [
- indexProduct,
- ...products.filter(product => product.symbol !== FWD_INDEX_SYMBOL),
+ ...FWD_INDEX_SYNTHETIC_PRODUCTS,
+ ...products.filter(product => !isFwdIndexSymbol(product.symbol)),
  ];
  if (withIndex.length) {
  chartMarketSymbolsCache = withIndex;
  await localSet({ [CHART_MARKET_SYMBOLS_KEY]: { products: withIndex, fetchedAt: Date.now() } });
  return withIndex;
  }
- chartMarketSymbolsCache = [indexProduct, ...cachedRows.filter(product => product.symbol !== FWD_INDEX_SYMBOL)];
+ chartMarketSymbolsCache = [...FWD_INDEX_SYNTHETIC_PRODUCTS, ...cachedRows.filter(product => !isFwdIndexSymbol(product?.symbol || product))];
  return chartMarketSymbolsCache;
  })().finally(() => {
  chartMarketSymbolsPromise = null;
@@ -328,9 +395,12 @@
  }
 
  function isFwdIndexSymbol(symbol = '') {
- const raw = String(symbol || '').trim().toUpperCase();
- const compact = raw.replace(/[^A-Z0-9]/g, '');
- return raw === FWD_INDEX_SYMBOL || FWD_INDEX_ALIASES.includes(raw) || FWD_INDEX_ALIASES.includes(compact);
+ return !!normalizeFwdIndexSyntheticSymbol(symbol);
+ }
+
+ function isFwdIndexMetricSymbol(symbol = '') {
+ const normalized = normalizeFwdIndexSyntheticSymbol(symbol);
+ return normalized === FWD_INDEX_FUNDING_SYMBOL || normalized === FWD_INDEX_BREADTH_SYMBOL || normalized === FWD_INDEX_AD_SYMBOL;
  }
 
  function updateChartSymbolDatalist(root = document, products = []) {
@@ -435,8 +505,8 @@
  orderType: draft?.orderType || 'market_order',
  entryMode: 'market',
  note: replay?.active
- ? `Chart replay ${label} preview from cursor. Live execution still requires this confirmation window.`
- : `Chart ${label} preview. Add stop loss and target, then place from this live order window.`,
+ ? `Chart replay ${label} preview from cursor. Manual action still requires review in your broker app.`
+ : `Chart ${label} preview. Add stop loss and target, then use it as a manual review ticket.`,
  source: 'chart-shortcut',
  };
  }
@@ -462,12 +532,12 @@
  }
  const available = await ensureLiveOrderPreviewAvailable();
  if (!available) {
- globalThis.showSystemToast?.('Live preview unavailable', 'Live order controls are not loaded yet.', 'warn', 3200);
+ globalThis.showSystemToast?.('Manual preview unavailable', 'Manual review controls are not loaded yet.', 'warn', 3200);
  return;
  }
  await globalThis.openV16LiveTradeOrderPreview(signal);
  const title = signal.side === 'sell' ? 'Sell preview opened' : 'Buy preview opened';
- globalThis.showSystemToast?.(title, `${signal.symbol} live order preview is ready.`, 'info', 1800);
+ globalThis.showSystemToast?.(title, `${signal.symbol} manual review preview is ready.`, 'info', 1800);
  }
 
  function bindChartTradeShortcuts() {
@@ -507,8 +577,10 @@
  const next = String(value || '').trim().toLowerCase();
  if (next === 'w' || next === '1wk' || next === 'week' || next === 'weekly') return '1w';
  if (next === '1d') return '1d';
- return RESOLUTIONS.includes(next) ? next : '5m';
- }
+ if (next === '1h' || next === '60m' || next === '60' || next === '240') return '4h';
+ if (next === '1m' || next === '3m' || next === '5m' || next === '15') return '15m';
+ return RESOLUTIONS.includes(next) ? next : '15m';
+}
 
  function normalizePreset(value = '') {
  const preset = String(value || '').trim().toLowerCase();
@@ -705,20 +777,17 @@
  return Math.round(numeric * 1000);
  }
 
- function resolutionStepMs(resolution = '5m') {
+function resolutionStepMs(resolution = '15m') {
  const map = {
- '1m': 60 * 1000,
- '5m': 5 * 60 * 1000,
  '15m': 15 * 60 * 1000,
- '1h': 60 * 60 * 1000,
  '4h': 4 * 60 * 60 * 1000,
  '1d': 24 * 60 * 60 * 1000,
  '1w': 7 * 24 * 60 * 60 * 1000,
  };
- return map[normalizeTimeframe(resolution)] || map['5m'];
- }
+ return map[normalizeTimeframe(resolution)] || map['15m'];
+}
 
- function defaultVisibleCount(resolution = '5m') {
+function defaultVisibleCount(resolution = '15m') {
  const key = normalizeTimeframe(resolution);
  return DEFAULT_VISIBLE_COUNTS[key] || 120;
  }
@@ -825,6 +894,7 @@
  function normalizeChartType(raw = '') {
  const value = String(raw || '').trim().toLowerCase();
  if (value === 'candle' || value === 'candles' || value === 'candlestick') return 'candles';
+ if (value === 'line' || value === 'lines') return 'line';
  return 'bars';
  }
 
@@ -997,7 +1067,7 @@
  intelligenceOverlays: Object.prototype.hasOwnProperty.call(raw, 'intelligenceOverlays') ? raw.intelligenceOverlays !== false : base.intelligenceOverlays !== false,
  deskLayoutMode: String(raw.deskLayoutMode || base.deskLayoutMode || 'threePart').trim() === 'single' ? 'single' : 'threePart',
  primaryTimeframe: normalizeTimeframe(raw.primaryTimeframe || base.primaryTimeframe || '1d'),
- executionTimeframe: normalizeTimeframe(raw.executionTimeframe || raw.timeframe || base.executionTimeframe || '5m'),
+ executionTimeframe: normalizeTimeframe(raw.executionTimeframe || raw.timeframe || base.executionTimeframe || '15m'),
  syncCharts: Object.prototype.hasOwnProperty.call(raw, 'syncCharts') ? raw.syncCharts !== false : true,
  contextTab: normalizeContextTab(raw.contextTab || base.contextTab),
  watchlistTab: normalizeWatchlistTab(raw.watchlistTab || base.watchlistTab),

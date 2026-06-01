@@ -4,7 +4,7 @@ const os = require('os');
 const path = require('path');
 const { readJsonFile, writeJsonFile, normalizeSecretName } = require('./json-store');
 
-const SINGLE_CREDENTIAL_ALIAS = 'FWD TradeDesk Pro/primary';
+const SINGLE_CREDENTIAL_ALIAS = 'FWD Bharat MarketDesk/primary';
 
 function createCredentialStore({ app, safeStorage, errorJournal } = {}) {
  const credentialStorePath = () => path.join(app.getPath('userData'), 'credentials.json');
@@ -57,9 +57,14 @@ function createCredentialStore({ app, safeStorage, errorJournal } = {}) {
  async function unprotectSecret(record) {
   if (!record?.value) return null;
   if (record.mode === 'safeStorage' && safeStorage.isEncryptionAvailable()) {
-   const buffer = Buffer.from(String(record.value), 'base64');
-   const text = safeStorage.decryptString(buffer);
-   return JSON.parse(text || '{}');
+   try {
+    const buffer = Buffer.from(String(record.value), 'base64');
+    const text = safeStorage.decryptString(buffer);
+    return JSON.parse(text || '{}');
+   } catch (error) {
+    error.code = error.code || 'SAFE_STORAGE_DECRYPT_FAILED';
+    throw error;
+   }
   }
   if (record.mode === 'aes-256-gcm') {
    const key = await getMachineEncryptionKey();
@@ -165,8 +170,18 @@ function createCredentialStore({ app, safeStorage, errorJournal } = {}) {
   const safeName = normalizeSecretName(name);
   if (!safeName) return { ok: false, error: 'Secret name is required.' };
   const store = await readSecureSecretStore();
-  const value = await unprotectSecret(store[safeName]) || null;
-  return { ok: true, name: safeName, value };
+  try {
+   const value = await unprotectSecret(store[safeName]) || null;
+   return { ok: true, name: safeName, value };
+  } catch (error) {
+   errorJournal?.append?.('credentials:secure-secret-decrypt', error, { name: safeName });
+   return {
+    ok: false,
+    name: safeName,
+    recoverable: true,
+    error: 'Saved encrypted credentials could not be decrypted. Re-save market-data API credentials in Settings > API Keys.',
+   };
+  }
  }
 
  async function setSecureSecret(name = '', value = {}) {

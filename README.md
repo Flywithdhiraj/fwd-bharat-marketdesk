@@ -1,16 +1,18 @@
-# FWD TradeDesk Pro Windows
+# FWD Bharat MarketDesk (NSE/BSE)
 
-This folder contains the Windows desktop migration of the Chrome extension.
+Windows Electron desktop app for read-only Dhan market data, NSE/BSE scanning, option-chain analytics, chart review, manual trade planning, and local journals.
 
 ## Current Status
 
-- Framework: Electron, because Node is available on this machine and Rust/Cargo is not installed yet.
-- Renderer: copied from the current Chrome extension UI.
-- Desktop background runtime: `src/renderer/desktop-background.html` loads the former Chrome service-worker modules in a separate frame.
-- Desktop shim: `src/renderer/desktop-shim.js` replaces Chrome storage, runtime messaging, alarms, notifications, windows, and native messaging.
-- Native credential bridge: `src/main/preload.js` and `src/main/main.js` provide encrypted local credential storage and signed private API requests from the Electron main process.
-- Installer output: `release/FWD TradeDesk Pro Setup 0.1.0.exe`.
-- Security: first launch can create a local app password and optional Microsoft Authenticator-compatible 6-digit login code with QR/manual setup. Private credential and exchange API actions are blocked while the app is logged out. A one-time recovery code supports password reset, and inactivity auto-lock can be set from 1 to 240 minutes.
+- Framework: Electron desktop shell with Chrome-compatible renderer/runtime shims.
+- Data source: Dhan Data API through native encrypted credentials.
+- Trading mode: manual only. Dhan order placement, modify, cancel, DCA, and auto-trade paths are hard-blocked.
+- Market data: Dhan instrument universe cache, LTP/quote/OHLC batching, historical/intraday candles with 90-day chunking, index tape, and read-only WebSocket tick parsing.
+- Scanners: Wizard/Minervini, Stage, Radar, Reversal, Darvas, and Pullback labs run from shared NSE/BSE scan context.
+- Options Hub: Dhan expiry lookup, CE/PE strike table, OI/PCR, IV skew, call/put walls, max pain, and read-only live-feed status.
+- Calendar: native `market_session` action covers regular NSE/BSE timings and 2026 equity/F&O holidays, with Muhurat timing marked pending until exchange circular timing is published.
+- Branding: app, raster icons, packaging metadata, and Windows `.ico` use `FWD Bharat MarketDesk`.
+- Security: first launch can create a local app password and optional Microsoft Authenticator-compatible 6-digit login code with QR/manual setup. Private credential/data actions are blocked while the app is logged out.
 
 ## Commands
 
@@ -22,17 +24,20 @@ npm run pack
 npm run dist
 ```
 
-## Migration Notes
+## Architecture Notes
 
-The migration keeps the existing extension logic but replaces the Chrome runtime boundary:
-
-1. Popup-to-background calls now route through a desktop `BroadcastChannel` bridge.
+1. Popup-to-background calls route through a desktop `BroadcastChannel` bridge.
 2. Former service-worker modules run in a hidden same-origin frame to avoid variable collisions with popup scripts.
 3. Settings and normal app data use desktop local storage through the Chrome-compatible shim.
-4. Trade credentials are stored through Electron `safeStorage` when available and private API requests are signed in the main process.
-5. Real-order execution remains behind the existing profile, kill-switch, preview, and guardrail checks.
+4. Dhan credentials are stored through Electron `safeStorage` when available.
+5. All broker execution remains outside the app; trade tickets and chart levels are planning aids only.
 
-Tauri can still be considered later after Rust is installed, but Electron is the fastest path for a working Windows build from this current codebase.
+## Remaining External Work
+
+- Save fresh DhanHQ credentials and test live REST/option-chain/WebSocket responses during market hours.
+- Add a fundamentals provider/import source for ROCE, ROE, debt/equity, PE, EPS growth, and sector metadata.
+- Update Muhurat/special-session timings when NSE/BSE publish the final circular.
+- Run `npm run pack`/`npm run dist` after verification when a distributable build is needed.
 
 ## Distribution Notes
 

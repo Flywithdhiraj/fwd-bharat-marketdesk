@@ -38,41 +38,18 @@
  });
 
  const SECTORS = {
- 'Layer 1': ['BTCUSD', 'ETHUSD', 'SOLUSD', 'BNBUSD', 'XRPUSD', 'ADAUSD', 'DOTUSD', 'AVAXUSD',
- 'NEARUSD', 'APTUSD', 'SUIUSD', 'ATOMUSD', 'ALGOUSD', 'HBARUSD', 'XLMUSD',
- 'TRXUSD', 'LTCUSD', 'BCHUSD', 'ETCUSD', 'SEIUSD', 'STXUSD', 'KSMUSD',
- 'SONICUSD', 'BERAUSD', 'MOVEUSD', 'PIUSD', 'IPUSD', 'INITUSD'],
- 'Layer 2': ['ARBUSD', 'OPUSD', 'POLUSD', 'STRKUSD', 'ZKUSD', 'MANTAUSD', 'IMXUSD',
- 'SKLUSD', 'ZROUSD', 'LAYERUSD', 'ALTUSD', 'LISTAUSD'],
- 'DeFi': ['UNIUSD', 'AAVEUSD', 'CRVUSD', 'MKRUSD', 'LDOUSD', 'INJUSD', 'DYDXUSD',
- 'SUSHIUSD', 'PENDLEUSD', 'JUPUSD', 'GMXUSD', 'ENAUSD', 'ONDOUSD',
- 'ETHFIUSD', 'CAKEUSD', 'FRAXUSD', 'RUNEUSD', '1INCHUSD', 'JTOUSD',
- 'RAREUSD', 'AUCTIONUSD', 'BBUSD', 'ORDEUSD', 'SOLVUSD'],
- 'AI / Data': ['WLDUSD', 'FETUSDT', 'RNDRUSD', 'GRTUSDT', 'FILUSD', 'ARUSD', 'TAOUSD',
- 'IOTAUSD', 'AIOUSD', 'AINUSD', 'AVAAIUSD', 'COAIUSD', 'GRIFFAINUSD',
- 'SWARMSUSD', 'VIRTUALUSD', 'AIXBTUSD', 'DEEPUSD', 'ARKMUSD', 'SAHARAUSD'],
- 'Meme': ['DOGEUSD', '1000SHIBUSD', '1000PEPEUSD', '1000BONKUSD', 'WIFUSD', '1000FLOKIUSD',
- 'NEIROUSD', 'MEMEUSD', 'TRUMPUSD', 'MELANIAUSD', 'FARTCOINUSD', 'DOGSUSD',
- 'MOODENGUSD', 'PNUTUSD', 'POPCATUSD', 'ACTUSD', 'GOATUSD', 'PEOPLEUSD',
- 'PENGUUSD', 'TURBUSD', 'NOTUSD', 'MONUSD', 'PIPPINUSD', 'HIVEUSD',
- 'MUBARAKUSD', 'SPXUSD', '1MBABYDOGEUSD', '1000SATSUSD', 'VINEUSD',
- 'GIGGLEUSD', 'BLESSUSD', 'PUMPUSD', 'WLFIUSD', 'COOKIEUSD'],
- 'Gaming': ['AXSUSD', 'MANAUSD', 'SANDUSD', 'GALAUSD', 'PIXELUSD', 'XAIUSD', 'SAGAUSD',
- 'DUSKUSD', 'TOWNSUSD', 'SUPERUSD', 'NOTCOINUSD'],
- 'Infra': ['LINKUSD', 'PYTHUSD', 'ENSUSD', 'API3USD', 'MASKUSD', 'GLMUSD', 'RSRUSD',
- 'BLURUSD', 'EIGENUSD', 'TIAUSD', 'HYPEUSD', 'BMTUSD', 'IOUSD',
- 'SIGNUSD', 'WCTUSD', 'PROVEUSD', 'ORDERUSD', 'CROSSUSD'],
- 'Exchange': ['BNBUSD', 'SUNUSD', 'OMUSD', 'TRBUSD', 'KAITOUSD', 'REDUSD', 'USUALUSD',
- 'BIOUSD', 'ORDIUSD'],
- 'Privacy': ['XMRUSD', 'ZECUSD', 'DASHUSD', 'ZENUSD'],
- 'RWA': [],
- 'Commodity': ['PAXGUSD', 'SLVONUSD', 'XANUSD'],
- 'Stock': [],
- 'New': ['LIGHTUSD', 'RIVERUSD', 'LITUSD', 'BEATUSD', 'KITEUSD', 'MMTUSD',
- 'EVAAUSD', 'HANAUSD', 'STBLUSD', 'VFYUSD', 'EDENUSD', 'FFUSD',
- 'XPLUSD', 'ASTERUSD', 'ZORAUSD', 'SOPHUSD', 'TNSRUSD', 'PARTIUSD',
- 'TSTUSD', 'VVVUSD', 'ARCUSD', 'VANAUSD', 'SUSD', 'MEUSD', 'HUSD', 'MUSD',
- 'JASMYUSD', 'JOEUSDT', 'TOKENUSDT'],
+ 'Index': ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX'],
+ 'Banking & Finance': ['HDFCBANK', 'ICICIBANK', 'SBIN', 'AXISBANK', 'KOTAKBANK', 'BANKBARODA', 'PNB', 'INDUSINDBK', 'AUBANK', 'BAJFINANCE', 'BAJAJFINSV', 'SBILIFE', 'HDFCLIFE'],
+ 'IT Services': ['TCS', 'INFY', 'HCLTECH', 'WIPRO', 'TECHM', 'LTIM', 'PERSISTENT', 'MPHASIS', 'COFORGE'],
+ 'Energy & Utilities': ['RELIANCE', 'ONGC', 'NTPC', 'POWERGRID', 'TATAPOWER', 'ADANIENSOL', 'ADANIGREEN', 'COALINDIA', 'BPCL', 'IOC'],
+ 'Consumer': ['ITC', 'HINDUNILVR', 'NESTLEIND', 'BRITANNIA', 'TATACONSUM', 'MARICO', 'DABUR', 'VBL', 'DMART'],
+ 'Auto': ['MARUTI', 'M&M', 'TATAMOTORS', 'BAJAJ-AUTO', 'EICHERMOT', 'HEROMOTOCO', 'TVSMOTOR', 'ASHOKLEY'],
+ 'Pharma & Healthcare': ['SUNPHARMA', 'CIPLA', 'DRREDDY', 'DIVISLAB', 'APOLLOHOSP', 'LUPIN', 'TORNTPHARM', 'ZYDUSLIFE'],
+ 'Metals & Materials': ['TATASTEEL', 'JSWSTEEL', 'HINDALCO', 'VEDL', 'JINDALSTEL', 'NATIONALUM', 'ULTRACEMCO', 'GRASIM', 'SHREECEM'],
+ 'Capital Goods': ['LT', 'SIEMENS', 'ABB', 'BEL', 'BHEL', 'HAL', 'CUMMINSIND', 'POLYCAB'],
+ 'Telecom & Media': ['BHARTIARTL', 'IDEA', 'INDUSTOWER', 'SUNTV', 'NAUKRI', 'ZOMATO'],
+ 'Realty & Infra': ['DLF', 'LODHA', 'GODREJPROP', 'OBEROIRLTY', 'IRCTC', 'CONCOR', 'ADANIPORTS'],
+ 'Other': [],
  };
 
  const RWA_ASSET_TYPES = Object.freeze({
@@ -113,6 +90,68 @@
  keywords: ['PRIVATE CREDIT', 'TOKENIZED CREDIT', 'CREDIT TOKEN', 'TOKENISED CREDIT'],
  }),
  });
+
+ const RWA_METADATA_KEYWORDS = Object.freeze([
+ 'RWA',
+ 'REAL WORLD ASSET',
+ 'REAL-WORLD ASSET',
+ 'REAL ASSET',
+ 'REAL-ASSET',
+ 'TOKENIZED',
+ 'TOKENISED',
+ 'XSTOCK',
+ 'STOCK',
+ 'EQUITY',
+ 'ETF',
+ 'TREASURY',
+ 'T-BILL',
+ 'TBILL',
+ 'BOND',
+ 'COMMODITY',
+ 'GOLD',
+ 'SILVER',
+ 'REAL ESTATE',
+ 'PROPERTY',
+ 'PRIVATE CREDIT',
+ 'CREDIT',
+ ]);
+
+ const RWA_CRYPTO_ASSET_EXCLUSIONS = Object.freeze(new Set([
+ 'BTC',
+ 'ETH',
+ 'SOL',
+ 'XRP',
+ 'BNB',
+ 'ADA',
+ 'DOGE',
+ 'TRX',
+ 'LTC',
+ 'BCH',
+ 'ETC',
+ 'DOT',
+ 'AVAX',
+ 'NEAR',
+ 'APT',
+ 'SUI',
+ 'ATOM',
+ 'LINK',
+ 'UNI',
+ 'AAVE',
+ 'INJ',
+ 'MKR',
+ 'LDO',
+ 'CRV',
+ 'DYDX',
+ 'SUSHI',
+ 'PENDLE',
+ 'JUP',
+ 'GMX',
+ 'ENA',
+ 'ONDO',
+ 'FRAX',
+ 'RUNE',
+ '1INCH',
+ ]));
 
  const TOKENIZED_STOCK_PRODUCTS = Object.freeze({
  AAPLX: Object.freeze({ stockSymbol: 'AAPL', company: 'Apple Inc.', displayName: 'Apple xStock' }),
@@ -1865,6 +1904,33 @@
  return values.map(value => String(value || '').toUpperCase()).join(' ');
  }
 
+ function classifyRwaTypeFromDeltaText(text = '', base = '') {
+ const upper = String(text || '').toUpperCase();
+ if (!upper) return '';
+ if (/\b(XSTOCK|STOCK|EQUITY)\b/.test(upper)) return 'tokenized_stock';
+ if (/\bETF\b/.test(upper)) return 'tokenized_etf';
+ if (/\b(TREASURY|T-BILL|TBILL|GOVERNMENT BOND|BOND)\b/.test(upper)) return 'tokenized_treasury';
+ if (/\b(COMMODITY|GOLD|SILVER|PRECIOUS METAL)\b/.test(upper)) return 'tokenized_commodity';
+ if (/\b(REAL ESTATE|PROPERTY)\b/.test(upper)) return 'tokenized_real_estate';
+ if (/\b(PRIVATE CREDIT|CREDIT)\b/.test(upper)) return 'tokenized_credit';
+ const normalizedBase = normalizeBaseSymbol(base);
+ if (normalizedBase && !RWA_CRYPTO_ASSET_EXCLUSIONS.has(normalizedBase) && /\b(RWA|REAL[-\s]?WORLD ASSET|REAL[-\s]?ASSET|TOKENIZED|TOKENISED)\b/.test(upper)) {
+ return 'tokenized_rwa';
+ }
+ return '';
+ }
+
+ function buildGenericRwaMeta(assetClass = 'tokenized_rwa') {
+ const known = RWA_ASSET_TYPES[assetClass];
+ if (known) return known;
+ return {
+ label: 'Tokenized RWA',
+ badge: 'RWA',
+ sector: 'RWA',
+ keywords: RWA_METADATA_KEYWORDS,
+ };
+ }
+
  function inferEquityTickerFromRwaSymbol(symbol = '') {
  const base = normalizeBaseSymbol(symbol);
  if (!base) return '';
@@ -1878,6 +1944,27 @@
  const text = buildDeltaInstrumentText(symbolOrProduct, description);
  const underlyingSymbol = String(raw.underlying_asset?.symbol || raw.underlyingAsset?.symbol || '').trim().toUpperCase();
  const underlyingName = sanitizeText(raw.underlying_asset?.name || raw.underlyingAsset?.name || '', '', 80);
+ const base = normalizeBaseSymbol(symbol);
+ const dynamicAssetClass = classifyRwaTypeFromDeltaText(text, base);
+ if (dynamicAssetClass) {
+ const meta = buildGenericRwaMeta(dynamicAssetClass);
+ const ticker = dynamicAssetClass === 'tokenized_stock'
+ ? (underlyingSymbol || inferEquityTickerFromRwaSymbol(symbol))
+ : (underlyingSymbol || base);
+ const displayName = dynamicAssetClass === 'tokenized_stock'
+ ? `${ticker || 'Equity'} xStock`
+ : `${underlyingName || ticker || meta.label}`;
+ return {
+ assetClass: dynamicAssetClass,
+ assetLabel: meta.label,
+ assetBadge: meta.badge,
+ sector: 'RWA',
+ displayName,
+ underlyingSymbol: ticker,
+ underlyingName: underlyingName || ticker,
+ info: `${displayName} is classified from Delta Exchange product metadata as ${meta.label}. The scanner groups it under RWA instead of normal crypto sectors.`,
+ };
+ }
  for (const [assetClass, meta] of Object.entries(RWA_ASSET_TYPES)) {
  const matched = meta.keywords.some(keyword => text.includes(keyword));
  if (!matched) continue;
@@ -1896,21 +1983,6 @@
  underlyingSymbol: ticker,
  underlyingName: underlyingName || ticker,
  info: `${displayName} is treated as ${meta.label}. The scanner separates it from normal crypto flow because it represents a tokenized real-world asset exposure.`,
- };
- }
- const base = normalizeBaseSymbol(symbol);
- const commodityBase = ['PAXG', 'XAUT', 'XAN', 'SLVON'].includes(base);
- if (commodityBase) {
- const displayName = DELTA_BASE_ASSET_NAMES[base] || titleCaseAssetCode(base);
- return {
- assetClass: 'tokenized_commodity',
- assetLabel: 'Tokenized Commodity',
- assetBadge: 'RWA / Commodity',
- sector: 'RWA',
- displayName,
- underlyingSymbol: base,
- underlyingName: displayName,
- info: `${displayName} is treated as tokenized commodity exposure, not normal crypto momentum flow.`,
  };
  }
  return null;
@@ -1977,6 +2049,7 @@
  if (!base) return false;
  const inferredRwa = inferRwaAssetInfo(base);
  if (inferredRwa?.assetClass === 'tokenized_stock') return true;
+ if (String(base || '').toUpperCase().endsWith('X')) return true;
  return false;
  }
 
@@ -1985,7 +2058,7 @@
  const base = normalizeBaseSymbol(raw);
  const assetInfo = inferRwaAssetInfo(raw);
  if (assetInfo?.sector) return assetInfo.sector;
- if (isStockToken(base)) return 'Stock';
+ if (isStockToken(base)) return 'RWA';
  const candidates = [raw];
  if (base) candidates.push(`${base}USD`, `${base}USDT`, `${base}XUSD`);
  for (const [label, coins] of Object.entries(SECTORS)) {

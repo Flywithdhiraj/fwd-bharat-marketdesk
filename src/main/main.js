@@ -4,8 +4,8 @@ const path = require('path');
 const { createAuth } = require('./auth');
 const { createBackupService } = require('./backup');
 const { createCandleCache } = require('./candle-cache');
-const { createCandleHistoryService } = require('./candle-history-service');
 const { createCredentialStore } = require('./credential-store');
+const { createDhanDataService } = require('./dhan-data-service');
 const { createDesktopNotifications } = require('./desktop-notifications');
 const { createErrorJournal } = require('./error-journal');
 const { createIpcHandlers } = require('./ipc-handlers');
@@ -15,9 +15,15 @@ const { createWindowManager } = require('./windows');
 
 const MAIN_PROCESS_STARTED_AT = Date.now();
 const MAX_CHROMIUM_CACHE_BYTES = 48 * 1024 * 1024;
+const PRODUCT_NAME = 'FWD Bharat MarketDesk';
+const LEGACY_USER_DATA_DIRS = [
+ path.join(app.getPath('appData'), 'FWD Bharat MarketDesk (NSE', 'BSE)'),
+ path.join(app.getPath('appData'), 'FWD TradeDesk Pro (NSE', 'BSE)'),
+];
 
-app.setName('FWD TradeDesk Pro');
-if (process.platform === 'win32') app.setAppUserModelId('com.fwd.tradedeskpro');
+app.setName(PRODUCT_NAME);
+app.setPath('userData', path.join(app.getPath('appData'), PRODUCT_NAME));
+if (process.platform === 'win32') app.setAppUserModelId('com.fwd.bharatmarketdesk.nsebse');
 Menu.setApplicationMenu(null);
 
 const RUNTIME_CACHE_DIR = path.join(app.getPath('userData'), 'runtime-cache');
@@ -95,12 +101,55 @@ async function ensureRuntimeCacheDirs() {
  };
 }
 
+async function migrateLegacyUserData() {
+ const target = app.getPath('userData');
+ const importantFiles = ['app-auth.json', 'secure-secrets.json', 'dhan-instruments-cache.json'];
+ const copyMissingImportantFiles = async legacyDir => {
+  let copied = 0;
+  await fs.mkdir(target, { recursive: true });
+  for (const fileName of importantFiles) {
+   const sourceFile = path.join(legacyDir, fileName);
+   const targetFile = path.join(target, fileName);
+   try {
+    await fs.access(targetFile);
+   } catch (_) {
+    try {
+     await fs.copyFile(sourceFile, targetFile);
+     copied += 1;
+    } catch (_) {}
+   }
+  }
+  return copied;
+ };
+ try {
+  await fs.access(target);
+  for (const legacyDir of LEGACY_USER_DATA_DIRS) {
+   try {
+    await fs.access(legacyDir);
+    const copied = await copyMissingImportantFiles(legacyDir);
+    if (copied) return { ok: true, repairedFrom: legacyDir, copied, target };
+   } catch (_) {}
+  }
+  return { ok: true, skipped: true, target };
+ } catch (_) {}
+ for (const legacyDir of LEGACY_USER_DATA_DIRS) {
+  try {
+   await fs.access(legacyDir);
+   await fs.mkdir(path.dirname(target), { recursive: true });
+   await fs.cp(legacyDir, target, { recursive: true, force: false, errorOnExist: false });
+   return { ok: true, migratedFrom: legacyDir, target };
+  } catch (_) {}
+ }
+ await fs.mkdir(target, { recursive: true });
+ return { ok: true, created: true, target };
+}
+
 const errorJournal = createErrorJournal({ app });
 const credentialStore = createCredentialStore({ app, safeStorage, errorJournal });
 const auth = createAuth({ app, safeStorage, credentialStore });
 const journal = createJournal({ app, errorJournal });
 const candleCache = createCandleCache({ app, errorJournal });
-const candleHistory = createCandleHistoryService({ app, candleCache, errorJournal });
+const dhanData = createDhanDataService({ app, credentialStore, errorJournal });
 const backup = createBackupService({ app, dialog, journal, candleCache });
 const desktopNotifications = createDesktopNotifications({ app, errorJournal });
 const migrations = createMigrationRunner({ app, errorJournal });
@@ -110,9 +159,9 @@ createIpcHandlers({
  ipcMain,
  auth,
  credentialStore,
+ dhanData,
  journal,
  candleCache,
- candleHistory,
  backup,
  errorJournal,
  desktopNotifications,
@@ -122,6 +171,7 @@ createIpcHandlers({
 });
 
 app.whenReady().then(async () => {
+ await migrateLegacyUserData();
  await pruneChromiumCaches();
  await ensureRuntimeCacheDirs();
  await migrations.run();

@@ -35,19 +35,20 @@ function assertUniqueShellIds() {
 
 function assertCriticalSurfaces() {
  const html = read('src/renderer/index.html');
- const options = read('src/renderer/scripts/popup/08-options-workspace.js');
  const panes = read('src/renderer/scripts/popup/06-pane-templates.js');
  const chartWorkspace = read('src/renderer/scripts/popup/07-chart-workspace.js');
  const commandCore = read('src/renderer/scripts/popup/00-core.js');
+ const popupBoot = read('src/renderer/popup.js');
+ const mainWindows = read('src/main/windows.js');
  const shell = read('src/renderer/scripts/popup/01-shell.js');
  const styles = read('src/renderer/styles.css');
  const appLock = read('src/renderer/styles/07-app-lock.css');
  const appLockJs = read('src/renderer/app-lock.js');
  const hardening = read('src/renderer/styles/09-design-system-hardening.css');
  const finalTheme = read('src/renderer/styles/10-vivid-trader-theme.css');
+ const bharatTheme = read('src/renderer/styles/11-bharat-marketdesk-theme.css');
 
  [
-  'pane-options',
   'pane-chart',
   'pane-strategies',
   'pane-debug',
@@ -56,18 +57,25 @@ function assertCriticalSurfaces() {
  ].forEach(id => assert(html.includes(`id="${id}"`), `Missing critical shell id: ${id}`));
 
  assert(html.includes('scripts/shared/ui-events.js'), 'Shared UI event helper is not loaded before feature modules.');
- assert(options.includes('renderStraddleModeV3'), 'Native Straddle workspace render function is missing.');
- assert(options.includes('od-native-only'), 'Native Straddle-only options markup is missing.');
- assert(options.includes('data-options-action="run-native-straddle-scan"'), 'Native Straddle scan action is missing.');
  assert(panes.includes('btnExportReleaseDiagnostics'), 'Debug pane diagnostics export action is missing.');
+ assert(panes.includes('debugCandleHealth') && panes.includes('debugCandleHits') && panes.includes('debugCandleEntries'), 'Debug pane candle-store diagnostics are missing.');
  assert(styles.includes("styles/09-design-system-hardening.css"), 'Design-system hardening stylesheet is not imported.');
- assert(styles.includes("styles/06-options-workspace.css"), 'Options workspace stylesheet is not imported.');
+ assert(html.includes('pane-options') && html.includes('data-tab="options"'), 'Dhan Options Hub shell is missing.');
+ assert(popupBoot.includes('optionsHub') && popupBoot.includes('ensureOptionsHubLoaded'), 'Options Hub lazy loader is missing.');
+ assert(commandCore.includes("if (tab === 'options') globalThis.renderOptionsHub?.(preloaded);"), 'Options Hub render route is missing.');
+ assert(html.includes('pane-carry') && html.includes('data-tab="carry"'), 'F&O Carry shell is missing.');
+ assert(popupBoot.includes('fnoCarry') && popupBoot.includes('ensureFnoCarryLoaded'), 'F&O Carry lazy loader is missing.');
+ assert(commandCore.includes("if (tab === 'carry') globalThis.renderFnoCarry?.(preloaded);"), 'F&O Carry render route is missing.');
+ assert(html.includes('pane-commodities') && html.includes('data-tab="commodities"'), 'Commodities shell is missing.');
+ assert(popupBoot.includes('commodities') && popupBoot.includes('ensureCommoditiesLoaded'), 'Commodities lazy loader is missing.');
+ assert(commandCore.includes("if (tab === 'commodities') globalThis.renderCommodities?.(preloaded);"), 'Commodities render route is missing.');
  assert(hardening.includes('.diagnostics-export-card'), 'Diagnostics export CSS is missing.');
- assert(html.includes('FWD TradeDesk Pro') && html.includes('Unlock Futures'), 'Premium futures unlock copy is missing.');
- assert(html.includes('appLockProductRail') && html.includes('appLockMarketIntelligence') && html.includes('appLockRiskControls') && html.includes('appLockReports'), 'Homepage nav sections must map to distinct content.');
+ assert(hardening.includes('.debug-cache-card') && hardening.includes('.debug-cache-grid'), 'Candle-store diagnostics CSS is missing.');
+ assert(html.includes('FWD Bharat MarketDesk') && html.includes('Unlock Desk'), 'Bharat MarketDesk unlock copy is missing.');
+ assert(html.includes('appLockProductRail') && html.includes('appLockMarketIntelligence') && html.includes('appLockSettings'), 'Homepage sections must map to current Dhan scanner and settings content.');
  assert(!html.includes('appLockFastPassword'), 'Login screen should ask for the password in one place only.');
- assert(html.includes('Wizard Scanner') && html.includes('Live Orders Gate') && html.includes('Trade Journal'), 'Dhan-style product homepage sections are missing.');
- assert(appLockJs.includes("login: ['Unlock Futures'"), 'Runtime app-lock copy should not restore the old login screen.');
+ assert(html.includes('Wizard Scanner') && html.includes('Scanner Defaults') && html.includes('Data Health'), 'Product homepage sections are missing.');
+ assert(appLockJs.includes("login: ['Unlock Desk'"), 'Runtime app-lock copy should not restore the old login screen.');
  assert(!appLockJs.includes('autoLockMinutes') && !appLockJs.includes('scheduleAutoLock') && !appLockJs.includes('auth_update_auto_lock'), 'Inactivity auto-lock code must stay removed.');
  assert(!html.includes('appLockSetupAutoLock') && !html.includes('appLockAutoLockMinutes') && !html.includes('appLockSaveAutoLock'), 'Inactivity auto-lock controls must stay removed.');
  assert(appLock.includes('.app-lock-product-rail'), 'Homepage product rail CSS is missing.');
@@ -80,16 +88,20 @@ function assertCriticalSurfaces() {
  assert(commandCore.includes('command-next-card') && commandCore.includes('Decision-first cockpit'), 'Command Center must lead with the decision-first next-action card.');
  assert(commandCore.includes('Getting started state') && commandCore.includes('data-scan-now="1"'), 'Command Center must include a composed first-scan empty state.');
  assert(shell.includes('scheduleWorkspaceTabRender') && shell.includes('requestAnimationFrame') && commandCore.includes('renderActiveWorkspaceTab(tab, preloaded = null)'), 'Workspace renders must be coalesced through the rAF scheduler.');
- assert(options.includes('Options decision desk') && options.includes('renderNativeFlowGuide') && options.includes('od-native-desk-grid'), 'Options workspace must keep the professional Native Straddle desk flow.');
- assert(options.includes('od-finished-state loading') && options.includes('Connection failed'), 'Options workspace must include explicit loading and error states.');
  assert(finalTheme.includes('Final command-desk polish') && finalTheme.includes("--font-ui: 'Aptos'") && finalTheme.includes('.command-next-card'), 'Final theme polish must define calm tokens, typography, and decision-card styling.');
+ assert(styles.includes("styles/11-bharat-marketdesk-theme.css") && bharatTheme.includes('FWD Bharat MarketDesk') && bharatTheme.includes('.india-module-card'), 'Bharat MarketDesk theme and module styling must be loaded.');
+ assert(popupBoot.includes('installRendererBootRecovery') && popupBoot.includes('FWDRecoverBlankChartMode') && popupBoot.includes('Chart startup recovered'), 'Renderer must recover from blank chart-mode startup instead of leaving a dark window.');
+ assert(popupBoot.includes('isDetachedChartStartup') && popupBoot.includes('reloadToNormalWorkspace') && popupBoot.includes("querySelector('.live-order-chart-card, .ds-lwc-chart, canvas')"), 'Renderer recovery must be scoped to detached chart startup and require real chart content.');
+ assert(!popupBoot.includes('setTimeout(() => {\\n   recoverBlankChartMode'), 'Detached chart recovery must not use a fixed startup timer that can interrupt slow chart renders.');
+ assert(chartWorkspace.includes('__fwdDetachedChartRenderComplete = true'), 'Detached chart startup must mark successful chart render completion.');
+ assert(!popupBoot.includes("document.body?.classList.remove('chart-mode'"), 'Renderer recovery must not tear down a valid chart session for generic errors.');
+ assert(mainWindows.includes('scheduleRendererReload') && mainWindows.includes('reloadIgnoringCache') && mainWindows.includes('renderer:reload-scheduled') && mainWindows.includes('rendererReloads = 0'), 'Main process must reload after renderer load/process failure and reset the retry budget after success.');
 }
 
 function assertRendererPartsExist() {
  const partGroups = [
   'src/renderer/scripts/popup/parts/v16-capabilities',
   'src/renderer/scripts/popup/parts/chart-workspace',
-  'src/renderer/scripts/popup/parts/options-workspace',
  ];
  partGroups.forEach(group => {
   const absolute = path.join(root, group);

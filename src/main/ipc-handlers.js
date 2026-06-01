@@ -1,11 +1,5 @@
-const crypto = require('crypto');
 const { BrowserWindow } = require('electron');
 const { sanitizeDbKey } = require('./json-store');
-
-const DELTA_PRIVATE_API_BASES = new Map([
- ['api.india.delta.exchange', 'https://api.india.delta.exchange/v2'],
- ['api.delta.exchange', 'https://api.delta.exchange/v2'],
-]);
 
 function encodeQuery(query = {}) {
  const params = new URLSearchParams();
@@ -25,32 +19,13 @@ function encodeQuery(query = {}) {
  .join('&');
 }
 
-function resolveDeltaPrivateApiBase(rawBaseUrl = '') {
- const fallback = 'https://api.india.delta.exchange/v2';
- let parsed = null;
- try {
-  parsed = new URL(String(rawBaseUrl || fallback).trim() || fallback);
- } catch {
-  return null;
- }
- const allowedBase = DELTA_PRIVATE_API_BASES.get(parsed.hostname.toLowerCase());
- if (!allowedBase || parsed.protocol !== 'https:') return null;
- if (parsed.port && parsed.port !== '443') return null;
- const cleanPath = parsed.pathname.replace(/\/+$/, '') || '/';
- if (cleanPath !== '/v2') return null;
- return {
-  baseUrl: allowedBase,
-  rootUrl: parsed.origin,
- };
-}
-
 function createIpcHandlers({
  ipcMain,
  auth,
  credentialStore,
+ dhanData,
  journal,
  candleCache,
- candleHistory,
  backup,
  errorJournal,
  desktopNotifications,
@@ -58,56 +33,6 @@ function createIpcHandlers({
  ensureRuntimeCacheDirs,
  startedAt,
 } = {}) {
- async function runPrivateRequest(payload = {}) {
-  const resolvedBase = resolveDeltaPrivateApiBase(payload.baseUrl);
-  if (!resolvedBase) {
-   return { ok: false, status: 400, error: 'Unsupported Delta private API host.' };
-  }
-  const credential = await credentialStore.getPrimaryCredential();
-  if (!credential?.tradingKey || !credential?.tradingSecret) {
-   return { ok: false, status: 401, error: 'Stored credential not found for this profile.' };
-  }
-  const upperMethod = String(payload.method || 'GET').toUpperCase();
-  const rawPath = String(payload.path || '/').trim() || '/';
-  const normalizedPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
-  const requestPath = `/v2${normalizedPath.startsWith('/v2') ? normalizedPath.slice(3) : normalizedPath}`;
-  const queryString = encodeQuery(payload.query || {});
-  const requestBody = payload.body ? JSON.stringify(payload.body) : '';
-  const timestamp = String(Math.floor(Date.now() / 1000));
-  const signPayload = `${upperMethod}${timestamp}${requestPath}${queryString ? `?${queryString}` : ''}${requestBody}`;
-  const signature = crypto.createHmac('sha256', String(credential.tradingSecret)).update(signPayload).digest('hex');
-  const url = `${resolvedBase.rootUrl}${requestPath}${queryString ? `?${queryString}` : ''}`;
-  const response = await fetch(url, {
-   method: upperMethod,
-   headers: {
-    Accept: 'application/json',
-    'Content-Type': 'application/json',
-    'User-Agent': 'FWD-TradeDesk-Pro',
-    'api-key': String(credential.tradingKey),
-    timestamp,
-    signature,
-   },
-   body: requestBody || undefined,
-  });
-  const text = await response.text();
-  let data = null;
-  try {
-   data = text ? JSON.parse(text) : null;
-  } catch {
-   data = text;
-  }
-  if (!response.ok) {
-   return {
-    ok: false,
-    status: response.status,
-    error: data?.error?.code || data?.error || data?.message || text || `HTTP ${response.status}`,
-    text,
-    raw: data,
-   };
-  }
-  return { ok: true, status: response.status, data, raw: data, meta: data?.meta || null };
- }
-
  ipcMain.handle('fwd:native-message', async (event, message = {}) => {
   const type = String(message.type || '').trim();
   try {
@@ -141,13 +66,12 @@ function createIpcHandlers({
    if (type === 'error_journal_clear') return errorJournal.clear();
    if (type === 'app_backup_export') return backup.exportBackup(message);
    if (type === 'app_backup_import') return backup.importBackup(message);
-   if (type === 'candle_history_status') return candleHistory.status();
-   if (type === 'candle_history_start') return candleHistory.start(message);
-   if (type === 'candle_history_pause') return candleHistory.pause();
-   if (type === 'candle_history_refresh_universe') return candleHistory.refreshUniverse(message);
    if (type === 'store_credential') return credentialStore.storeCredential(message);
    if (type === 'delete_credential') return credentialStore.deleteCredential();
-   if (type === 'delta_private_request') return runPrivateRequest(message);
+   if (type === 'dhan_data') return dhanData.handle(message);
+   if (type === 'dhan_order_place' || type === 'dhan_order_modify' || type === 'dhan_order_cancel') {
+    return { ok: false, status: 403, error: 'Order placement is disabled. Use your broker app or web terminal for manual trading.' };
+   }
    if (type === 'secure_secret_get') return credentialStore.getSecureSecret(message.name);
    if (type === 'secure_secret_set') return credentialStore.setSecureSecret(message.name, message.value);
    if (type === 'secure_secret_delete') return credentialStore.deleteSecureSecret(message.name);

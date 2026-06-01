@@ -1,10 +1,10 @@
 // ================================================================
 
-// FWD TradeDesk Pro v15 - Popup UI
+// FWD Bharat MarketDesk v15 - Popup UI
 
 // v15 Shell: Workspaces | Trust Layer | Overview Deck
 
-// Sparklines | Market Structure | Volume Climax | Funding Arbitrage
+// Sparklines | Market Structure | Volume Climax | Manual Trade Tickets
 
 // CSV Export | Session Badge | OI Divergence
 
@@ -25,13 +25,12 @@ let currentAlertsCache = [];
 let currentAnalyticsPositions = [];
 let desktopApiRegion = 'india';
 let isDesktopMode = new URLSearchParams(location.search).get('desktop') === '1';
-let fundingView = 'heatmap'; // 'heatmap' | 'arbitrage'
+let fundingView = 'heatmap';
 let alertTierFilter = '';
 let alertSortMode = 'portfolio';
 
 let scannerPreset = '';
 
-let scannerSessionFilter = '';
 
 let workspaceFocusMode = false;
 let workspaceScrollCollapsed = false;
@@ -65,15 +64,15 @@ const AUTO_SCAN_INTERVALS = [1, 2, 3, 5, 15];
 const AUTO_SCAN_INTERVAL_DEFAULT = 15;
 
 const ANALYTICS_HISTORY_LIMIT = 120;
-const BACKUP_DB_NAME = 'fwd_tradedesk_v14_local_backup';
+const BACKUP_DB_NAME = 'fwd_bharat_marketdesk_v14_local_backup';
 
 const BACKUP_DB_STORE = 'handles';
 
 const BACKUP_HANDLE_KEY = 'backup_dir';
 
-const BACKUP_FILE_PREFIX = 'fwd_tradedesk_pro_backup';
+const BACKUP_FILE_PREFIX = 'fwd_bharat_marketdesk_backup';
 
-const ALERT_ARCHIVE_FILE_PREFIX = 'fwd_tradedesk_pro_alert_archive';
+const ALERT_ARCHIVE_FILE_PREFIX = 'fwd_bharat_marketdesk_alert_archive';
 
 const KEEP_ALERTS_DEFAULT = 600;
 
@@ -82,6 +81,16 @@ const KEEP_ALERTS_MIN = 100;
 const KEEP_ALERTS_MAX = 1800;
 
 const SCAN_HEARTBEAT_STALE_MS = 20000;
+
+function isScannerUiActive(data = {}) {
+ const statusText = String(data.scanStatus || '').trim();
+ const progress = Number.isFinite(+data.scanProgress) ? Math.max(0, Math.min(100, +data.scanProgress)) : 0;
+ const failedStatus = /stopped|failed|rate limit|too many|unavailable|error/i.test(statusText);
+ const completedStatus = /^ok done|^ready\b|complete/i.test(statusText) || progress >= 100;
+ const scanLikeStatus = /loading|scanning/i.test(statusText) && !failedStatus && !completedStatus;
+ const heartbeatFresh = Number.isFinite(+data.scanHeartbeat) && (Date.now() - Number(data.scanHeartbeat)) < SCAN_HEARTBEAT_STALE_MS;
+ return !!data.scanActive && heartbeatFresh && scanLikeStatus;
+}
 
 let backupDirHandle = null;
 
@@ -102,7 +111,7 @@ const WORKSPACE_GROUP_META = {
  tabs: ['home'],
  title: 'Command Center',
 
- copy: 'Daily risk, execution state, scan health, and the next actions that matter now.',
+ copy: 'Scanner activity, setup health, and the next actions that matter now.',
 
  },
 
@@ -110,39 +119,9 @@ const WORKSPACE_GROUP_META = {
 
  label: 'Markets',
 
- tabs: ['scanner', 'strategies', 'watchlist', 'options', 'chart'],
+ tabs: ['scanner', 'options', 'carry', 'commodities', 'strategies', 'chart'],
  title: 'Scanner',
- copy: 'Scan symbols, review watchlists, inspect native straddles, and open a clean chart from one market workspace.',
- },
-
- trading: {
-
- label: 'Trading',
-
- tabs: ['positions', 'orders', 'funds'],
- title: 'Positions',
- copy: 'Manage open exposure, working orders, funds, and execution state without leaving the trading desk.',
- },
-
- risk: {
-
- label: 'Risk & Automation',
-
- tabs: ['riskcalc', 'webhooks'],
- title: 'Risk Cockpit',
- copy: 'Control position sizing, auto-trade safety, API setup, integrations, and recovery settings.',
- },
-
- reports: {
-
- label: 'Reports',
-
- tabs: ['liveanalytics', 'tradecheck', 'funding', 'corr'],
-
- title: 'Funding',
-
- copy: 'Review journal, P&L, funding, and correlation evidence before changing risk.',
-
+ copy: 'Scan NSE/BSE symbols, build strategies, and open a clean chart from one market workspace.',
  },
 
  settings: {
@@ -153,7 +132,7 @@ const WORKSPACE_GROUP_META = {
 
  title: 'Settings',
 
- copy: 'Control display currency, scanner defaults, API safety, notifications, backup, and diagnostics.',
+ copy: 'Control scanner defaults, market data, app lock, and chart preferences.',
 
  },
 
@@ -161,29 +140,16 @@ const WORKSPACE_GROUP_META = {
 
 const TAB_TITLES = {
 
- home: 'Command Center',
+ home: 'Scanner Activity',
 
  scanner: 'Scanner',
+ options: 'Options Hub',
+ carry: 'F&O Carry',
+ commodities: 'Commodities',
  strategies: 'Strategy Lab',
 
- watchlist: 'Watchlist',
- options: 'Native Straddle',
  chart: 'Chart',
- liveanalytics: 'Analytics',
- tradecheck: 'Trade Check & Paper',
- funds: 'Funds',
- positions: 'Positions',
- orders: 'Orders',
- riskcalc: 'Risk Cockpit',
- funding: 'Funding',
-
- corr: 'Correlation Matrix',
-
-
- strategy: 'Settings',
-
- webhooks: 'Automation',
-
+ strategy: 'Settings & API',
  debug: 'Debug',
 
 };
@@ -193,6 +159,39 @@ const TAB_TITLES = {
 // -- Sector Map -------------------------------------------------
 
 const { SECTORS, normalizeBaseSymbol, isStockToken, getSector, classifyDeltaInstrument, describeDeltaInstrument, sanitizeAutoScanInterval, sanitizeAlertTone } = globalThis.FWDTradeDeskShared;
+
+let alertAudioContext = null;
+
+function playAlert(tone = 'classic') {
+ try {
+  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextCtor) return;
+  if (!alertAudioContext) alertAudioContext = new AudioContextCtor();
+  const safeTone = sanitizeAlertTone(tone);
+  const profiles = {
+   classic: [[880, 0.05], [1100, 0.15], [880, 0.3], [1320, 0.45]],
+   beacon: [[660, 0.02], [820, 0.12], [980, 0.24], [1240, 0.38]],
+   pulse: [[520, 0.02], [520, 0.14], [760, 0.26], [760, 0.38]],
+   chime: [[740, 0.02], [988, 0.18], [1480, 0.36]],
+   siren: [[580, 0.02], [700, 0.14], [580, 0.26], [700, 0.38], [860, 0.5]],
+  };
+  const notes = profiles[safeTone] || profiles.classic;
+  notes.forEach(([freq, when]) => {
+   const oscillator = alertAudioContext.createOscillator();
+   const gain = alertAudioContext.createGain();
+   oscillator.connect(gain);
+   gain.connect(alertAudioContext.destination);
+   oscillator.frequency.value = freq;
+   oscillator.type = safeTone === 'siren' ? 'sawtooth' : safeTone === 'pulse' ? 'square' : 'sine';
+   gain.gain.setValueAtTime(0.28, alertAudioContext.currentTime + when);
+   gain.gain.exponentialRampToValueAtTime(0.001, alertAudioContext.currentTime + when + 0.22);
+   oscillator.start(alertAudioContext.currentTime + when);
+   oscillator.stop(alertAudioContext.currentTime + when + 0.24);
+  });
+ } catch (_) {}
+}
+
+window.playAlert = playAlert;
 
 
 
@@ -648,12 +647,11 @@ globalThis.FWDTradeDeskUi = {
 };
 
 const DEFAULT_REPORT_DISPLAY_USD_INR_RATE = 85;
-let reportDisplayCurrency = 'USD';
+let reportDisplayCurrency = 'INR';
 let reportDisplayUsdInrRate = DEFAULT_REPORT_DISPLAY_USD_INR_RATE;
 
 function normalizeReportDisplayCurrency(value = '') {
- const safe = String(value || '').trim().toUpperCase();
- return safe === 'INR' ? 'INR' : 'USD';
+ return 'INR';
 }
 
 function setReportDisplayCurrency(value = '') {
@@ -684,15 +682,14 @@ function getReportDisplayCurrency() {
 
 function formatReportMoney(value, digits = 2, { signed = false, compact = false } = {}) {
  const raw = Number(value || 0);
- if (!Number.isFinite(raw)) return getReportDisplayCurrency() === 'INR' ? 'Rs 0.00' : '$0.00';
- const currency = getReportDisplayCurrency();
- const display = currency === 'INR' ? raw * getReportDisplayUsdInrRate() : raw;
+ if (!Number.isFinite(raw)) return 'Rs 0.00';
+ const display = raw;
  const abs = Math.abs(display);
  const sign = signed ? (display >= 0 ? '+' : '-') : (display < 0 ? '-' : '');
  const amount = compact && typeof fmtLarge === 'function'
  ? fmtLarge(abs)
  : abs.toLocaleString('en-IN', { minimumFractionDigits: digits, maximumFractionDigits: digits });
- return currency === 'INR' ? `${sign}Rs ${amount}` : `${sign}$${amount}`;
+ return `${sign}Rs ${amount}`;
 }
 
 globalThis.DEFAULT_REPORT_DISPLAY_USD_INR_RATE = DEFAULT_REPORT_DISPLAY_USD_INR_RATE;
@@ -703,6 +700,58 @@ globalThis.normalizeReportDisplayUsdInrRate = normalizeReportDisplayUsdInrRate;
 globalThis.setReportDisplayUsdInrRate = setReportDisplayUsdInrRate;
 globalThis.getReportDisplayUsdInrRate = getReportDisplayUsdInrRate;
 globalThis.formatReportMoney = formatReportMoney;
+
+function fmtLarge(value = 0, digits = 1) {
+ const numeric = Number(value || 0);
+ if (!Number.isFinite(numeric)) return '0';
+ const abs = Math.abs(numeric);
+ const sign = numeric < 0 ? '-' : '';
+ const format = divisor => (abs / divisor).toLocaleString('en-IN', {
+  minimumFractionDigits: digits,
+  maximumFractionDigits: digits,
+ });
+ if (abs >= 10000000) return `${sign}${format(10000000)}Cr`;
+ if (abs >= 100000) return `${sign}${format(100000)}L`;
+ if (abs >= 1000) return `${sign}${format(1000)}K`;
+ return numeric.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+}
+
+globalThis.fmtLarge = fmtLarge;
+
+function fmtPrice(value = 0, digits = null) {
+ const numeric = Number(value || 0);
+ if (!Number.isFinite(numeric)) return '0.00';
+ const resolvedDigits = digits == null ? (Math.abs(numeric) >= 1000 ? 2 : 2) : digits;
+ return numeric.toLocaleString('en-IN', {
+  minimumFractionDigits: resolvedDigits,
+  maximumFractionDigits: resolvedDigits,
+ });
+}
+
+globalThis.fmtPrice = fmtPrice;
+
+function formatInrPrice(value, digits = null) {
+ if (digits != null) {
+  const numeric = Number(value || 0);
+  return `Rs ${Number.isFinite(numeric) ? numeric.toLocaleString('en-IN', { minimumFractionDigits: digits, maximumFractionDigits: digits }) : '0.00'}`;
+ }
+ return `Rs ${fmtPrice(value)}`;
+}
+
+function timeAgo(timestamp = 0) {
+ const numeric = Number(timestamp || 0);
+ if (!(numeric > 0)) return 'never';
+ const ts = numeric < 100000000000 ? numeric * 1000 : numeric;
+ const diff = Math.max(0, Date.now() - ts);
+ if (diff < 5000) return 'now';
+ if (diff < 60000) return `${Math.floor(diff / 1000)}s ago`;
+ if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+ if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+ if (diff < 604800000) return `${Math.floor(diff / 86400000)}d ago`;
+ return new Date(ts).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+}
+
+globalThis.timeAgo = timeAgo;
 
 async function storeSet(items) {
  const nativeWrittenKeys = await writeNativeJournalValues(items);
@@ -971,7 +1020,7 @@ async function saveStoredTelegramConfig(cfg) {
 function getWorkspaceGroupForTab(tab) {
 
  const raw = String(tab || '').trim();
- const key = raw === 'analytics' ? 'liveanalytics' : raw;
+ const key = raw === 'alerts' ? 'scanner' : raw;
  return Object.entries(WORKSPACE_GROUP_META).find(([, meta]) => meta.tabs.includes(key))?.[0] || 'command';
 
 }
@@ -991,32 +1040,13 @@ function renderActiveWorkspaceTab(tab, preloaded = null) {
  if (tab === 'home') updateWorkspaceInsights();
 
  if (tab === 'scanner') renderScanner(preloaded);
+ if (tab === 'options') globalThis.renderOptionsHub?.(preloaded);
+ if (tab === 'carry') globalThis.renderFnoCarry?.(preloaded);
+ if (tab === 'commodities') globalThis.renderCommodities?.(preloaded);
 
  if (tab === 'strategies') globalThis.renderStrategyLab?.();
-
- if (tab === 'watchlist') renderWatchlist(preloaded);
-
- if (tab === 'options') renderOptionsWorkspace?.();
  if (tab === 'chart') globalThis.renderChartWorkspacePane?.();
- if (tab === 'liveanalytics') globalThis.renderV16LiveAnalyticsPane?.(preloaded, false);
- if (tab === 'tradecheck') globalThis.renderV16TradeCheckPane?.(null, false);
- if (tab === 'funds') globalThis.renderV16FundsPane?.(preloaded, false);
-
- if (tab === 'positions') globalThis.renderV16PositionsPane?.(preloaded, false);
- if (tab === 'orders') globalThis.renderV16OrdersPane?.(preloaded, false);
- if (tab === 'riskcalc') {
- globalThis.renderV16RiskBridgeBanner?.();
- globalThis.renderV16RiskManageBoard?.();
- globalThis.renderV16VarDashboard?.();
- if (typeof calcRisk === 'function') calcRisk();
- }
- if (tab === 'funding') {
- if (fundingView === 'arbitrage' && typeof renderFundingArbitrage === 'function') renderFundingArbitrage();
- else renderFundingHeatmap();
- }
- if (tab === 'corr') renderCorrelationMatrix();
- if (tab === 'webhooks' && typeof renderWebhooks === 'function') renderWebhooks();
-
+ if (tab === 'strategy') globalThis.renderV16All?.(preloaded);
 }
 
 
@@ -1185,9 +1215,7 @@ function setWorkspaceGroup(group, persist = true, revealPane = false) {
 }
 
 function setActiveWorkspaceTab(tab, persist = true, revealPane = false) {
- const normalizedTab = tab === 'analytics' ? 'liveanalytics'
- : tab === 'alerts' ? 'scanner'
- : tab;
+ const normalizedTab = tab === 'alerts' ? 'scanner' : tab;
  const safeTab = TAB_TITLES[normalizedTab] ? normalizedTab : 'home';
  const previousTab = activeWorkspaceTab;
  const nextGroup = getWorkspaceGroupForTab(safeTab);
@@ -1223,16 +1251,31 @@ function escapeHtml(value) {
  .replace(/'/g, '&#39;');
 }
 
+function esc(value) {
+ return escapeHtml(value);
+}
+
 let systemToastTimer = null;
+const SYSTEM_TOAST_TONE_META = {
+ info: { label: 'Info' },
+ success: { label: 'Done' },
+ warn: { label: 'Review' },
+ error: { label: 'Blocked' }
+};
 
 function showSystemToast(title, message, tone = 'info', timeoutMs = 5000) {
  const toast = document.getElementById('systemToast');
  const titleEl = document.getElementById('systemToastTitle');
  const messageEl = document.getElementById('systemToastMessage');
+ const kickerEl = document.getElementById('systemToastKicker');
  if (!toast || !titleEl || !messageEl) return;
  const safeTone = ({ ok: 'success', danger: 'error' })[String(tone || '').trim().toLowerCase()] || String(tone || 'info');
+ const normalizedTone = ['info', 'warn', 'error', 'success'].includes(safeTone) ? safeTone : 'info';
  toast.classList.remove('info', 'warn', 'error', 'success');
- toast.classList.add(['info', 'warn', 'error', 'success'].includes(safeTone) ? safeTone : 'info');
+ toast.classList.add(normalizedTone);
+ toast.dataset.tone = normalizedTone;
+ toast.setAttribute('aria-live', ['warn', 'error'].includes(normalizedTone) ? 'assertive' : 'polite');
+ if (kickerEl) kickerEl.textContent = SYSTEM_TOAST_TONE_META[normalizedTone]?.label || 'Info';
  titleEl.textContent = String(title || 'Notice');
  messageEl.textContent = String(message || '');
  toast.hidden = false;
@@ -1426,58 +1469,75 @@ function buildBrainActionCard(action = {}) {
 }
 
 function resolveCommandNextStep(model = {}, topAction = null) {
- if (model.killValue === 'On') {
+ const allowedTabs = new Set(['home', 'scanner', 'strategies', 'chart', 'strategy']);
+ const scanResults = Array.isArray(model.scanResults) ? model.scanResults : [];
+ const executeCount = Number(model.executeCount || 0);
+ const setupCount = Number(model.setupCount || 0);
+ const scanActive = /scanning|loading/i.test(String(model.scanLabel || '')) || String(model.scanTone || '') === 'warn';
+ const apiNeedsAttention = model.apiValue === 'Public' || model.apiValue === 'Test';
+ const topTab = String(topAction?.targetTab || topAction?.tab || '').trim();
+ if (scanActive) {
   return {
-   label: 'Blocked',
-   title: 'Kill switch is on',
-   detail: model.killDetail || 'New live orders are blocked until safety settings are cleared.',
-   tab: 'strategy',
-   tone: 'danger',
-  };
- }
- if (Number(model.ordersValue || 0) > 0) {
-  return {
-   label: 'Order review',
-   title: 'Review pending orders before new action',
-   detail: model.ordersDetail || 'Open order cache has pending orders.',
-   tab: 'orders',
+   label: 'Scan',
+   title: 'Scanner is running',
+   detail: 'Wait for the current scan to finish, then review the latest rows.',
+   tab: 'scanner',
    tone: 'warn',
   };
  }
- if (topAction) {
+ if (topAction && allowedTabs.has(topTab)) {
   const bucketMeta = commandBucketMeta(topAction);
   return {
    label: bucketMeta.label,
-   title: topAction.title || 'Review best action',
-   detail: topAction.what || topAction.when || 'Open the target workspace for the next decision.',
-   tab: topAction.targetTab || 'scanner',
+   title: topAction.title || 'Review next step',
+   detail: topAction.what || topAction.when || 'Open the requested workspace.',
+   tab: topTab,
    action: topAction.targetAction || '',
    tone: bucketMeta.tone,
   };
  }
- if (!model.scanResults.length) {
+ if (!scanResults.length) {
   return {
    label: 'Start',
    title: 'Run a fresh scan',
-   detail: 'No scan results are loaded yet. Start with the scanner before reviewing risk or execution.',
+   detail: 'No scan results are loaded yet. Start with Scanner Activity first.',
    tab: 'scanner',
    tone: 'info',
   };
  }
- if (model.executeCount > 0) {
+ if (apiNeedsAttention) {
   return {
-   label: 'Do now',
-   title: 'Review execute alerts',
-   detail: `${model.executeCount} execute alert${model.executeCount === 1 ? '' : 's'} ready for decision.`,
+   label: 'Setup',
+   title: 'Check API and profile settings',
+   detail: 'Connection or security setup still needs attention before you use the chart and strategy tools.',
+   tab: 'strategy',
+   action: 'connection',
+   tone: 'warn',
+  };
+ }
+ if (executeCount > 0) {
+  return {
+   label: 'Review',
+   title: `${executeCount} high-confidence setup${executeCount === 1 ? '' : 's'} ready`,
+   detail: 'Open Scanner Activity to inspect the strongest signals.',
    tab: 'scanner',
    tone: 'hot',
   };
  }
+ if (setupCount > 0) {
+  return {
+   label: 'Shape',
+   title: `${setupCount} setup${setupCount === 1 ? '' : 's'} to refine`,
+   detail: 'Open the strategy lab to tune the rules behind the scan.',
+   tab: 'strategies',
+   tone: 'warn',
+  };
+ }
  return {
-  label: 'Wait',
-  title: 'No urgent action',
-  detail: 'Scanner, API, and risk state are visible. Wait for a stronger setup or refresh the scan.',
-  tab: 'scanner',
+  label: 'Explore',
+  title: 'Open the best chart view',
+  detail: 'Use the chart workspace or strategy lab to refine the next move.',
+  tab: 'chart',
   tone: 'waiting',
  };
 }
@@ -1506,19 +1566,13 @@ async function resolveSetupReadinessModel(snapshot = null) {
  SETUP_SECRETS_KEY,
  'v16LiveAccountSnapshot',
  'lastScan',
- 'lastScanTs',
  'scanResults',
- 'autoTradeSettings',
- 'autoTrade',
  ]);
  const sessionSecrets = await sessionGet(SETUP_SECRETS_KEY).catch(() => ({}));
  const metadata = data?.[SETUP_METADATA_KEY] || {};
  const profile = typeof globalThis.getV16ActiveAccountProfile === 'function'
  ? globalThis.getV16ActiveAccountProfile()
  : resolveSetupProfile(metadata);
- const killSwitch = typeof globalThis.getV16KillSwitchState === 'function'
- ? globalThis.getV16KillSwitchState()
- : (metadata?.killSwitch || {});
  const capabilityMeta = resolveSetupCapabilityMeta(profile);
  const storedSecrets = data?.[SETUP_SECRETS_KEY] || {};
  const sessionSecretStore = sessionSecrets?.[SETUP_SECRETS_KEY] || {};
@@ -1528,69 +1582,44 @@ async function resolveSetupReadinessModel(snapshot = null) {
  const snapshotState = data?.v16LiveAccountSnapshot || null;
  const appLock = globalThis.FWDAppLock?.getStatus?.() || {};
  const scanResults = Array.isArray(data?.scanResults) ? data.scanResults : [];
- const profileSaved = !!profile?.id && Number(profile?.updatedAt || 0) > 0;
- const riskReady = Number(profile?.baseBalance || 0) > 0
- && Number(profile?.riskPerTradePct || 0) > 0
- && Number(profile?.dailyLossLimitPct || 0) > 0
- && Number(profile?.maxOrderSizeUSD || 0) > 0;
- const liveProfileReady = !!profile?.id && capabilityMeta.allowsAccountRead;
- const liveTradeReady = !!profile?.id && capabilityMeta.allowsTrade && hasCredential && !killSwitch?.enabled;
- const apiReady = !!snapshotState || (!capabilityMeta.allowsAccountRead && !!data?.lastScan);
+ const apiReady = !!snapshotState || !!hasCredential || !!data?.lastScan;
  const scanReady = !!data?.lastScan || scanResults.length > 0;
  const steps = [
  {
  key: 'lock',
  label: 'App Lock',
  value: appLock.configured ? (appLock.unlocked ? 'Unlocked' : 'Locked') : 'Set up',
- detail: appLock.configured ? 'Desktop security is configured.' : 'Create a local app password before storing keys.',
+ detail: appLock.configured ? 'Desktop security is configured.' : 'Create a local app password before storing API keys.',
  tone: appLock.configured && appLock.unlocked ? 'good' : appLock.configured ? 'warn' : 'bad',
  done: appLock.configured === true,
- action: appLock.configured ? 'security' : 'security',
- },
- {
- key: 'profile',
- label: 'Profile',
- value: profileSaved ? capabilityMeta.label : 'Missing',
- detail: profileSaved ? `${profile.name || 'Primary'} | ${profile.venue || 'Delta Exchange'}` : 'Save the primary trading profile.',
- tone: profileSaved ? 'good' : 'bad',
- done: profileSaved,
- action: 'profile',
+ action: 'security',
  },
  {
  key: 'api',
  label: 'API',
- value: apiReady ? 'Ready' : liveProfileReady ? 'Test' : 'Public',
- detail: apiReady ? 'Market or private exchange data has responded.' : liveProfileReady ? 'Run API check after adding keys.' : 'Public scanner can run without private keys.',
- tone: apiReady ? 'good' : liveProfileReady ? 'warn' : 'info',
- done: apiReady || !liveProfileReady,
+ value: apiReady ? 'Ready' : 'Connect',
+ detail: apiReady ? 'Connection check or live snapshot is available.' : 'Add market-data credentials and run the connection check.',
+ tone: apiReady ? 'good' : 'warn',
+ done: apiReady,
  action: 'connection',
  },
  {
- key: 'risk',
- label: 'Risk',
- value: riskReady ? 'Configured' : 'Review',
- detail: riskReady ? `${Number(profile?.riskPerTradePct || 0).toFixed(2)}% risk | max $${Number(profile?.maxOrderSizeUSD || 0).toFixed(0)}` : 'Set balance, risk, daily loss, and max order size.',
- tone: riskReady ? 'good' : 'warn',
- done: riskReady,
- action: 'risk',
+ key: 'strategies',
+ label: 'Strategies',
+ value: scanReady ? 'Ready' : 'Build',
+ detail: scanReady ? 'Open strategy profiles from the latest scan.' : 'Run one scan, then build the first strategy set.',
+ tone: scanReady ? 'good' : 'warn',
+ done: scanReady,
+ action: 'strategy-profiles',
  },
  {
  key: 'scan',
  label: 'First Scan',
  value: scanReady ? 'Done' : 'Run',
- detail: scanReady ? `Last scan ${data?.lastScan || 'available'}` : 'Run one scan to populate scanner, command center, and research tools.',
+ detail: scanReady ? `Last scan ${data?.lastScan || 'available'}` : 'Run one scan to populate the scanner, strategy lab, and chart view.',
  tone: scanReady ? 'good' : 'warn',
  done: scanReady,
  action: 'scan',
- },
- {
- key: 'live',
- label: 'Live Trading',
- value: liveTradeReady ? 'Allowed' : killSwitch?.enabled ? 'Locked' : capabilityMeta.allowsTrade ? 'Needs Key' : 'Off',
- detail: killSwitch?.enabled ? 'Kill switch blocks new live orders.' : liveTradeReady ? 'Trade profile, credentials, and guards are ready.' : 'Keep off until profile, keys, and risk are verified.',
- tone: liveTradeReady ? 'good' : killSwitch?.enabled ? 'bad' : 'warn',
- done: liveTradeReady || !capabilityMeta.allowsTrade,
- action: killSwitch?.enabled ? 'api-keys' : 'guards',
  },
  ];
  const blocker = steps.find(step => !step.done);
@@ -1598,24 +1627,28 @@ async function resolveSetupReadinessModel(snapshot = null) {
  return {
  profile,
  capabilityMeta,
- killSwitch,
- steps,
- readyCount,
- totalCount: steps.length,
- liveTradeReady,
- needsSetup: !!blocker,
- primaryAction: blocker?.action || 'scan',
- primaryLabel: blocker ? `Fix ${blocker.label}` : 'Run Scan',
+ appLock,
+ apiReady,
+ scanReady,
+  steps,
+  readyCount,
+  totalCount: steps.length,
+  needsSetup: !!blocker,
+  primaryAction: blocker?.action || 'scan',
+  primaryLabel: blocker ? `Fix ${blocker.label}` : 'Run Scan',
  };
 }
 
 function setupActionTarget(action = '') {
  const normalized = String(action || '').trim();
  if (normalized === 'scan') return { tab: 'scanner', click: 'btnScan' };
- if (normalized === 'riskcalc') return { tab: 'riskcalc' };
- const settingsPanels = new Set(['scanner-rules', 'strategy-profiles', 'charts', 'profile', 'paper-mode', 'api-keys', 'connection', 'security', 'risk', 'guards', 'var', 'risk-templates', 'futures-auto', 'backup', 'recovery', 'api', 'dca', 'options-auto', 'straddle-auto']);
+ if (normalized === 'strategy') return { tab: 'strategy' };
+ if (normalized === 'chart') return { tab: 'chart' };
+ if (normalized === 'scanner') return { tab: 'scanner' };
+ if (normalized === 'home') return { tab: 'home' };
+ const settingsPanels = new Set(['scanner-rules', 'strategy-profiles', 'charts', 'profile', 'api-keys', 'connection', 'security', 'api']);
  if (settingsPanels.has(normalized)) return { tab: 'strategy', settingsTarget: normalized };
- return { tab: normalized || 'home' };
+ return { tab: normalized || 'scanner' };
 }
 
 function runSetupAction(action = '') {
@@ -1635,12 +1668,16 @@ async function renderSetupReadiness(snapshot = null) {
  if (!strip && !guide) return;
  const model = await resolveSetupReadinessModel(snapshot).catch(() => null);
  if (!model) return;
+ const title = model.needsSetup ? 'Scanner setup not ready' : 'Scanner setup ready';
+ const copy = model.needsSetup
+ ? 'Finish the checklist so scanner activity, strategy builds, chart view, and API checks stay in sync.'
+ : 'Scanner activity, strategy builds, chart view, and API are ready to use together.';
  const stripHtml = `
  <div class="setup-readiness-left">
- <div class="setup-readiness-score ${model.liveTradeReady ? 'good' : model.needsSetup ? 'warn' : 'good'}">${model.readyCount}/${model.totalCount}</div>
+ <div class="setup-readiness-score ${model.needsSetup ? 'warn' : 'good'}">${model.readyCount}/${model.totalCount}</div>
  <div>
- <div class="setup-readiness-title">${model.liveTradeReady ? 'Trading profile ready' : model.needsSetup ? 'Trading profile not ready' : 'Research desk ready'}</div>
- <div class="setup-readiness-copy">${model.liveTradeReady ? 'Live trading is allowed by profile, credentials, guards, and kill switch.' : 'Complete the checklist before enabling live execution.'}</div>
+ <div class="setup-readiness-title">${title}</div>
+ <div class="setup-readiness-copy">${copy}</div>
  </div>
  </div>
  <div class="setup-readiness-steps">
@@ -1652,7 +1689,7 @@ async function renderSetupReadiness(snapshot = null) {
  guide.hidden = !model.needsSetup;
  guide.innerHTML = model.needsSetup ? `
  <div class="setup-guide-head">
- <div><strong>First-Time Setup</strong><span>Finish these items once, then the desk stays quiet.</span></div>
+ <div><strong>Scanner Setup</strong><span>Finish these items once, then the desk stays quiet.</span></div>
  <button class="setup-guide-close" data-setup-guide-dismiss type="button">Hide</button>
  </div>
  <div class="setup-guide-grid">
@@ -1709,25 +1746,12 @@ function buildCommandPaletteCommands() {
  { id: 'scan', title: 'Scan Now', subtitle: 'Run the scanner immediately', keywords: 'scan market refresh signals', action: () => { setActiveWorkspaceTab('scanner', true, true); setTimeout(() => document.getElementById('btnScan')?.click(), 80); } },
  { id: 'home', title: 'Command Center', subtitle: 'Open daily operating dashboard', keywords: 'home dashboard command center', tab: 'home' },
  { id: 'scanner', title: 'Scanner', subtitle: 'Review signals and alerts', keywords: 'signals alerts execute setup scanner', tab: 'scanner' },
- { id: 'watchlist', title: 'Watchlist', subtitle: 'Open pinned symbols and custom alerts', keywords: 'watchlist pinned custom alert', tab: 'watchlist' },
+ { id: 'strategies', title: 'Strategies', subtitle: 'Open strategy lab and scanner families', keywords: 'strategies strategy lab scanner families', tab: 'strategies' },
  { id: 'chart', title: 'Chart Workspace', subtitle: 'Open clean key-level chart workspace', keywords: 'chart key levels candle tradingview', tab: 'chart' },
- { id: 'options', title: 'Native Straddle', subtitle: 'Open lightweight MV straddle scanner view', keywords: 'options native straddle scanner mv', tab: 'options' },
- { id: 'analytics', title: 'Analytics', subtitle: 'Open live analytics and journal', keywords: 'analytics journal pnl history', tab: 'liveanalytics' },
- { id: 'funds', title: 'Funds', subtitle: 'Open wallet and cash movement view', keywords: 'funds wallet balance cash', tab: 'funds' },
- { id: 'positions', title: 'Positions', subtitle: 'Manage exposure, stops, targets, journal', keywords: 'positions exposure stop target close flatten', tab: 'positions' },
- { id: 'orders', title: 'Orders', subtitle: 'Review open orders, audit, notifications', keywords: 'orders audit notifications reconciliation', tab: 'orders' },
- { id: 'riskcalc', title: 'Risk Cockpit', subtitle: 'Position sizing, guards, VAR', keywords: 'risk var sizing leverage loss guard', tab: 'riskcalc' },
- { id: 'funding', title: 'Funding Map', subtitle: 'Crowding and funding research', keywords: 'funding crowding heatmap arbitrage', tab: 'funding' },
- { id: 'corr', title: 'Correlation Matrix', subtitle: 'Cluster risk and hedges', keywords: 'correlation matrix cluster hedge', tab: 'corr' },
- { id: 'settings-profile', title: 'Profile Settings', subtitle: 'User profile, mode, venue', keywords: 'profile mode user venue read trade', action: () => runSetupAction('profile') },
- { id: 'settings-paper', title: 'Paper Trading', subtitle: 'Forward test without live futures orders', keywords: 'paper trading shadow ledger forward test', action: () => runSetupAction('paper-mode') },
- { id: 'settings-presets', title: 'Strategy Profiles', subtitle: 'Apply scanner and risk presets', keywords: 'strategy profile preset risk scanner paper', action: () => runSetupAction('strategy-profiles') },
- { id: 'settings-api', title: 'API Keys', subtitle: 'Credentials and kill switch', keywords: 'api key secret credential kill switch', action: () => runSetupAction('api-keys') },
- { id: 'settings-risk', title: 'Risk Settings', subtitle: 'Balance, day loss, order size', keywords: 'risk settings balance daily loss order size', action: () => runSetupAction('risk') },
+ { id: 'settings-presets', title: 'Strategy Profiles', subtitle: 'Apply scanner and strategy presets', keywords: 'strategy profile preset scanner rules', action: () => runSetupAction('strategy-profiles') },
+ { id: 'settings-api', title: 'API Keys', subtitle: 'Credentials and connection check', keywords: 'api key secret credential connection', action: () => runSetupAction('api-keys') },
  { id: 'connection', title: 'Connection Check', subtitle: 'Run market-data readiness checks', keywords: 'connection api health market data check', action: () => runSetupAction('connection') },
  { id: 'recovery', title: 'Recovery Center', subtitle: 'Fix blocked setup and stale runtime state', keywords: 'recovery error fix blocked cooldown stale runtime', action: () => runSetupAction('recovery') },
- { id: 'webhooks', title: 'Telegram & Webhooks', subtitle: 'External alerts and automation', keywords: 'telegram webhook automation alerts', tab: 'webhooks' },
- { id: 'debug', title: 'Debug Log', subtitle: 'Open raw diagnostics', keywords: 'debug log diagnostics', tab: 'debug' },
  ];
  const symbolMap = new Map();
  const addSymbolCommand = (symbol, signal = null, source = 'Symbol') => {
@@ -1746,10 +1770,6 @@ function buildCommandPaletteCommands() {
  .sort((a, b) => Number(b?.score || 0) - Number(a?.score || 0))
  .slice(0, 30)
  .forEach(signal => addSymbolCommand(signal?.symbol, signal, 'Scan result'));
- [
- ...(Array.isArray(commandPaletteSnapshot.watchlist) ? commandPaletteSnapshot.watchlist : []),
- ...(Array.isArray(commandPaletteSnapshot.manualWatchlist) ? commandPaletteSnapshot.manualWatchlist : []),
- ].slice(0, 30).forEach(symbol => addSymbolCommand(symbol, null, 'Watchlist'));
  return [...commands, ...symbolMap.values()];
 }
 
@@ -1899,19 +1919,14 @@ document.addEventListener('keydown', event => {
  openCommandPalette('symbol');
  return;
  }
+ if (!isTyping && event.altKey && key === 'g') {
+ event.preventDefault();
+ setActiveWorkspaceTab('strategies', true, true);
+ return;
+ }
  if (!isTyping && event.altKey && key === 'c') {
  event.preventDefault();
  setActiveWorkspaceTab('chart', true, true);
- return;
- }
- if (!isTyping && event.altKey && key === 'o') {
- event.preventDefault();
- setActiveWorkspaceTab('orders', true, true);
- return;
- }
- if (!isTyping && event.altKey && key === 'p') {
- event.preventDefault();
- setActiveWorkspaceTab('positions', true, true);
  return;
  }
  if (!isTyping && key === '/') {
@@ -1928,70 +1943,51 @@ document.addEventListener('keydown', event => {
 function resolveCommandCenterModel(d = {}) {
  const scanResults = Array.isArray(d.scanResults) ? d.scanResults : [];
  const alerts = getLiveAlertSnapshot(d.alerts, scanResults);
- const watchlist = Array.isArray(d.watchlist) ? d.watchlist : [];
- const manualWatchlist = Array.isArray(d.manualWatchlist) ? d.manualWatchlist : [];
- const manualPositions = Array.isArray(d.analyticsPositions) ? d.analyticsPositions : [];
- const snapshot = d.v16LiveAccountSnapshot || null;
- const livePositions = Array.isArray(snapshot?.marginedPositions)
- ? snapshot.marginedPositions.filter(p => Number(p?.size || 0) !== 0)
- : [];
- const liveOrders = Array.isArray(snapshot?.openOrders)
- ? snapshot.openOrders.filter(order => ['open', 'pending'].includes(String(order?.state || '').toLowerCase()))
- : [];
- const positions = livePositions.length ? livePositions : manualPositions;
  const executeCount = alerts.filter(a => String(a.alertTier || '').toLowerCase() === 'execute').length;
  const setupCount = alerts.filter(a => String(a.alertTier || '').toLowerCase() === 'setup').length;
- const scanActive = !!d.scanActive || /loading|scanning/i.test(String(d.scanStatus || ''));
+ const watchAlertCount = alerts.filter(a => String(a.alertTier || '').toLowerCase() === 'watch').length;
+ const scanActive = isScannerUiActive(d);
  const scanLabel = scanActive ? 'Scanning' : (d.lastScan ? 'Idle' : 'Not Run');
  const scanDetail = scanActive
  ? `${Number(d.scanProgress || 0)}% complete`
  : (d.lastScan ? `Last scan ${d.lastScan}` : 'Run the first scan to fill the desk.');
- const killSwitch = typeof globalThis.getV16KillSwitchState === 'function'
- ? globalThis.getV16KillSwitchState()
- : { enabled: false, reason: '' };
  const profile = typeof globalThis.getV16ActiveAccountProfile === 'function'
  ? globalThis.getV16ActiveAccountProfile()
  : {};
- const capabilityMeta = typeof getAccountCapabilityMeta === 'function'
- ? getAccountCapabilityMeta(profile?.capability)
- : null;
- const apiValue = snapshot?.rateLimit ? 'Cooling' : (snapshot ? 'Connected' : (profile?.id ? 'Configured' : 'Not Ready'));
- const apiDetail = snapshot?.baseUrl
- ? `${String(snapshot.region || '').toUpperCase() || 'Delta'} ${snapshot.cached ? 'cached' : 'live'} snapshot`
- : (profile?.id ? `${capabilityMeta?.label || 'Profile'} profile selected` : 'Add or select an account profile.');
- const riskBudget = Number(d.autoTradeSettings?.dailyLossLimitUSD || 0);
- const dailyLoss = Number(d.autoTradeDailyLoss || d.autoTradeDecisionAuditV16?.dailyLossUsed || 0);
- const riskValue = riskBudget > 0 ? `$${Math.max(0, dailyLoss).toFixed(0)} / $${riskBudget.toFixed(0)}` : `${positions.length} open`;
- const riskDetail = riskBudget > 0 ? 'Daily loss guard usage' : 'Open exposure count';
- const slotMax = Number(d.autoTradeDecisionAuditV16?.maxConcurrent || d.autoTradeSettings?.maxConcurrent || 0);
- const slotUsed = Number(d.autoTradeDecisionAuditV16?.openCount || (livePositions.length + liveOrders.filter(order => !order?.reduce_only && !order?.reduceOnly).length) || positions.length);
- const pendingDetail = liveOrders.length ? `${liveOrders.length} live order${liveOrders.length === 1 ? '' : 's'} waiting` : 'No cached pending orders';
- const brainInput = {
- ...d,
- killSwitch,
- };
- const brain = globalThis.FWDTradeDeskActionBrain?.buildActionBrain
- ? globalThis.FWDTradeDeskActionBrain.buildActionBrain(brainInput)
- : null;
- const learning = brain?.learning || {};
- const automationOn = !!d.autoTradeSettings?.enabled || !!d.autoTrade;
- const executionMode = automationOn ? 'Live rules on' : Number(learning.paperOpen || 0) || Number(learning.paperClosed || 0) ? 'Paper learning' : 'Manual review';
+ const snapshot = d.v16LiveAccountSnapshot || null;
+ const topSignal = scanResults[0] || null;
+ const apiValue = snapshot ? 'Ready' : 'Check';
+ const apiDetail = snapshot
+ ? 'Market-data connection responded.'
+ : 'Run the connection check after saving keys.';
+ const settingsValue = 'Local Desk';
+ const settingsDetail = 'Security and market-data settings';
+ const strategyValue = executeCount > 0
+ ? `${executeCount} ready`
+ : setupCount > 0
+ ? `${setupCount} setup${setupCount === 1 ? '' : 's'}`
+ : 'Build';
+ const strategyDetail = executeCount > 0
+ ? `${executeCount} high-confidence setup${executeCount === 1 ? '' : 's'} waiting in Scanner Activity`
+ : setupCount > 0
+ ? 'Open the strategy lab to tune the rules behind the latest scan.'
+ : 'Build the first strategy profile after scanning.';
+ const chartValue = topSignal?.symbol || 'Open';
+ const chartDetail = topSignal
+ ? `${topSignal.score || '--'}/100 | ${String(topSignal.direction || topSignal.alertTier || 'signal').toUpperCase()} | open the chart`
+ : 'Open the chart workspace to inspect the next signal.';
+ const settingsTone = 'good';
+ const strategyTone = executeCount > 0 ? 'hot' : setupCount > 0 ? 'warn' : 'info';
+ const chartTone = topSignal ? 'good' : 'info';
  const actions = [
- executeCount
- ? ['Review execute queue', `${executeCount} execute alert${executeCount === 1 ? '' : 's'} ready`, 'scanner', 'hot']
- : ['Scan market now', scanActive ? 'Scan is already running' : 'Refresh all trade candidates', 'scanner', ''],
- positions.length
- ? ['Manage open exposure', `${positions.length} active position${positions.length === 1 ? '' : 's'}`, 'positions', 'warn']
- : ['Check position desk', 'Load live account or add manual positions', 'positions', ''],
- liveOrders.length
- ? ['Review pending orders', pendingDetail, 'orders', 'warn']
- : ['Open orders desk', 'No pending orders in cache', 'orders', ''],
- killSwitch?.enabled
- ? ['Open safety settings', killSwitch.reason || 'Kill switch is armed', 'strategy', 'danger']
- : ['Open Risk Cockpit', slotMax ? `Slots ${slotUsed}/${slotMax} used` : 'Confirm size, VAR, and exposure', 'riskcalc', ''],
- watchlist.length || manualWatchlist.length
- ? ['Refresh watchlist', `${Math.max(watchlist.length, manualWatchlist.length)} symbols tracked`, 'watchlist', '']
- : ['Build watchlist', 'Pin setups you want to monitor', 'watchlist', ''],
+ scanActive
+ ? ['Scanner running', 'Wait for the current scan to finish before switching workspaces', 'scanner', 'warn']
+ : executeCount
+ ? ['Review setups', `${executeCount} execute alert${executeCount === 1 ? '' : 's'} ready`, 'scanner', 'hot']
+ : ['Scan market now', 'Refresh all signals and populate the decision queue', 'scanner', ''],
+ ['Open strategy lab', setupCount ? `${setupCount} setup${setupCount === 1 ? '' : 's'} ready to shape` : 'Build scanner and entry rules', 'strategies', ''],
+ ['Open chart view', topSignal ? `${topSignal.symbol} is the strongest chart candidate` : 'Inspect the clean chart workspace', 'chart', ''],
+ ['Check settings & API', snapshot ? 'Connection is ready' : 'Run the connection check', 'strategy', ''],
  ];
  return {
  scanLabel,
@@ -1999,25 +1995,23 @@ function resolveCommandCenterModel(d = {}) {
  scanTone: scanActive ? 'warn' : (d.lastScan ? 'good' : 'bad'),
  apiValue,
  apiDetail,
- apiTone: snapshot?.rateLimit ? 'warn' : (snapshot || profile?.id ? 'good' : 'bad'),
- killValue: killSwitch?.enabled ? 'On' : 'Off',
- killDetail: killSwitch?.enabled ? (killSwitch.reason || 'New live orders blocked') : 'No kill-switch block active',
- killTone: killSwitch?.enabled ? 'bad' : 'good',
- riskValue,
- riskDetail,
- riskTone: riskBudget > 0 && dailyLoss >= riskBudget ? 'bad' : (positions.length ? 'warn' : 'good'),
- positionsValue: String(positions.length),
- positionsDetail: livePositions.length ? 'Live Delta positions' : 'Manual/tracked positions',
- ordersValue: String(liveOrders.length),
- ordersDetail: pendingDetail,
+ apiTone: snapshot ? 'good' : 'warn',
+ settingsValue,
+ settingsDetail,
+ settingsTone,
+ strategyValue,
+ strategyDetail,
+ strategyTone,
+ chartValue,
+ chartDetail,
+ chartTone,
  scanResults,
  executeCount,
  setupCount,
- watchlist,
+ watchAlertCount,
  actions,
- brain,
- learning,
- executionMode,
+ topSignal,
+ profile,
  };
 }
 
@@ -2026,63 +2020,50 @@ function renderCommandCenter(d = {}) {
  if (!root) return;
  const model = resolveCommandCenterModel(d);
  const metricsHtml = [
- buildCommandMetricCard('risk', 'Today Open Risk', model.riskValue, model.riskDetail, model.riskTone, 'riskcalc'),
- buildCommandMetricCard('positions', 'Active Positions', model.positionsValue, model.positionsDetail, model.positionsValue === '0' ? '' : 'warn', 'positions'),
- buildCommandMetricCard('orders', 'Pending Orders', model.ordersValue, model.ordersDetail, model.ordersValue === '0' ? 'good' : 'warn', 'orders'),
- buildCommandMetricCard('kill', 'Kill Switch', model.killValue, model.killDetail, model.killTone, 'strategy'),
- buildCommandMetricCard('api', 'API State', model.apiValue, model.apiDetail, model.apiTone, 'funds'),
- buildCommandMetricCard('scan', 'Scan Health', model.scanLabel, model.scanDetail, model.scanTone, 'scanner'),
+ buildCommandMetricCard('scan', 'Scanner Activity', model.scanLabel, model.scanDetail, model.scanTone, 'scanner'),
+ buildCommandMetricCard('strategy', 'Strategy Queue', model.strategyValue, model.strategyDetail, model.strategyTone, 'strategies'),
+ buildCommandMetricCard('chart', 'Chart View', model.chartValue, model.chartDetail, model.chartTone, 'chart'),
+ buildCommandMetricCard('api', 'API State', model.apiValue, model.apiDetail, model.apiTone, 'strategy'),
+ buildCommandMetricCard('settings', 'Settings', model.settingsValue, model.settingsDetail, model.settingsTone, 'strategy'),
  ].join('');
- const brain = model.brain || null;
- const brainActions = Array.isArray(brain?.actions) ? brain.actions : [];
- const actionsHtml = brainActions.length
- ? brainActions.slice(0, 6).map(buildBrainActionCard).join('')
- : model.actions.slice(0, 5)
+ const actionsHtml = model.actions.slice(0, 5)
  .map(action => buildCommandAction(action[0], action[1], action[2], action[3]))
  .join('');
- const topAction = brain?.top || null;
- const nextStep = resolveCommandNextStep(model, topAction);
+ const nextStep = resolveCommandNextStep(model, null);
  const queueState = nextStep.label;
- const learning = model.learning || {};
  const emptyDesk = !model.scanResults.length;
  const nextTabLabel = {
-  riskcalc: 'Risk Cockpit',
-  strategy: 'Settings',
-  scanner: 'Scanner',
-  orders: 'Orders',
-  positions: 'Positions',
-  funds: 'Funds',
-  liveanalytics: 'Journal',
-  watchlist: 'Watchlist',
+  scanner: 'Scanner Activity',
+  strategies: 'Strategies',
+  chart: 'Chart View',
+  strategy: 'Settings & API',
+  home: 'Command Center',
  }[nextStep.tab] || nextStep.tab || 'workspace';
- const blockerTitle = model.killValue === 'On'
- ? 'Live orders blocked'
- : Number(model.ordersValue || 0) > 0
- ? 'Pending order review'
- : model.apiValue === 'Cooling'
- ? 'API cooldown active'
+ const blockerTitle = model.scanTone === 'warn'
+ ? 'Scanner running'
  : emptyDesk
  ? 'No scan loaded'
- : 'No hard blocker';
- const blockerDetail = model.killValue === 'On'
- ? model.killDetail
- : Number(model.ordersValue || 0) > 0
- ? model.ordersDetail
- : model.apiValue === 'Cooling'
- ? model.apiDetail
+ : model.apiValue === 'Check'
+ ? 'API check pending'
+ : 'Ready to review';
+ const blockerDetail = model.scanTone === 'warn'
+ ? 'Let the current scan finish before choosing the next workspace.'
  : emptyDesk
- ? 'Run one scan so the desk can rank candidates and risk.'
- : 'Risk, API, and queue state are clear enough for review.';
+ ? 'Run one scan so the desk can rank the next setup.'
+ : model.apiValue === 'Check'
+ ? model.apiDetail
+ : 'Scanner, strategy, chart, and API state are aligned.';
  const emptyHtml = emptyDesk ? `<div class="command-empty-panel">
  <div>
- <span>Getting started state</span>
- <strong>Run one scan to fill the decision queue</strong>
- <small>The Command Center becomes useful after it has current scanner rows, alert tiers, and account state.</small>
+  <span>Getting started state</span>
+  <strong>Run one scan to fill the decision queue</strong>
+  <small>The Command Center becomes useful after it has current scanner rows, strategy cues, chart candidates, and account state.</small>
  </div>
  <div class="command-empty-actions">
- <button type="button" data-tab="scanner" data-scan-now="1">Run scan</button>
- <button type="button" data-tab="strategy">Check setup</button>
- <button type="button" data-tab="riskcalc">Review risk</button>
+  <button type="button" data-tab="scanner" data-scan-now="1">Run scan</button>
+  <button type="button" data-tab="strategies">Open strategies</button>
+  <button type="button" data-tab="chart">Open chart</button>
+  <button type="button" data-tab="strategy">Check setup</button>
  </div>
  </div>` : '';
  root.innerHTML = `
@@ -2102,48 +2083,47 @@ function renderCommandCenter(d = {}) {
  </div>
  <aside class="command-next-support" aria-label="Decision support">
  <div class="command-next-stat">
- <span>Blocker</span>
- <strong>${escapeHtml(blockerTitle)}</strong>
- <small>${escapeHtml(blockerDetail)}</small>
+  <span>Blocker</span>
+  <strong>${escapeHtml(blockerTitle)}</strong>
+  <small>${escapeHtml(blockerDetail)}</small>
  </div>
  <div class="command-next-stat">
- <span>Execution</span>
- <strong>${model.killValue === 'On' ? 'Locked' : model.ordersValue !== '0' ? 'Review orders' : model.executionMode}</strong>
- <small>${escapeHtml(model.executeCount)} execute alert${model.executeCount === 1 ? '' : 's'} / ${escapeHtml(model.ordersValue)} pending order${model.ordersValue === '1' ? '' : 's'}</small>
+  <span>Priority</span>
+  <strong>${escapeHtml(queueState)}</strong>
+  <small>${escapeHtml(model.executeCount)} execute alert${model.executeCount === 1 ? '' : 's'} / ${escapeHtml(model.setupCount)} setup${model.setupCount === 1 ? '' : 's'}</small>
  </div>
  <div class="command-next-why">
- <span>Why this is first</span>
- <strong>${escapeHtml(emptyDesk ? 'The desk has no current market ranking.' : topAction?.source || 'Risk state and queue state are highest priority.')}</strong>
- <small>${escapeHtml(emptyDesk ? 'Scan first, then confirm risk before acting.' : topAction?.when || 'The supporting metrics below explain whether to act, wait, or protect first.')}</small>
+  <span>Why this is first</span>
+  <strong>${escapeHtml(emptyDesk ? 'The desk has no current market ranking.' : nextStep.title)}</strong>
+  <small>${escapeHtml(emptyDesk ? 'Scan first, then refine the strategy lab and chart view.' : nextStep.detail)}</small>
  </div>
  </aside>
  </section>
  </div>
  <div class="command-day-strip">
  <button type="button" data-tab="scanner"><span>Market scan</span><strong>${escapeHtml(model.scanLabel)}</strong></button>
- <button type="button" data-tab="liveanalytics"><span>Paper learning</span><strong>${escapeHtml(String(learning.paperClosed || 0))} closed</strong></button>
- <button type="button" data-tab="liveanalytics"><span>Open paper</span><strong>${escapeHtml(String(learning.paperOpen || 0))}</strong></button>
- <button type="button" data-tab="funds"><span>API</span><strong>${escapeHtml(model.apiValue)}</strong></button>
+ <button type="button" data-tab="strategies"><span>Strategy queue</span><strong>${escapeHtml(model.strategyValue)}</strong></button>
+ <button type="button" data-tab="chart"><span>Chart view</span><strong>${escapeHtml(model.chartValue)}</strong></button>
+ <button type="button" data-tab="strategy"><span>API</span><strong>${escapeHtml(model.apiValue)}</strong></button>
  </div>
  <div class="command-metric-grid">${metricsHtml}</div>
  <div class="command-lower-grid">
  <section class="command-panel">
- <div class="command-panel-title">Action Brain Queue</div>
- <div class="command-action-list">${actionsHtml}${emptyHtml}</div>
+  <div class="command-panel-title">Action Brain Queue</div>
+  <div class="command-action-list">${actionsHtml}${emptyHtml}</div>
  </section>
  <section class="command-panel command-snapshot-panel">
- <div class="command-panel-title">Decision Snapshot</div>
- <div class="command-snapshot-status ${escapeHtml(nextStep.tone)}">
- <strong>${escapeHtml(nextStep.title)}</strong>
- <span>${escapeHtml(nextStep.detail)}</span>
- </div>
- <div class="command-snapshot-row"><span>Trade desk</span><strong>${escapeHtml(model.scanLabel)}</strong></div>
- <div class="command-snapshot-row"><span>Mode</span><strong>${escapeHtml(model.executionMode)}</strong></div>
- <div class="command-snapshot-row"><span>Paper edge</span><strong>${escapeHtml(String(learning.setupRows || 0))} setup rows</strong></div>
- <div class="command-snapshot-row"><span>Min sample</span><strong>${escapeHtml(String(learning.minSample || '--'))}</strong></div>
- <div class="command-snapshot-row"><span>Execution</span><strong>${model.killValue === 'On' ? 'Locked' : model.ordersValue !== '0' ? 'Review orders' : 'Ready'}</strong></div>
- <div class="command-snapshot-row"><span>Private API</span><strong>${escapeHtml(model.apiValue)}</strong></div>
- <div class="command-snapshot-row"><span>Queue</span><strong>${escapeHtml(model.executeCount)} execute / ${escapeHtml(model.ordersValue)} orders</strong></div>
+  <div class="command-panel-title">Decision Snapshot</div>
+  <div class="command-snapshot-status ${escapeHtml(nextStep.tone)}">
+  <strong>${escapeHtml(nextStep.title)}</strong>
+  <span>${escapeHtml(nextStep.detail)}</span>
+  </div>
+  <div class="command-snapshot-row"><span>Scan status</span><strong>${escapeHtml(model.scanLabel)}</strong></div>
+  <div class="command-snapshot-row"><span>Strategy queue</span><strong>${escapeHtml(model.executeCount)} execute / ${escapeHtml(model.setupCount)} setup</strong></div>
+  <div class="command-snapshot-row"><span>Chart view</span><strong>${escapeHtml(model.chartValue)}</strong></div>
+  <div class="command-snapshot-row"><span>API</span><strong>${escapeHtml(model.apiValue)}</strong></div>
+  <div class="command-snapshot-row"><span>Settings</span><strong>${escapeHtml(model.settingsValue)}</strong></div>
+  <div class="command-snapshot-row"><span>Next step</span><strong>${escapeHtml(nextStep.label)}</strong></div>
  </section>
  </div>
  `;
@@ -2170,10 +2150,8 @@ function renderCommandCenter(d = {}) {
 
 async function updateWorkspaceInsights(snapshot = null) {
  const d = snapshot || await storeGet([
- 'scanStatus', 'lastScan', 'alerts', 'watchlist', 'analyticsPositions',
- 'marketIndex', 'scanResults', 'scanActive', 'scanProgress', 'manualWatchlist',
- 'v16LiveAccountSnapshot', 'autoTradeSettings', 'autoTradeDailyLoss',
- 'autoTradeDecisionAuditV16', 'v16ShadowTradeLedgerV1', 'v16SetupPerformanceV1',
+ 'scanStatus', 'lastScan', 'alerts', 'scanResults', 'scanActive', 'scanProgress', 'scanHeartbeat',
+ 'v16LiveAccountSnapshot',
  SETUP_METADATA_KEY, SETUP_SECRETS_KEY,
  ]);
  commandPaletteSnapshot = d || {};
@@ -2181,62 +2159,33 @@ async function updateWorkspaceInsights(snapshot = null) {
  renderSetupReadiness(d);
  const scanResults = Array.isArray(d.scanResults) ? d.scanResults : [];
  const alerts = getLiveAlertSnapshot(d.alerts, scanResults);
- const watchlist = Array.isArray(d.watchlist) ? d.watchlist : [];
- const positions = Array.isArray(d.analyticsPositions) ? d.analyticsPositions : [];
  const executeCount = alerts.filter(a => String(a.alertTier || '').toLowerCase() === 'execute').length;
  const setupCount = alerts.filter(a => String(a.alertTier || '').toLowerCase() === 'setup').length;
  const watchAlertCount = alerts.filter(a => String(a.alertTier || '').toLowerCase() === 'watch').length;
- const marketIndex = d.marketIndex || null;
- const regimeValue = marketIndex?.regime ? String(marketIndex.regime).replace(/_/g, ' ') : 'READY';
- const sentimentValue = Number(marketIndex?.sentiment?.value ?? marketIndex?.value ?? NaN);
- const indexMove = Number(marketIndex?.indexChangePct ?? NaN);
- const regimeDelta = Number.isFinite(sentimentValue)
- ? `Sent ${sentimentValue >= 0 ? '+' : ''}${sentimentValue.toFixed(2)}% | Index ${Number.isFinite(indexMove) ? `${indexMove >= 0 ? '+' : ''}${indexMove.toFixed(2)}%` : '-'}`
- : 'No index yet';
- const leadershipLabel = marketIndex?.leadership?.label || 'Mixed Leadership';
- const thresholdSummary = marketIndex?.thresholdSummary || 'Execute >= 65 | Setup >= 60 | Watch >= 45';
- const strengthRank = { prime: 3, strong: 2, early: 1 };
- const emergingCandidates = scanResults
- .filter(r => r?.emergingMove)
- .sort((a, b) => {
- const aRank = strengthRank[a.emergingMove?.strength] || 0;
- const bRank = strengthRank[b.emergingMove?.strength] || 0;
- return bRank - aRank || Number(b.score || 0) - Number(a.score || 0);
- });
- const emergingFocus = emergingCandidates[0] || null;
- const emergingCount = emergingCandidates.length;
- const emergingValue = emergingCount ? `${emergingCount}` : 'QUIET';
- const emergingTopList = emergingCandidates.slice(0, 3).map(r => r.symbol).join(' | ');
- const emergingSub = emergingFocus?.emergingMove
- ? `<strong>${emergingFocus.symbol}</strong> | ${emergingFocus.emergingMove.mode === 'reversal' ? 'Reversal' : 'Ignition'} ${String(emergingFocus.emergingMove.strength || '').toUpperCase()}${emergingCount > 1 ? ` | +${emergingCount - 1} more` : ''}<br/>${emergingTopList}`
- : 'No emerging move in the current scan snapshot';
- const scanTone = d.scanStatus && d.scanStatus !== 'done' ? 'warn' : (d.lastScan ? 'ok' : 'fail');
+ const scanActive = isScannerUiActive(d);
+ const scanTone = scanActive ? 'warn' : (d.lastScan ? 'ok' : 'fail');
+ const topSignal = scanResults[0] || null;
+ const profile = typeof globalThis.getV16ActiveAccountProfile === 'function'
+ ? globalThis.getV16ActiveAccountProfile()
+ : {};
+ const settingsReady = true;
+ const apiState = d.v16LiveAccountSnapshot ? 'Ready' : 'Check';
  const trustHtml = [
- buildTrustPill('Status', d.scanStatus && d.scanStatus !== 'done' ? 'Scanning' : 'Idle', scanTone),
+ buildTrustPill('Status', scanActive ? 'Scanning' : 'Idle', scanTone),
  buildTrustPill('Last Scan', d.lastScan || 'Not run', d.lastScan ? 'ok' : 'fail'),
- buildTrustPill('Alert Stack', `${executeCount} exec | ${setupCount} setup | ${watchAlertCount} watch`, executeCount ? 'warn' : ''),
- buildTrustPill('Portfolio', `${positions.length} manual | ${watchlist.length} watch`, positions.length || watchlist.length ? 'ok' : ''),
- buildTrustPill('Leadership', leadershipLabel, marketIndex?.leadership?.tone === 'bad' ? 'warn' : 'ok'),
- buildTrustPill('Thresholds', thresholdSummary, 'ok'),
+ buildTrustPill('Signal Stack', `${executeCount} exec | ${setupCount} setup | ${watchAlertCount} watch`, executeCount ? 'warn' : ''),
+ buildTrustPill('Strategy Queue', `${scanResults.length} signal${scanResults.length === 1 ? '' : 's'}`, scanResults.length ? 'ok' : ''),
+ buildTrustPill('API State', apiState, apiState === 'Ready' ? 'ok' : 'warn'),
  ].join('');
  const trustEl = document.getElementById('trustBar');
  if (trustEl) trustEl.innerHTML = trustHtml;
 
  const overviewHtml = [
- buildOverviewCard('regime', 'Market Regime', regimeValue, `<strong>${regimeDelta}</strong> on FWD-10 | ${leadershipLabel} | ${scanResults.length} live signals`, 'scanner'),
- buildOverviewCard(
- 'emerging',
- 'Emerging Move',
- emergingValue,
- emergingSub,
- 'scanner',
- emergingFocus?.symbol ? `data-sym="${esc(emergingFocus.symbol)}"` : ''
- ),
- buildOverviewCard('execute', 'Execute Queue', String(executeCount), `${alerts.length} live alerts | click to review active setups`, 'alerts'),
- buildOverviewCard('watch', 'Watchlist', String(watchlist.length), `${watchlist.length ? 'Pinned ideas ready for refresh' : 'No pinned coins yet'}`, 'watchlist'),
- buildOverviewCard('portfolio', 'Portfolio', String(positions.length), `${positions.length ? 'Tracked positions ready in Position Desk' : 'Use Position Desk for live exposure and review'}`, 'positions'),
- buildOverviewCard('review', 'Review', 'Live Journal', 'Trade history and journal now live in Analytics', 'liveanalytics'),
- buildOverviewCard('research', 'Research', String(scanResults.length), 'Funding and matrix use the latest scan snapshot', 'funding'),
+ buildOverviewCard('scanner', 'Scanner Activity', scanActive ? 'Scanning' : (d.lastScan ? 'Idle' : 'Start'), `<strong>${scanResults.length} signal${scanResults.length === 1 ? '' : 's'}</strong> | ${scanActive ? 'scan in progress' : 'latest scan snapshot'}`, 'scanner'),
+ buildOverviewCard('setup', 'Best Setup', topSignal?.symbol || 'None', topSignal ? `${topSignal.score || '--'}/100 | ${String(topSignal.alertTier || 'signal').toUpperCase()} | click to inspect` : 'Run a scan to surface the best setup', 'chart', topSignal?.symbol ? `data-sym="${esc(topSignal.symbol)}"` : ''),
+ buildOverviewCard('strategies', 'Strategy Lab', String(executeCount || setupCount || 0), executeCount ? `${executeCount} execute setup${executeCount === 1 ? '' : 's'} ready` : setupCount ? `${setupCount} setup${setupCount === 1 ? '' : 's'} to shape` : 'Build scanner and entry rules', 'strategies'),
+ buildOverviewCard('chart', 'Chart View', topSignal?.symbol || 'Open', topSignal ? `Open the clean chart view for ${topSignal.symbol}` : 'Open the clean chart workspace', 'chart', topSignal?.symbol ? `data-sym="${esc(topSignal.symbol)}"` : ''),
+ buildOverviewCard('strategy', 'Settings & API', 'Local Desk', `Market Data | ${apiState}`, 'strategy'),
  ].join('');
  const overviewEl = document.getElementById('overviewGrid');
  if (overviewEl) {
@@ -2246,7 +2195,7 @@ async function updateWorkspaceInsights(snapshot = null) {
  const sym = card.dataset.sym;
  if (sym) {
  const match = scanResults.find(r => String(r.symbol || '').toUpperCase() === String(sym).toUpperCase());
- setActiveWorkspaceTab('scanner', true, true);
+ setActiveWorkspaceTab('chart', true, true);
  if (match) {
  openModal(match);
  return;
@@ -2578,7 +2527,7 @@ async function writeLocalBackup(reason = 'manual') {
 
  const payload = {
 
- app: 'FWD TradeDesk Pro',
+ app: 'FWD Bharat MarketDesk',
 
  version: '1',
 
@@ -2692,7 +2641,7 @@ async function archiveOldAlertsToLocal(reason = 'manual_archive') {
 
  const payload = {
 
- app: 'FWD TradeDesk Pro',
+ app: 'FWD Bharat MarketDesk',
 
  version: '1',
 
@@ -2785,23 +2734,6 @@ function getSessionInfo() {
 
 
 
-function updateSessionBadge() {
-
- const el = document.getElementById('sessionBadge');
-
- if (!el) return;
-
- const s = getSessionInfo();
-
- el.textContent = s.label;
- el.title = s.title || 'Current market session';
-
- el.className = 'session-badge ' + s.key;
-
-}
-
-
-
 function applyTheme(theme) {
  void theme;
  document.body.setAttribute('data-theme', 'dark');
@@ -2862,7 +2794,7 @@ async function exportReleaseDiagnostics(reason = 'manual') {
   });
   const diagnostics = {
    app: {
-    name: 'FWD TradeDesk Pro',
+    name: 'FWD Bharat MarketDesk',
     version: '0.1.0',
     reason,
     exportedAt: new Date().toISOString(),
@@ -2934,43 +2866,6 @@ async function importFullAppBackup() {
  }
 }
 
-function formatCandleHistoryStatus(response = {}) {
- if (!response?.ok) return `History status unavailable: ${response?.error || 'unknown error'}`;
- const byStatus = response.byStatus || {};
- const done = Number(byStatus.complete || 0);
- const running = Number(byStatus.running || 0);
- const failed = Number(byStatus.failed || 0);
- const pending = Number(byStatus.pending || 0);
- const total = Number(response.taskCount || 0);
- const rows = Number(response.rows || 0);
- const universe = Number(response.universeCount || 0);
- return `History ${response.status || 'idle'} | coins ${universe} | tasks ${done}/${total} complete, ${running} running, ${pending} pending, ${failed} failed | rows ${rows}`;
-}
-
-async function refreshCandleHistoryStatus() {
- const out = document.getElementById('candleHistoryStatus');
- if (!out) return null;
- const response = await sendDesktopNativeMessageRaw({ type: 'candle_history_status' });
- out.textContent = formatCandleHistoryStatus(response);
- out.className = `save-ok ${response?.ok && response.status === 'running' ? 'good' : response?.ok && response.status === 'complete' ? 'good' : response?.ok ? '' : 'bad'}`;
- return response;
-}
-
-async function startCandleHistoryBackfill() {
- const out = document.getElementById('candleHistoryStatus');
- if (out) out.textContent = 'Starting 1D and 15M perpetual-coin backfill...';
- const response = await sendDesktopNativeMessageRaw({ type: 'candle_history_start' });
- if (out) out.textContent = formatCandleHistoryStatus(response);
- return response;
-}
-
-async function pauseCandleHistoryBackfill() {
- const response = await sendDesktopNativeMessageRaw({ type: 'candle_history_pause' });
- const out = document.getElementById('candleHistoryStatus');
- if (out) out.textContent = formatCandleHistoryStatus(response);
- return response;
-}
-
 async function loadTheme() {
  await storeRemove(['uiTheme']);
  applyTheme('dark');
@@ -2997,12 +2892,6 @@ function applyStoredFilterUi() {
 
  });
 
- document.querySelectorAll('#scannerSessions .preset-btn').forEach(btn => {
-
- btn.classList.toggle('active', (btn.dataset.session || '') === scannerSessionFilter);
-
- });
-
  document.querySelectorAll('#alertSortRow .bsm').forEach(btn => {
 
  btn.classList.toggle('active', (btn.dataset.alertSort || 'portfolio') === alertSortMode);
@@ -3017,17 +2906,11 @@ function applyStoredFilterUi() {
 
 // -- Boot -------------------------------------------------------
 
-function buildDeltaTradeUrl(symbol, region = desktopApiRegion) {
+function buildDhanTradeUrl(symbol) {
  const productSymbol = String(symbol || '').toUpperCase().trim();
- const assetSymbol = normalizeBaseSymbol(productSymbol);
- const safeProduct = encodeURIComponent(productSymbol);
- const safeAsset = encodeURIComponent(assetSymbol);
- const host = String(region || '').toLowerCase() === 'global'
- ? 'https://global.delta.exchange'
- : 'https://www.delta.exchange';
- if (!safeProduct) return host;
- if (!safeAsset) return `${host}/app/futures/trade/${safeProduct}`;
- return `${host}/app/futures/trade/${safeAsset}/${safeProduct}`;
+ const host = 'https://web.dhan.co/';
+ if (!productSymbol) return host;
+ return `${host}?symbol=${encodeURIComponent(productSymbol)}`;
 }
 
 function closeModal() {
@@ -3048,20 +2931,6 @@ function buildModalFold(label, copy, body, opts = {}) {
  </summary>
  <div class="mo-fold-body">${body}</div>
  </details>`;
-}
-
-function seedRiskCalculatorFromSignal(signal) {
- const entry = toPosNum(signal?.entry || signal?.price);
- const sl = toPosNum(signal?.sl);
- if (!entry || !sl) return false;
- const entryEl = document.getElementById('rcEntry');
- const slEl = document.getElementById('rcSL');
- if (!entryEl || !slEl) return false;
- entryEl.value = String(entry);
- slEl.value = String(sl);
- globalThis.activateV16RiskBridge?.(signal);
- calcRisk();
- return true;
 }
 
 async function refreshCurrentModalSignal() {
@@ -3087,9 +2956,9 @@ function buildSignalModalBody(r) {
  const daily = r?.daily || {};
  const lower = r?.lower || {};
  const fundingRate = Number(r?.fundingRate || 0);
- const fundingText = fundingRate !== 0
- ? `${fundingRate > 0 ? '+' : ''}${fundingRate.toFixed(4)}% ${fundingRate > 0 ? '(longs pay - bearish)' : '(shorts pay - bullish)'}`
- : '0%';
+ const activityText = fundingRate !== 0
+ ? `${fundingRate > 0 ? '+' : ''}${fundingRate.toFixed(4)}% activity bias`
+ : 'Neutral';
  const sector = normalizeSectorLabel(r?.sector || getSector(r?.symbol));
  const isBull = String(r?.direction || '').includes('long');
  const emerging = r?.emergingMove || null;
@@ -3106,37 +2975,37 @@ function buildSignalModalBody(r) {
  : [
  `${r?.mtfConfirmed ? 'MTF confirmed' : 'Single timeframe'} ${isBull ? 'long' : 'short'} setup`,
  `Sector: ${esc(sector)}`,
- `Funding: ${esc(fundingText)}`,
+ `Activity: ${esc(activityText)}`,
  ];
  const confirmParts = [
  r?.mtfConfirmed ? 'MTF confirmed' : 'Awaiting full MTF alignment',
  daily?.emaBull ? '1D bullish bias' : daily?.emaBear ? '1D bearish bias' : '1D bias neutral',
  r?.spike ? 'Volume spike' : '',
- r?.btcCorr != null ? (Number(r.btcCorr) > 0.85 ? 'BTC-led move' : 'Independent move') : '',
+ r?.btcCorr != null ? (Number(r.btcCorr) > 0.85 ? 'Index-led move' : 'Independent move') : '',
  ].filter(Boolean);
  const invalidationText = isBull
- ? `Fails below $${fmtPrice(r?.sl)}`
- : `Fails above $${fmtPrice(r?.sl)}`;
+ ? `Fails below ${formatInrPrice(r?.sl)}`
+ : `Fails above ${formatInrPrice(r?.sl)}`;
  const triggerText = thesisList.join(' | ');
  const heroHTML = `
  <div class="mo-hero">
  <div class="mo-hero-top">
  <div class="mo-score-block">
  <div class="mo-score-val" style="color:${scoreColor}">${score}/100${score >= 80 ? ' Hot' : ''}</div>
- <div class="mo-score-copy">${r?.mtfConfirmed ? 'MTF confirmed' : 'Partial confirmation'} | ${esc(String(r?.direction || '').toUpperCase())} | ${esc(sector)}${r?.session ? ' | ' + esc(String(r.session).toUpperCase()) : ''}</div>
+ <div class="mo-score-copy">${r?.mtfConfirmed ? 'MTF confirmed' : 'Partial confirmation'} | ${esc(String(r?.direction || '').toUpperCase())} | ${esc(sector)}</div>
  </div>
  <div class="mo-hero-tags">
  <span class="mo-tag ${actionTone}">${actionText}</span>
  <span class="mo-tag info">${esc(tier)}</span>
  <span class="mo-tag ${Number(r?.rr || 0) >= 2 ? 'ok' : 'warn'}">R:R 1:${Number(r?.rr || 0)}</span>
- <span class="mo-tag ${fundingRate > 0.05 ? 'fail' : fundingRate < -0.05 ? 'ok' : 'warn'}">${fundingRate !== 0 ? `${fundingRate > 0 ? '+' : ''}${fundingRate.toFixed(4)}% FR` : 'Funding Flat'}</span>
+ <span class="mo-tag ${Math.abs(fundingRate) > 0.05 ? 'warn' : 'ok'}">${fundingRate !== 0 ? `${fundingRate > 0 ? '+' : ''}${fundingRate.toFixed(4)}% Activity` : 'Activity Calm'}</span>
  <span class="mo-tag info">${timeAgo(r?.ts || Date.now())}</span>
  </div>
  </div>
  <div class="mo-hero-grid">
- <div class="mo-hero-card"><span>Entry</span><b>$${fmtPrice(r?.entry)}</b></div>
- <div class="mo-hero-card"><span>Stop</span><b style="color:#ff6b84">$${fmtPrice(r?.sl)}</b></div>
- <div class="mo-hero-card"><span>Target</span><b style="color:#00e5a0">$${fmtPrice(r?.tp1)}</b></div>
+ <div class="mo-hero-card"><span>Entry</span><b>${formatInrPrice(r?.entry)}</b></div>
+ <div class="mo-hero-card"><span>Stop</span><b style="color:#ff6b84">${formatInrPrice(r?.sl)}</b></div>
+ <div class="mo-hero-card"><span>Target</span><b style="color:#00e5a0">${formatInrPrice(r?.tp1)}</b></div>
  <div class="mo-hero-card"><span>24h Change</span><b style="color:${Number(r?.change24h || 0) >= 0 ? '#00e5a0' : '#ff6b84'}">${Number(r?.change24h || 0) >= 0 ? '+' : ''}${Number(r?.change24h || 0).toFixed(2)}%</b></div>
  </div>
  ${emerging ? `<div class="mo-emerging ${emerging.side === 'short' ? 'short' : 'long'}">
@@ -3164,7 +3033,7 @@ function buildSignalModalBody(r) {
  </div>
  <div class="mo-actions">
  <button class="mo-action-btn ${isPinned ? 'warn' : 'primary'}" id="moToggleWatch">${isPinned ? 'Remove Watch' : 'Add Watch'}</button>
- <button class="mo-action-btn" id="moToRisk">Send To Risk</button>
+ <button class="mo-action-btn" id="moOpenChart">Open Chart</button>
  <button class="mo-action-btn" id="moRefreshSignal">Refresh Signal</button>
  </div>
  </div>`;
@@ -3172,15 +3041,15 @@ function buildSignalModalBody(r) {
  const vwapSource = lower?.vwap != null ? lower : daily?.vwap != null ? daily : null;
  const vwapHTML = vwapSource?.vwap != null ? `
  <div class="mo-section">VWAP ANALYSIS</div>
- <div class="mo-row"><span class="mo-label">${esc(vwapSource.label || '15m')} VWAP</span><span class="mo-val">$${fmtPrice(vwapSource.vwap)}</span></div>
+ <div class="mo-row"><span class="mo-label">${esc(vwapSource.label || '15m')} VWAP</span><span class="mo-val">${formatInrPrice(vwapSource.vwap)}</span></div>
  <div class="mo-row"><span class="mo-label">Price vs VWAP</span><span class="mo-val" style="color:${vwapSource.vwapAbove ? '#00e5a0' : '#ff4560'}">${vwapSource.vwapAbove ? 'Above VWAP - bullish' : 'Below VWAP - bearish'}</span></div>` : '';
 
  const volumeProfile = daily?.volumeProfile;
  const volumeProfileHTML = volumeProfile ? `
  <div class="mo-section">VOLUME PROFILE</div>
- <div class="mo-row"><span class="mo-label">POC (Point of Control)</span><span class="mo-val">$${fmtPrice(volumeProfile.poc)}</span></div>
- <div class="mo-row"><span class="mo-label">Value Area High</span><span class="mo-val">$${fmtPrice(volumeProfile.vah)}</span></div>
- <div class="mo-row"><span class="mo-label">Value Area Low</span><span class="mo-val">$${fmtPrice(volumeProfile.val)}</span></div>
+ <div class="mo-row"><span class="mo-label">POC (Point of Control)</span><span class="mo-val">${formatInrPrice(volumeProfile.poc)}</span></div>
+ <div class="mo-row"><span class="mo-label">Value Area High</span><span class="mo-val">${formatInrPrice(volumeProfile.vah)}</span></div>
+ <div class="mo-row"><span class="mo-label">Value Area Low</span><span class="mo-val">${formatInrPrice(volumeProfile.val)}</span></div>
  <div class="mo-row"><span class="mo-label">Price vs Value Area</span><span class="mo-val" style="color:${volumeProfile.priceVsVA === 'above VA' ? '#00e5a0' : volumeProfile.priceVsVA === 'below VA' ? '#ff4560' : '#ffc840'}">${esc(volumeProfile.priceVsVA || 'inside')}</span></div>` : '';
 
  const sentiment = r?.sentiment;
@@ -3196,22 +3065,22 @@ function buildSignalModalBody(r) {
  ${r?.shortsCovering ? '<div class="mo-row"><span class="mo-label">Signal</span><span class="mo-val" style="color:#ffc840">Shorts Covering</span></div>' : ''}` : '';
 
  const corrHTML = r?.btcCorr != null ? `
- <div class="mo-section">BTC CORRELATION</div>
+ <div class="mo-section">INDEX CORRELATION</div>
  <div class="mo-row"><span class="mo-label">Pearson Corr</span><span class="mo-val" style="color:${Number(r.btcCorr) > 0.85 ? '#ff4560' : Number(r.btcCorr) > 0.6 ? '#ffc840' : '#00e5a0'}">${Number(r.btcCorr) > 0 ? '+' : ''}${Number(r.btcCorr).toFixed(3)}</span></div>
- <div class="mo-row"><span class="mo-label">Verdict</span><span class="mo-val" style="font-size:11px">${Number(r.btcCorr) > 0.85 ? 'BTC-driven move' : Number(r.btcCorr) > 0.6 ? 'Moderate correlation' : 'Independent setup'}</span></div>` : '';
+ <div class="mo-row"><span class="mo-label">Verdict</span><span class="mo-val" style="font-size:11px">${Number(r.btcCorr) > 0.85 ? 'Index-driven move' : Number(r.btcCorr) > 0.6 ? 'Moderate correlation' : 'Independent setup'}</span></div>` : '';
 
  const marketStructure = daily?.marketStructure;
  const msHTML = marketStructure ? `
  <div class="mo-section">MARKET STRUCTURE (v14)</div>
  <div class="mo-row"><span class="mo-label">Structure</span><span class="mo-val" style="color:${marketStructure.bullish ? '#00e5a0' : marketStructure.bearish ? '#ff4560' : '#ffc840'}">${typeof msIcon === 'function' ? msIcon(marketStructure.structure) + ' ' : ''}${esc(String(marketStructure.structure || '').toUpperCase())}</span></div>
- ${Array.isArray(marketStructure.swingHighs) && marketStructure.swingHighs.length ? `<div class="mo-row"><span class="mo-label">Swing Highs</span><span class="mo-val">$${marketStructure.swingHighs.map(fmtPrice).join(', $')}</span></div>` : ''}
- ${Array.isArray(marketStructure.swingLows) && marketStructure.swingLows.length ? `<div class="mo-row"><span class="mo-label">Swing Lows</span><span class="mo-val">$${marketStructure.swingLows.map(fmtPrice).join(', $')}</span></div>` : ''}` : '';
+ ${Array.isArray(marketStructure.swingHighs) && marketStructure.swingHighs.length ? `<div class="mo-row"><span class="mo-label">Swing Highs</span><span class="mo-val">${marketStructure.swingHighs.map(value => formatInrPrice(value)).join(', ')}</span></div>` : ''}
+ ${Array.isArray(marketStructure.swingLows) && marketStructure.swingLows.length ? `<div class="mo-row"><span class="mo-label">Swing Lows</span><span class="mo-val">${marketStructure.swingLows.map(value => formatInrPrice(value)).join(', ')}</span></div>` : ''}` : '';
 
  const kl1D = typeof getTFKeyLevels === 'function' ? getTFKeyLevels(r?.keyLevels, '1D') : { resistance: [], support: [] };
  const kl15m = typeof getTFKeyLevels === 'function' ? getTFKeyLevels(r?.keyLevels, '15m') : { resistance: [], support: [] };
  const formatLevels = typeof formatKeyLevelList === 'function'
  ? formatKeyLevelList
- : (levels = []) => Array.isArray(levels) && levels.length ? levels.map(v => `$${fmtPrice(v)}`).join(', ') : '-';
+ : (levels = []) => Array.isArray(levels) && levels.length ? levels.map(v => formatInrPrice(v)).join(', ') : '-';
  const keyLevelsHTML = `
  <div class="mo-section">KEY LEVELS (SUPPORT / RESISTANCE)</div>
  <div class="mo-row"><span class="mo-label">1D Resistance</span><span class="mo-val">${formatLevels(kl1D.resistance)}</span></div>
@@ -3240,15 +3109,15 @@ function buildSignalModalBody(r) {
  <div class="rri-info">Drag sliders to customise SL/TP</div>
  <div class="rri-row"><span class="rri-label">Stop Loss</span>
  <input type="range" class="rri-slider sl-slider" id="rrSlSL" min="${slMin}" max="${slMax}" step="${sliderStep}" value="${initialSL}"/>
- <span class="rri-val red" id="rrSlVal">$${fmtPrice(initialSL)}</span></div>
+ <span class="rri-val red" id="rrSlVal">${formatInrPrice(initialSL)}</span></div>
  <div class="rri-row"><span class="rri-label">Take Profit</span>
  <input type="range" class="rri-slider tp-slider" id="rrSlTP" min="${tpMin}" max="${tpMax}" step="${sliderStep}" value="${initialTP}"/>
- <span class="rri-val green" id="rrTpVal">$${fmtPrice(initialTP)}</span></div>
+ <span class="rri-val green" id="rrTpVal">${formatInrPrice(initialTP)}</span></div>
  <div class="rri-result">
  <div class="rri-rr-display">R:R = 1:<span id="rrLive" class="rri-rr-num">-</span></div>
  <div class="rri-advice" id="rrAdvice">-</div>
  </div>
- <div class="rri-ref">Entry: <b>$${fmtPrice(entryPrice)}</b> | Direction: <b>${esc(String(r?.direction || '').toUpperCase())}</b> | ATR: <b>${fmtPrice(atrValue)}</b></div>
+ <div class="rri-ref">Entry: <b>${formatInrPrice(entryPrice)}</b> | Direction: <b>${esc(String(r?.direction || '').toUpperCase())}</b> | ATR: <b>${formatInrPrice(atrValue)}</b></div>
  </div>` : '';
 
  const scoreHTML = (label, tf) => {
@@ -3284,11 +3153,11 @@ function buildSignalModalBody(r) {
  : '';
  const marketDataBody = `
  ${sparkSection}
- <div class="mo-row"><span class="mo-label">Price</span><span class="mo-val">$${fmtPrice(r?.price)}</span></div>
+ <div class="mo-row"><span class="mo-label">Price</span><span class="mo-val">${formatInrPrice(r?.price)}</span></div>
  <div class="mo-row"><span class="mo-label">24h Change</span><span class="mo-val" style="color:${Number(r?.change24h || 0) >= 0 ? '#00e5a0' : '#ff4560'}">${Number(r?.change24h || 0) >= 0 ? '+' : ''}${Number(r?.change24h || 0).toFixed(2)}%</span></div>
- <div class="mo-row"><span class="mo-label">Volume 24h</span><span class="mo-val">$${typeof fmtLarge === 'function' ? fmtLarge(r?.volume24h) : fmtPrice(r?.volume24h)}</span></div>
- <div class="mo-row"><span class="mo-label">Open Interest</span><span class="mo-val">$${typeof fmtLarge === 'function' ? fmtLarge(r?.oi) : fmtPrice(r?.oi)}</span></div>
- <div class="mo-row"><span class="mo-label">Funding Rate</span><span class="mo-val" style="color:${fundingRate > 0 ? '#ff4560' : fundingRate < 0 ? '#00e5a0' : '#7a8ab0'}">${esc(fundingText)}</span></div>
+ <div class="mo-row"><span class="mo-label">Volume 24h</span><span class="mo-val">${typeof fmtLarge === 'function' ? `Rs ${fmtLarge(r?.volume24h)}` : formatInrPrice(r?.volume24h)}</span></div>
+ <div class="mo-row"><span class="mo-label">Open Interest</span><span class="mo-val">${typeof fmtLarge === 'function' ? `Rs ${fmtLarge(r?.oi)}` : formatInrPrice(r?.oi)}</span></div>
+ <div class="mo-row"><span class="mo-label">Activity Bias</span><span class="mo-val" style="color:${Math.abs(fundingRate) > 0.05 ? '#ffc840' : '#7a8ab0'}">${esc(activityText)}</span></div>
  <div class="mo-row"><span class="mo-label">Sector</span><span class="mo-val">${esc(sector)}</span></div>`;
 
  const ladderLevels = [
@@ -3298,14 +3167,14 @@ function buildSignalModalBody(r) {
  { label: 'T4', price: Number(r?.tp4 || 0), note: 'Final capped target' },
  ].filter(level => level.price > 0);
  const targetLines = [
- Number(r?.tp1 || 0) > 0 ? `<b>TP1</b> <span style="color:#00e5a0">$${fmtPrice(r.tp1)}</span>` : '',
- Number(r?.tp2 || 0) > 0 ? `<b>TP2</b> <span style="color:#00e5a0">$${fmtPrice(r.tp2)}</span>` : '',
- Number(r?.tp3 || 0) > 0 ? `<b>TP3</b> <span style="color:#00e5a0">$${fmtPrice(r.tp3)}</span>` : '',
- Number(r?.tp4 || 0) > 0 ? `<b>TP4</b> <span style="color:#00e5a0">$${fmtPrice(r.tp4)}</span>` : '',
+ Number(r?.tp1 || 0) > 0 ? `<b>TP1</b> <span style="color:#00e5a0">${formatInrPrice(r.tp1)}</span>` : '',
+ Number(r?.tp2 || 0) > 0 ? `<b>TP2</b> <span style="color:#00e5a0">${formatInrPrice(r.tp2)}</span>` : '',
+ Number(r?.tp3 || 0) > 0 ? `<b>TP3</b> <span style="color:#00e5a0">${formatInrPrice(r.tp3)}</span>` : '',
+ Number(r?.tp4 || 0) > 0 ? `<b>TP4</b> <span style="color:#00e5a0">${formatInrPrice(r.tp4)}</span>` : '',
  ].filter(Boolean).join('<br/>');
  const ladderGrid = ladderLevels.length ? `
  <div class="mo-decision-grid">
- ${ladderLevels.map((level, index) => `<div><span>${level.label}</span><strong>$${fmtPrice(level.price)}</strong><small>${index === 0 ? level.note : `${level.note} | capped ladder`}</small></div>`).join('')}
+ ${ladderLevels.map((level, index) => `<div><span>${level.label}</span><strong>${formatInrPrice(level.price)}</strong><small>${index === 0 ? level.note : `${level.note} | capped ladder`}</small></div>`).join('')}
  </div>` : '';
  const postEntryRules = [
  Number(r?.tp2 || 0) > 0 ? 'Near T1 -> move target to T2 and stop to Entry' : '',
@@ -3314,8 +3183,8 @@ function buildSignalModalBody(r) {
  ].filter(Boolean);
  const tradePlanBody = `
  <div class="mo-plan">
- <b>Entry</b> $${fmtPrice(r?.entry)}<br/>
- <b>Stop Loss</b> <span style="color:#ff4560">$${fmtPrice(r?.sl)}</span> (1.5x ATR)<br/>
+ <b>Entry</b> ${formatInrPrice(r?.entry)}<br/>
+ <b>Stop Loss</b> <span style="color:#ff4560">${formatInrPrice(r?.sl)}</span> (1.5x ATR)<br/>
  ${targetLines}<br/>
  <b>R:R</b> 1:${Number(r?.rr || 0)} | <b>Direction</b> ${esc(String(r?.direction || '').toUpperCase())}
  </div>
@@ -3347,7 +3216,7 @@ function buildSignalModalBody(r) {
  <div class="mo-row"><span class="mo-label">MTF Status</span><span class="mo-val">${r?.mtfConfirmed ? 'Confirmed across 1D and 15m' : 'Partial alignment, wait for confirmation'}</span></div>
  <div class="mo-row"><span class="mo-label">1D Indicators</span><span class="mo-val">${esc(dailyIndicators)}</span></div>
  <div class="mo-row"><span class="mo-label">15m Indicators</span><span class="mo-val">${esc(lowerIndicators)}</span></div>
- <div class="mo-row"><span class="mo-label">Trigger Context</span><span class="mo-val">${r?.spike ? 'Volume spike present' : 'No volume spike'} | ${r?.oiConfirmed ? 'OI confirmed' : 'OI neutral'} | ${esc(fundingText)}</span></div>`;
+ <div class="mo-row"><span class="mo-label">Trigger Context</span><span class="mo-val">${r?.spike ? 'Volume spike present' : 'No volume spike'} | ${r?.oiConfirmed ? 'OI confirmed' : 'OI neutral'} | ${esc(activityText)}</span></div>`;
 
  const technicalBody = [vwapHTML, volumeProfileHTML, msHTML, keyLevelsHTML, volumeClimaxHTML, oiHTML, corrHTML, sentimentHTML]
  .filter(Boolean)
@@ -3514,7 +3383,7 @@ function showPreTradeChecklist(signal) {
  },
  {
  key: 'funding',
- label: `Funding rate supports ${isLong ? 'long' : 'short'} (${fundingRate != null ? `${fundingRate >= 0 ? '+' : ''}${Number(fundingRate).toFixed(4)}%` : 'no data'})`,
+ label: `Activity bias supports ${isLong ? 'long' : 'short'} (${fundingRate != null ? `${fundingRate >= 0 ? '+' : ''}${Number(fundingRate).toFixed(4)}%` : 'no data'})`,
  ok: fundingOk,
  required: false,
  category: 'Macro',
@@ -3613,7 +3482,7 @@ function showPreTradeChecklist(signal) {
  <div class="cl-header">
  <div class="cl-header-info">
  <div class="cl-symbol">${esc(String(signal?.symbol || '').toUpperCase())}</div>
- <div class="cl-signal-meta">${esc(String(signal?.direction || '').toUpperCase())} | Score ${Number(signal?.score || 0)}/100 | Entry $${fmtPrice(signal?.entry)}</div>
+ <div class="cl-signal-meta">${esc(String(signal?.direction || '').toUpperCase())} | Score ${Number(signal?.score || 0)}/100 | Entry ${formatInrPrice(signal?.entry)}</div>
  </div>
  <div class="cl-confidence-ring">
  <svg width="68" height="68" viewBox="0 0 68 68">
@@ -3659,7 +3528,7 @@ function showPreTradeChecklist(signal) {
  <div class="cl-verdict-reasons">${reasons.map(reason => esc(reason)).join('<br>')}</div>
  </div>`;
 
- const tradeUrl = buildDeltaTradeUrl(signal?.symbol);
+ const tradeUrl = buildDhanTradeUrl(signal?.symbol);
  placeBtn.hidden = !canTrade;
  placeBtn.disabled = !canTrade;
  placeBtn.dataset.checklistSignal = 'active';
@@ -3718,7 +3587,7 @@ async function openModal(signal) {
  };
  closeBtn.onclick = () => closeModal();
  openBtn.onclick = () => {
- const tradeUrl = buildDeltaTradeUrl(signal.symbol);
+ const tradeUrl = buildDhanTradeUrl(signal.symbol);
  if (tradeUrl) window.open(tradeUrl, '_blank', 'noopener,noreferrer');
  };
  previewBtn.onclick = async () => {
@@ -3754,11 +3623,10 @@ async function openModal(signal) {
  }
  await renderAlerts();
  });
- document.getElementById('moToRisk')?.addEventListener('click', () => {
- seedRiskCalculatorFromSignal(signal);
+ document.getElementById('moOpenChart')?.addEventListener('click', () => {
+ openChartForSymbolCommand(signal?.symbol || '', signal);
  closeModal();
- setActiveWorkspaceTab('riskcalc', true, true);
- });
+});
  document.getElementById('moRefreshSignal')?.addEventListener('click', () => {
  refreshCurrentModalSignal();
  });
@@ -3772,8 +3640,8 @@ async function openModal(signal) {
  const tp = parseFloat(tpEl.value);
  const slVal = document.getElementById('rrSlVal');
  const tpVal = document.getElementById('rrTpVal');
- if (slVal) slVal.textContent = '$' + fmtPrice(sl);
- if (tpVal) tpVal.textContent = '$' + fmtPrice(tp);
+ if (slVal) slVal.textContent = formatInrPrice(sl);
+ if (tpVal) tpVal.textContent = formatInrPrice(tp);
  const slDist = Math.abs(entryPrice - sl);
  const tpDist = Math.abs(tp - entryPrice);
  if (slDist <= 0) return;

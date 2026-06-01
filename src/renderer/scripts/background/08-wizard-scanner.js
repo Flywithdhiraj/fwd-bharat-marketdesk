@@ -2,14 +2,14 @@
 
 (function initWizardScanner(global) {
  const WIZARD_DEFAULT_SETTINGS = Object.freeze({
- maxCoins: 180,
+ maxCoins: 500,
  minLatestQuoteVolume: 5000000,
  minAvgQuoteVolume20: 3000000,
  riskPerTradePercent: 0.005,
  accountEquity: 1000,
  minCandles: 90,
  preferredCandles: 420,
- outputLimit: 160,
+ outputLimit: 500,
  });
 
  const CLOSED_DAILY = Object.freeze({ closedOnly: true });
@@ -108,6 +108,43 @@
  high: Math.max(...recent.map(c => Number(c.high || c.close || 0))),
  low: Math.min(...recent.map(c => Number(c.low || c.close || 0)).filter(v => v > 0)),
  period: count,
+ };
+ }
+
+ function wizardFiftyTwoWeekContext(candles = []) {
+ const recent = (Array.isArray(candles) ? candles : []).slice(-252);
+ if (recent.length < 90) {
+ return {
+  ready: false,
+  period: recent.length,
+  high: 0,
+  low: 0,
+  distanceFromHighPct: 0,
+  distanceFromLowPct: 0,
+  nearHigh: false,
+  nearLow: false,
+  breakout: false,
+  breakdown: false,
+ };
+ }
+ const previous = recent.slice(0, -1);
+ const last = recent[recent.length - 1] || {};
+ const close = Number(last.close || 0);
+ const high = Math.max(...previous.map(c => Number(c.high || c.close || 0)).filter(value => value > 0));
+ const low = Math.min(...previous.map(c => Number(c.low || c.close || 0)).filter(value => value > 0));
+ const distanceFromHighPct = high > 0 && close > 0 ? ((close - high) / high) * 100 : 0;
+ const distanceFromLowPct = low > 0 && close > 0 ? ((close - low) / low) * 100 : 0;
+ return {
+  ready: high > 0 && low > 0 && close > 0,
+  period: recent.length,
+  high: wizardRound(high, 8),
+  low: wizardRound(low, 8),
+  distanceFromHighPct: wizardRound(distanceFromHighPct, 2),
+  distanceFromLowPct: wizardRound(distanceFromLowPct, 2),
+  nearHigh: high > 0 && close >= high * 0.97,
+  nearLow: low > 0 && close <= low * 1.03,
+  breakout: high > 0 && close > high,
+  breakdown: low > 0 && close < low,
  };
  }
 
@@ -405,6 +442,8 @@
  else wait.push('Trend template incomplete');
  if (Number(row.rsScore || 0) >= 70) top.push(`RS ${Math.round(Number(row.rsScore || 0))}`);
  else wait.push('RS below leadership threshold');
+ if (parts?.fiftyTwoWeek?.breakout) top.push('52-week high breakout');
+ else if (parts?.fiftyTwoWeek?.nearHigh) top.push('Near 52-week high');
  if (parts?.vcp?.detected) top.push(`VCP confirmed with ${parts.vcp.contractionCount || 0} contractions`);
  else wait.push('VCP/base not confirmed');
  if (checks.volumeBreakout) top.push('Breakout volume present');
@@ -489,6 +528,7 @@
  const liquidity = wizardLiquidityPass(ind, row.ticker, context.settings, row.candles.length);
  const trend = wizardTrendTemplate(ind, row.rsScore);
  const vcp = wizardDetectVcp(row.candles, ind);
+ const fiftyTwoWeek = wizardFiftyTwoWeekContext(row.candles);
  const breakout = wizardBreakout(ind, context.marketHealth, liquidity, trend, vcp);
  const risk = wizardRisk(ind.close, vcp.pivotPrice, ind.atr14, vcp.finalContractionLow, context.settings);
  const score = wizardScore({ trend, rsScore: row.rsScore, vcp, breakout, marketHealth: context.marketHealth });
@@ -511,18 +551,23 @@
  shortTrend,
  rsStrong: row.rsScore >= 70,
  vcpDetected: vcp.detected,
+ fiftyTwoWeekHighBreakout: fiftyTwoWeek.breakout,
+ nearFiftyTwoWeekHigh: fiftyTwoWeek.nearHigh,
+ nearFiftyTwoWeekLow: fiftyTwoWeek.nearLow,
  breakoutReady: breakout.pass,
  riskAccepted: risk.pass,
  };
  const actionLabel = wizardActionLabel(signal, finalScore);
  const priorityLabel = wizardPriorityLabel(signal, finalScore, checks);
- const decision = wizardReasonPack(signal, { trend, vcp, breakout, risk }, row);
+ const decision = wizardReasonPack(signal, { trend, vcp, fiftyTwoWeek, breakout, risk }, row);
  const ruleEvidence = wizardRuleEvidence(row.candles);
  const reasons = [
  ...trend.reasons,
  shortTrend ? 'Short-side downtrend confirmed' : '',
  liquidity.pass ? 'Liquidity passed' : 'Liquidity filter failed',
  row.rsScore >= 70 ? 'RS Strong' : 'RS not strong enough',
+ fiftyTwoWeek.breakout ? '52-week high breakout' : fiftyTwoWeek.nearHigh ? 'Near 52-week high' : '',
+ fiftyTwoWeek.nearLow ? 'Near 52-week low' : '',
  vcp.detected ? `VCP with ${vcp.contractionCount} contractions` : 'VCP not confirmed',
  ...breakout.reasons,
  risk.reason,
@@ -553,6 +598,7 @@
  ruleEvidence,
  shortScore,
  rsScore: row.rsScore,
+ fiftyTwoWeek,
  weightedReturn: wizardRound(row.weightedReturn, 2),
  return30d: wizardRound(ind.return30d, 2),
  return90d: wizardRound(ind.return90d, 2),
@@ -584,12 +630,15 @@
  });
  }
 
- async function wizardLoadSettings() {
+async function wizardLoadSettings() {
  const stored = await new Promise(resolve => chrome.storage.local.get(['strategySettings.wizard'], resolve));
- return {
- ...WIZARD_DEFAULT_SETTINGS,
- ...(stored['strategySettings.wizard'] || {}),
- };
+ const settings = {
+  ...WIZARD_DEFAULT_SETTINGS,
+  ...(stored['strategySettings.wizard'] || {}),
+  };
+ settings.maxCoins = Math.max(WIZARD_DEFAULT_SETTINGS.maxCoins, Number(settings.maxCoins || 0));
+ settings.outputLimit = Math.max(WIZARD_DEFAULT_SETTINGS.outputLimit, Number(settings.outputLimit || 0));
+ return settings;
  }
 
  async function wizardFetchBtcCandles(limit) {
@@ -604,7 +653,7 @@
  if (!global.FWDTradeDeskStrategies?.normalizeStrategyResult) {
  throw new Error('Strategy registry not loaded');
  }
- await wizardSetStatus('Loading Delta market data...', { active: true, progress: 2 });
+ await wizardSetStatus('Loading market data...', { active: true, progress: 2 });
  await chrome.storage.local.set({ 'strategyResults.wizard': [] });
  await detectAPI(true);
  const settings = await wizardLoadSettings();
@@ -615,7 +664,6 @@
  .filter(([symbol, ticker]) => {
  const sym = String(symbol || '').toUpperCase();
  if (!sym || productSymbols.size && !productSymbols.has(sym)) return false;
- if (!sym.endsWith('USD') && !sym.endsWith('USDT')) return false;
  return Number(ticker?.price || 0) > 0;
  })
  .map(([symbol, ticker]) => ({ symbol, ticker }))
@@ -700,7 +748,6 @@
  .filter(([symbol, ticker]) => {
  const sym = String(symbol || '').toUpperCase();
  if (!sym || productSymbols.size && !productSymbols.has(sym)) return false;
- if (!sym.endsWith('USD') && !sym.endsWith('USDT')) return false;
  return Number(ticker?.price || 0) > 0;
  })
  .map(([symbol, ticker]) => ({ symbol, ticker }))
@@ -796,9 +843,6 @@
 'strategyResults.pullback',
 'strategyStatus.pullback',
 'strategySettings.pullback',
-'strategyResults.native_straddle',
-'strategyStatus.native_straddle',
-'strategySettings.native_straddle',
 'scanResults',
 'scanStatus',
 'lastScanTs',
@@ -844,11 +888,6 @@ pullback: {
  results: Array.isArray(data['strategyResults.pullback']) ? data['strategyResults.pullback'] : [],
  status: data['strategyStatus.pullback'] || {},
  settings: data['strategySettings.pullback'] || {},
-},
-native_straddle: {
- results: Array.isArray(data['strategyResults.native_straddle']) ? data['strategyResults.native_straddle'] : [],
- status: data['strategyStatus.native_straddle'] || {},
- settings: data['strategySettings.native_straddle'] || {},
 },
 });
  });
@@ -903,6 +942,7 @@ native_straddle: {
  wizardActionLabel,
  wizardSignalCounts,
  wizardPriorityLabel,
+ wizardFiftyTwoWeekContext,
  wizardRuleEvidence,
  wizardUpdateWatchAging,
  wizardPercentileRanks,

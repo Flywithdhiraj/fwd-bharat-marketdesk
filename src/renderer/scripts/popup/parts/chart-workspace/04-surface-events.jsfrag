@@ -86,24 +86,53 @@
  return [...new Set(keys)];
  }
 
+ function chartStateForDataset(state = {}, dataset = {}) {
+ if (!dataset?.syntheticIndex) return state;
+ if (!dataset?.syntheticMetric) {
+ const chartType = normalizeChartType(state.chartType || 'candles');
+ const preset = normalizePreset(state.preset || 'ema_obv');
+ const inheritedCleanMetricState = preset === 'clean' && state.indicators?.volume === false;
+ if (chartType !== 'line' && !inheritedCleanMetricState) return state;
+ return {
+ ...state,
+ preset: inheritedCleanMetricState ? 'ema_obv' : preset,
+ chartType: chartType === 'line' ? 'candles' : chartType,
+ showIndicatorLegend: true,
+ indicators: inheritedCleanMetricState ? presetIndicatorDefaults('ema_obv', state.indicators || {}) : state.indicators,
+ };
+ }
+ return {
+ ...state,
+ preset: 'clean',
+ chartType: 'line',
+ showOrders: false,
+ showVwap: false,
+ showIndicatorLegend: false,
+ intelligenceOverlays: false,
+ overlayDensity: 'minimal',
+ indicators: buildCleanIndicatorState({ volume: false }),
+ };
+ }
+
  async function buildChartPayload(surface = SURFACE_PREVIEW, state = {}, strategy = {}, orderContext = null, signal = null, marketIndex = null, force = false) {
  const dataset = await loadChartDataset(state, strategy, { force });
- const model = dataset?.ok ? buildChartModel(dataset, state, strategy, orderContext) : null;
+ const chartState = chartStateForDataset(state, dataset);
+ const model = dataset?.ok ? buildChartModel(dataset, chartState, strategy, orderContext) : null;
  const indicatorApi = globalThis.FWDTradeDeskIndicators;
  const normalizedCandles = indicatorApi?.normalizeCandles(dataset?.candles || []) || [];
- const presetMeta = getPresetMeta(state.preset);
+ const presetMeta = getPresetMeta(chartState.preset);
  const shouldBuildIntelligence = model
  && indicatorApi?.buildAdvancedChartIntelligence
- && state.intelligenceOverlays !== false
- && normalizePreset(state.preset) !== 'clean'
- && normalizePreset(state.preset) !== 'key';
- const indicators = normalizedCandles.length && indicatorApi?.calculate && (chartNeedsIndicators(state, presetMeta) || shouldBuildIntelligence)
- ? indicatorApi.calculate(normalizedCandles, dataset?.studies || {}, { only: requestedIndicatorKeys(state, presetMeta), obvSmaLength: sanitizeIndicatorState(state.indicators || {}).obvSmaLength })
+ && chartState.intelligenceOverlays !== false
+ && normalizePreset(chartState.preset) !== 'clean'
+ && normalizePreset(chartState.preset) !== 'key';
+ const indicators = normalizedCandles.length && indicatorApi?.calculate && (chartNeedsIndicators(chartState, presetMeta) || shouldBuildIntelligence)
+ ? indicatorApi.calculate(normalizedCandles, dataset?.studies || {}, { only: requestedIndicatorKeys(chartState, presetMeta), obvSmaLength: sanitizeIndicatorState(chartState.indicators || {}).obvSmaLength })
  : {};
  const intelligence = shouldBuildIntelligence
  ? indicatorApi.buildAdvancedChartIntelligence(normalizedCandles, indicators, {
  surface,
- state,
+ state: chartState,
  strategy,
  dataset,
  model,
@@ -118,10 +147,10 @@
  ? await loadFwdIndexChartDataset({ symbol: FWD_INDEX_SYMBOL, timeframe: '1d' }, strategy).catch(() => null)
  : null;
  const indexCorrelation = shouldLoadIndexContext
- ? await buildIndexCorrelation(state.symbol, marketIndex, indexDataset).catch(() => null)
+ ? await buildIndexCorrelation(chartState.symbol, marketIndex, indexDataset).catch(() => null)
  : null;
- const indexComparison = shouldLoadIndexContext ? buildIndexComparison(state.symbol, marketIndex, indexDataset) : null;
- return { state, dataset, model, indicators, intelligence, indexCorrelation, indexComparison };
+ const indexComparison = shouldLoadIndexContext ? buildIndexComparison(chartState.symbol, marketIndex, indexDataset) : null;
+ return { state: chartState, dataset, model, indicators, intelligence, indexCorrelation, indexComparison };
  }
 
  async function renderDeskSurface(surface = SURFACE_TAB, surfaceRef, state = {}, strategy = {}, orderContext = null, signalState = {}, activeSignal = null, force = false) {
@@ -174,7 +203,7 @@
  intelligence: item.payload.intelligence,
  indicators: item.payload.indicators,
  indexComparison: item.payload.indexComparison,
- presetMeta: getPresetMeta(state.preset),
+ presetMeta: getPresetMeta(item.payload.state?.preset || state.preset),
  });
  if (typeof globalThis.recordPopupPerformanceMetric === 'function') {
  Promise.resolve(globalThis.recordPopupPerformanceMetric('chart', {
@@ -220,22 +249,23 @@
  const dataset = await loadChartDataset(state, strategy, {
  force: force || refreshChanged,
  });
- const model = dataset?.ok ? buildChartModel(dataset, state, strategy, orderContext) : null;
+ const chartState = chartStateForDataset(state, dataset);
+ const model = dataset?.ok ? buildChartModel(dataset, chartState, strategy, orderContext) : null;
  const indicatorApi = globalThis.FWDTradeDeskIndicators;
  const normalizedCandles = indicatorApi?.normalizeCandles(dataset?.candles || []) || [];
- const presetMeta = getPresetMeta(state.preset);
+ const presetMeta = getPresetMeta(chartState.preset);
  const shouldBuildIntelligence = model
  && indicatorApi?.buildAdvancedChartIntelligence
- && state.intelligenceOverlays !== false
- && normalizePreset(state.preset) !== 'clean'
- && normalizePreset(state.preset) !== 'key';
- const calculatedIndicators = normalizedCandles.length && indicatorApi?.calculate && (chartNeedsIndicators(state, presetMeta) || shouldBuildIntelligence)
- ? indicatorApi.calculate(normalizedCandles, dataset?.studies || {}, { only: requestedIndicatorKeys(state, presetMeta), obvSmaLength: sanitizeIndicatorState(state.indicators || {}).obvSmaLength })
+ && chartState.intelligenceOverlays !== false
+ && normalizePreset(chartState.preset) !== 'clean'
+ && normalizePreset(chartState.preset) !== 'key';
+ const calculatedIndicators = normalizedCandles.length && indicatorApi?.calculate && (chartNeedsIndicators(chartState, presetMeta) || shouldBuildIntelligence)
+ ? indicatorApi.calculate(normalizedCandles, dataset?.studies || {}, { only: requestedIndicatorKeys(chartState, presetMeta), obvSmaLength: sanitizeIndicatorState(chartState.indicators || {}).obvSmaLength })
  : {};
  const intelligence = shouldBuildIntelligence
  ? indicatorApi.buildAdvancedChartIntelligence(normalizedCandles, calculatedIndicators, {
  surface,
- state,
+ state: chartState,
  strategy,
  dataset,
  model,
@@ -250,12 +280,12 @@
  ? await loadFwdIndexChartDataset({ symbol: FWD_INDEX_SYMBOL, timeframe: '1d' }, strategy).catch(() => null)
  : null;
  const indexCorrelation = shouldLoadIndexContext
- ? await buildIndexCorrelation(state.symbol, signalState?.marketIndex || null, indexDataset).catch(() => null)
+ ? await buildIndexCorrelation(chartState.symbol, signalState?.marketIndex || null, indexDataset).catch(() => null)
  : null;
- const indexComparison = shouldLoadIndexContext ? buildIndexComparison(state.symbol, signalState?.marketIndex || null, indexDataset) : null;
+ const indexComparison = shouldLoadIndexContext ? buildIndexComparison(chartState.symbol, signalState?.marketIndex || null, indexDataset) : null;
  const markup = buildChartMarkup(
  surface,
- state,
+ chartState,
  strategy,
  dataset,
  model,
@@ -276,7 +306,7 @@
  if (!chartContainer || !model || !dataset?.ok || !globalThis.FWDTradeDeskChartEngine?.render) return;
  globalThis.FWDTradeDeskChartEngine.render(chartContainer, {
  surface,
- state,
+ state: chartState,
  strategy,
  dataset,
  model,
@@ -481,7 +511,7 @@
     <span><em>Current</em><b>${escapeHtml(from)}</b></span>
     <span><em>New</em><b>${escapeHtml(to)}</b></span>
    </div>
-   <small>${escapeHtml(isLive ? 'Next step: opens the Delta order edit/protection window. API changes require final confirmation there.' : 'This is only a planning line on the chart.')}</small>
+   <small>${escapeHtml(isLive ? 'Next step: opens the broker order review window. API changes require final confirmation there.' : 'This is only a planning line on the chart.')}</small>
   </div>
   <div class="ds-chart-confirm-actions">
    <button type="button" class="bsm" data-chart-confirm="cancel">Cancel</button>
@@ -729,7 +759,7 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  }
  root.querySelectorAll('[data-ds-chart-tf]').forEach(button => {
  button.addEventListener('click', async () => {
- const timeframe = normalizeTimeframe(button.dataset.dsChartTf || '5m');
+ const timeframe = normalizeTimeframe(button.dataset.dsChartTf || '15m');
  const allCandles = button.dataset.dsChartAllCandles === '1';
  await updateChartState(surface, currentState => {
  const nextVisible = allCandles ? MAX_RENDER_CANDLES : (currentState.replaySeed?.baselineVisibleCount || defaultVisibleCount(timeframe));
@@ -1075,7 +1105,7 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  root.querySelectorAll('[data-ds-desk-tf]').forEach(select => {
  select.addEventListener('change', async () => {
  const panel = String(select.dataset.dsDeskTf || '').trim();
- const timeframe = normalizeTimeframe(select.value || '5m');
+ const timeframe = normalizeTimeframe(select.value || '15m');
  await updateChartState(surface, currentState => ({
  timeframe: panel === 'execution' ? timeframe : currentState.timeframe,
  primaryTimeframe: panel === 'primary' ? timeframe : currentState.primaryTimeframe,

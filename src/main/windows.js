@@ -16,6 +16,29 @@ function createWindowManager({ app, auth, errorJournal } = {}) {
  }
 
 function bindCommonWindowEvents(win) {
+  let rendererReloadTimer = null;
+  let rendererReloads = 0;
+  const scheduleRendererReload = (reason, detail = {}) => {
+   if (win.isDestroyed() || rendererReloadTimer) return;
+   if (rendererReloads >= 2) {
+    errorJournal?.append?.('renderer:reload-skipped', new Error(reason || 'renderer reload skipped'), detail);
+    return;
+   }
+   rendererReloads += 1;
+   errorJournal?.append?.('renderer:reload-scheduled', new Error(reason || 'renderer reload scheduled'), {
+    ...detail,
+    attempt: rendererReloads,
+   });
+   rendererReloadTimer = setTimeout(() => {
+    rendererReloadTimer = null;
+    if (win.isDestroyed()) return;
+    try {
+     win.webContents.reloadIgnoringCache();
+    } catch (error) {
+     errorJournal?.append?.('renderer:reload-failed', error);
+    }
+   }, 900);
+  };
   win.setMenu(null);
   win.setAutoHideMenuBar(true);
   win.setMenuBarVisibility(false);
@@ -25,9 +48,13 @@ function bindCommonWindowEvents(win) {
   });
   win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
    errorJournal?.append?.('renderer:load-failed', new Error(`${errorCode} ${errorDescription}`), { validatedURL });
+   if (errorCode !== -3) {
+    scheduleRendererReload('renderer load failed', { errorCode, errorDescription, validatedURL });
+   }
   });
   win.webContents.on('render-process-gone', (_event, details) => {
    errorJournal?.append?.('renderer:gone', new Error(details.reason || 'renderer gone'), details);
+   scheduleRendererReload('renderer process gone', details);
   });
   win.webContents.on('destroyed', () => auth.forgetWebContents(win.webContents.id));
  }
@@ -35,13 +62,13 @@ function bindCommonWindowEvents(win) {
  function createMainWindow() {
   let closeConfirmed = false;
   const win = new BrowserWindow({
-   title: 'FWD TradeDesk Pro',
+   title: 'FWD Bharat MarketDesk',
    width: 1366,
    height: 768,
-   minWidth: 1180,
-   minHeight: 680,
-   backgroundColor: '#070d15',
-   icon: path.join(__dirname, '../renderer/icons/fwd-tradedesk-pro.ico'),
+   minWidth: 960,
+   minHeight: 640,
+   backgroundColor: '#0b100d',
+   icon: path.join(__dirname, '../renderer/icons/fwd-bharat-marketdesk.ico'),
    show: false,
    webPreferences: baseWebPreferences(),
   });
@@ -53,8 +80,8 @@ function bindCommonWindowEvents(win) {
     buttons: ['Keep App Open', 'Close App'],
     defaultId: 0,
     cancelId: 0,
-    title: 'Close FWD TradeDesk Pro?',
-    message: 'Close FWD TradeDesk Pro?',
+    title: 'Close FWD Bharat MarketDesk?',
+    message: 'Close FWD Bharat MarketDesk?',
     detail: 'Scanner, Strategy Lab, chart monitoring, and auto scan visibility will stop until you reopen the app.',
    });
    if (choice !== 1) {
@@ -69,6 +96,7 @@ function bindCommonWindowEvents(win) {
    win.show();
   });
   win.webContents.on('did-finish-load', () => {
+   rendererReloads = 0;
    setTimeout(() => {
     win.webContents.executeJavaScript(`
  Promise.race([
@@ -99,13 +127,13 @@ function bindCommonWindowEvents(win) {
    return { ok: true, windowId: existing.webContents.id, reused: true };
   }
   const win = new BrowserWindow({
-   title: chartMode ? 'FWD TradeDesk Pro - Chart' : 'FWD TradeDesk Pro',
+   title: chartMode ? 'FWD Bharat MarketDesk - Chart' : 'FWD Bharat MarketDesk',
    width: chartMode ? 1280 : 1180,
    height: chartMode ? 820 : 760,
    minWidth: 960,
    minHeight: 640,
    backgroundColor: '#070d15',
-   icon: path.join(__dirname, '../renderer/icons/fwd-tradedesk-pro.ico'),
+   icon: path.join(__dirname, '../renderer/icons/fwd-bharat-marketdesk.ico'),
    show: false,
    webPreferences: baseWebPreferences(),
   });

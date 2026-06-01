@@ -21,7 +21,7 @@ function checksumPayload(payload = {}) {
 function validateBackupPayload(payload = {}, candleCache) {
  const errors = [];
  if (!payload || typeof payload !== 'object') errors.push('Backup payload is not an object.');
- if (payload.app !== 'FWD TradeDesk Pro') errors.push('Backup app marker does not match.');
+ if (!['FWD Bharat MarketDesk', 'FWD Bharat MarketDesk (NSE/BSE)'].includes(payload.app)) errors.push('Backup app marker does not match.');
  if (payload.type !== 'full_app_backup') errors.push('Backup type is not full_app_backup.');
  if (![1, 2].includes(Number(payload.version || 0))) errors.push('Backup version is unsupported.');
  if (payload.checksum && payload.checksum !== checksumPayload(payload)) errors.push('Backup checksum does not match.');
@@ -48,7 +48,7 @@ function createBackupService({ app, dialog, journal, candleCache } = {}) {
   const candles = await candleCache.listRecords();
   const journalStore = await journal.readStore();
   const payload = {
-   app: 'FWD TradeDesk Pro',
+   app: 'FWD Bharat MarketDesk',
    type: 'full_app_backup',
    version: BACKUP_SCHEMA_VERSION,
    exportedAt: new Date().toISOString(),
@@ -68,11 +68,11 @@ function createBackupService({ app, dialog, journal, candleCache } = {}) {
  }
 
  async function exportBackup(message = {}) {
-  const defaultName = `fwd_tradedesk_full_backup_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.json`;
+  const defaultName = `fwd_bharat_marketdesk_full_backup_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.json`;
   const result = await dialog.showSaveDialog({
-   title: 'Save FWD TradeDesk Pro backup',
+   title: 'Save FWD Bharat MarketDesk backup',
    defaultPath: path.join(app.getPath('documents'), defaultName),
-   filters: [{ name: 'FWD TradeDesk Pro Backup', extensions: ['json'] }],
+   filters: [{ name: 'FWD Bharat MarketDesk Backup', extensions: ['json'] }],
   });
   if (result.canceled || !result.filePath) return { ok: false, canceled: true, error: 'Backup save cancelled.' };
   const payload = await buildPayload(message.rendererStorage || {});
@@ -88,9 +88,9 @@ function createBackupService({ app, dialog, journal, candleCache } = {}) {
 
  async function importBackup(message = {}) {
   const result = await dialog.showOpenDialog({
-   title: 'Restore FWD TradeDesk Pro backup',
+   title: 'Restore FWD Bharat MarketDesk backup',
    properties: ['openFile'],
-   filters: [{ name: 'FWD TradeDesk Pro Backup', extensions: ['json'] }],
+   filters: [{ name: 'FWD Bharat MarketDesk Backup', extensions: ['json'] }],
   });
   if (result.canceled || !result.filePaths?.[0]) return { ok: false, canceled: true, error: 'Backup restore cancelled.' };
   const filePath = result.filePaths[0];

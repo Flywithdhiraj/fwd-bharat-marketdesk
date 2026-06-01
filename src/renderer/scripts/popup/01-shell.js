@@ -2,24 +2,15 @@
 const POLL_INTERVALS = {
  home: 2000, // command center - live enough for operating state
  scanner: 1500, // live signals - keep fast
- alerts: 2000, // alert list - medium
- watchlist: 3000, // watchlist - medium
  chart: 3000, // decision chart - medium
- liveanalytics: 2000, // live analytics - medium
- tradecheck: 10000, // manual trade check - avoid rerender while typing
- positions: 2000, // live P&L - medium
- riskcalc: 5000, // user is typing - slow
- var: 3000, // VAR dashboard - medium
- funding: 8000, // rates change every 8h - slow
- corr: 10000, // correlation - slow
+ strategies: 10000, // strategy lab - slow
  strategy: 10000, // settings - slow
- webhooks: 10000, // settings - slow
- debug: 5000, // diagnostics - slow
 };
 let _pollLastAt = 0;
 let _pollLastTab = '';
 let _apiUsageLastAt = 0;
 let _apiUsageInFlight = false;
+let _liveIndexInFlight = false;
 function getActivePollInterval() {
  return POLL_INTERVALS[activeWorkspaceTab] ?? 3000;
 }
@@ -27,19 +18,17 @@ function getActivePollInterval() {
 const POLL_BASE_KEYS = [
  'scanStatus', 'scanProgress', 'lastScan', 'alerts',
  'soundAlert', 'marketIndex', 'sectorSummary',
- 'totalCoins', 'scannedCoins', 'watchlist', 'manualWatchlist', 'strategy', 'externalBackup',
- 'analyticsPositions', 'scanActive', 'scanHeartbeat', 'alertHistory', 'scanResults',
- 'v16LiveAccountSnapshot', 'autoTradeSettings', 'autoTradeDailyLoss',
- 'autoTradeDecisionAuditV16',
+ 'totalStocks', 'scannedStocks', 'watchlist', 'manualWatchlist', 'strategy', 'externalBackup',
+ 'scanActive', 'scanHeartbeat', 'alertHistory', 'scanResults',
 ];
 const POLL_TAB_EXTRA_KEYS = {
- scanner: ['autoWatchlist', 'decisionShortlist', 'sectorBreadth', 'lastScanTs'],
- watchlist: ['autoWatchlist', 'decisionShortlist'],
+ scanner: ['autoWatchlist', 'decisionShortlist', 'sectorBreadth', 'lastScanTs', 'scannerUniverseMeta', 'candleFetchStats'],
 };
-const _dirtyTabs = new Set(['home', 'scanner']);
+const _dirtyTabs = new Set(['home', 'scanner', 'strategies']);
 const _workspaceRenderFrames = new Map();
 const _workspaceRenderPayloads = new Map();
 let _workspaceInsightsRenderKey = '';
+let _scannerPollRenderKey = '';
 
 function markWorkspaceTabsDirty(tabs = []) {
  (Array.isArray(tabs) ? tabs : [tabs]).forEach(tab => {
@@ -134,7 +123,7 @@ function migrateStrategy() {
  const s = d.strategy;
  if (!s) return;
  let changed = false;
- if (!s.maxCoins || s.maxCoins < 200) { s.maxCoins = 500; changed = true; }
+ if (!s.maxStocks || s.maxStocks > 10) { s.maxStocks = 10; changed = true; }
  if (s.minVolume > 1000) { s.minVolume = 0; changed = true; }
  if (s.minScore > 25) { s.minScore = 15; changed = true; }
  if (!s.alertScore || s.alertScore > 70) { s.alertScore = 65; changed = true; }
@@ -221,11 +210,25 @@ function startPolling() {
  globalThis.updateSecureStorageWarningBanner?.();
  updateApiUsageMeter();
  updateStatusBar(d.scanStatus, d.scanProgress, d.lastScan, d.scanActive, d.scanHeartbeat, d);
- updateHeaderStats(d.scanResults, d.alerts, d.scannedCoins, d.totalCoins);
- updateMarketIndex(d.marketIndex);
+ updateHeaderStats(d.scanResults, d.alerts, d.scannedStocks, d.totalStocks);
+ renderPriceChangeDistribution(d.scanResults, d.marketIndex);
+ refreshLiveMarketIndex(d.marketIndex);
  updateSectorBar(d.sectorSummary);
- updateSessionBadge();
  maybeRenderWorkspaceInsights(d);
+ if (activeWorkspaceTab === 'scanner') {
+  const scannerRenderKey = buildPollRenderKey({
+   active: !!d.scanActive,
+   status: d.scanStatus || '',
+   progress: Number(d.scanProgress || 0),
+   lastScan: d.lastScan || '',
+   count: Array.isArray(d.scanResults) ? d.scanResults.length : 0,
+   scanned: Number(d.scannerUniverseMeta?.scanned || d.scannedStocks || 0),
+  });
+  if (scannerRenderKey !== _scannerPollRenderKey) {
+   _scannerPollRenderKey = scannerRenderKey;
+   scheduleWorkspaceTabRender('scanner', { preloaded: d });
+  }
+ }
  currentWatchlist = d.manualWatchlist || d.watchlist || [];
  currentAlertsCache = d.alerts || [];
  currentAnalyticsPositions = Array.isArray(d.analyticsPositions) ? d.analyticsPositions : currentAnalyticsPositions;
@@ -259,29 +262,9 @@ function startPolling() {
  }
 
  if (
- (globalThis.v16IsLiveAccountSyncEnabled?.() ?? true)
- && (globalThis.v16IsLiveAnalyticsAutoRefreshEnabled?.() ?? false)
- && document.getElementById('pane-liveanalytics')?.classList.contains('active')
+ document.getElementById('pane-strategies')?.classList.contains('active')
  ) {
-
- scheduleWorkspaceTabRender('liveanalytics', { preloaded: { scanResults: d.scanResults, lastScan: d.lastScan, alerts: d.alerts } });
-
- }
-
- if ((globalThis.v16IsLiveAccountSyncEnabled?.() ?? true) && document.getElementById('pane-positions')?.classList.contains('active')) {
-
- scheduleWorkspaceTabRender('positions', { preloaded: { scanResults: d.scanResults, lastScan: d.lastScan, alerts: d.alerts } });
-
- }
-
- if ((globalThis.v16IsLiveAccountSyncEnabled?.() ?? true) && document.getElementById('pane-orders')?.classList.contains('active')) {
-
- scheduleWorkspaceTabRender('orders', { preloaded: { scanResults: d.scanResults, lastScan: d.lastScan, alerts: d.alerts } });
-
- }
-
- if (document.getElementById('pane-riskcalc')?.classList.contains('active')) {
- globalThis.renderV16VarDashboard?.();
+ scheduleWorkspaceTabRender('strategies', { preloaded: { scanResults: d.scanResults, lastScan: d.lastScan, alerts: d.alerts } });
  }
 
  }, 1500);
@@ -300,31 +283,39 @@ function renderApiUsageMeter(response = null) {
  const el = document.getElementById('apiUsageMeter');
  if (!el) return;
  const quota = response?.quota || null;
+ const metrics = response?.metrics?.api || response?.performance?.api || {};
  const ok = !!response?.ok && !!quota;
  const severity = ok ? String(quota.severity || 'normal').toLowerCase() : 'error';
  el.className = `api-usage-meter ${severity}`;
  if (!ok) {
- el.textContent = 'API status unavailable';
+ el.textContent = 'API Error';
  el.title = response?.error || 'Runtime health did not respond.';
  return;
  }
- const totalRequests = Number(quota.totalRequests || 0);
+ const totalRequests = Number(quota.totalRequests || metrics.total || 0);
  const total429 = Number(quota.total429 || 0);
+ const failed = Number(metrics.failed || 0);
+ const avgMs = Number(metrics.avgMs || 0);
+ const lastMs = Number(metrics.lastMs || 0);
  const cooldownMs = Number(quota.backoffRemainingMs || Math.max(0, Number(quota.backoffUntil || 0) - Date.now()) || 0);
  if (severity === 'critical' && cooldownMs > 0) {
- el.textContent = `API Cooling ${Math.ceil(cooldownMs / 1000)}s`;
+ el.textContent = `Data Cooling ${Math.ceil(cooldownMs / 1000)}s`;
  } else if (severity === 'warn') {
- el.textContent = `API Warn | ${totalRequests} calls`;
+ el.textContent = 'Data Warning';
  } else {
- el.textContent = `API OK | ${totalRequests} calls`;
+ el.textContent = 'Data Ready';
  }
  el.title = [
  `API status: ${severity}`,
- `Public requests: ${totalRequests}`,
+ `Data requests: ${totalRequests}`,
+ `Failed requests: ${failed}`,
  `Rate-limit hits: ${total429}`,
+ avgMs > 0 ? `Average latency: ${avgMs}ms` : '',
+ lastMs > 0 ? `Last latency: ${lastMs}ms` : '',
  `Last OK: ${formatApiUsageAge(quota.lastOkAt)} ago`,
  cooldownMs > 0 ? `Cooling down: ${Math.ceil(cooldownMs / 1000)}s` : '',
  quota.lastStatus ? `Last status: ${quota.lastStatus}` : '',
+ quota.lastError ? `Last error: ${quota.lastError}` : '',
  ].filter(Boolean).join('\n');
 }
 
@@ -396,13 +387,13 @@ function buildFwd100AuditHtml(marketIndex = null, currentComposite = 0) {
  const pct = Number(marketIndex?.indexChangePct || 0);
  const scanPoints = Number(marketIndex?.scanChangePoints ?? marketIndex?.indexChangePoints ?? 0);
  const scanPct = Number(marketIndex?.scanChangePct ?? marketIndex?.indexChangePct ?? 0);
- const basketCount = Array.isArray(marketIndex?.topCoins) ? marketIndex.topCoins.length : Number(marketIndex?.topCount || 0);
+ const basketCount = Array.isArray(marketIndex?.topStocks) ? marketIndex.topStocks.length : Number(marketIndex?.topCount || 0);
  const rows = [
- ['Current FWD-100', formatFwd100AuditNumber(current), 'Live composite saved by latest scan'],
+ ['Current Nifty 50', formatFwd100AuditNumber(current), 'Live composite saved by latest scan'],
  [`${label.toUpperCase()} baseline`, baseline > 0 ? formatFwd100AuditNumber(baseline) : '-', formatFwd100AuditTime(baselineTs)],
  [`${label.toUpperCase()} points`, formatFwd100Points(points), `${pct >= 0 ? '+' : ''}${formatFwd100AuditNumber(pct)}%`],
  ['Last scan move', formatFwd100Points(scanPoints), `${scanPct >= 0 ? '+' : ''}${formatFwd100AuditNumber(scanPct)}% since previous scan`],
- ['Basket', `${basketCount || '-'} coins`, `Rebalance: ${marketIndex?.rebalanceReason || 'carry'}`],
+ ['Basket', `${basketCount || '-'} stocks`, `Rebalance: ${marketIndex?.rebalanceReason || 'carry'}`],
  ];
  const warning = isTrue24h
  ? ''
@@ -419,20 +410,53 @@ function buildFwd100AuditHtml(marketIndex = null, currentComposite = 0) {
  ${warning}`;
 }
 
-function renderPriceChangeDistribution(results = []) {
+function resolvePriceChangePct(row = {}) {
+ const candidates = [
+  row?.change24h,
+  row?.change,
+  row?.priceChange24h,
+  row?.priceChangePct,
+  row?.changePct,
+  row?.changePercent,
+  row?.ticker?.change24h,
+  row?.ticker?.change,
+  row?.ticker?.priceChange24h,
+  row?.ticker?.priceChangePct,
+  row?.ticker?.changePct,
+  row?.ticker?.changePercent,
+ ];
+ for (const candidate of candidates) {
+  const numeric = Number(candidate);
+  if (Number.isFinite(numeric) && numeric !== 0) return numeric;
+ }
+ return 0;
+}
+
+function renderPriceChangeDistribution(results = [], marketIndex = null) {
  const root = document.getElementById('priceChangeDistribution');
  if (!root) return;
  const rows = (Array.isArray(results) ? results : [])
- .map(row => Number(row?.change24h ?? row?.ticker?.change24h ?? row?.priceChange24h ?? 0))
+ .map(resolvePriceChangePct)
  .filter(value => Number.isFinite(value));
- if (!rows.length) {
- root.hidden = true;
- return;
+ const nonZeroRows = rows.filter(value => Math.abs(value) > 0.0001);
+ if (!rows.length && !marketIndex) {
+  root.hidden = true;
+  return;
  }
- const advancers = rows.filter(value => value > 0.05).length;
- const decliners = rows.filter(value => value < -0.05).length;
- const flat = Math.max(0, rows.length - advancers - decliners);
- const total = Math.max(1, rows.length);
+ const breadthAdvancers = Number(marketIndex?.sentiment?.advancing ?? marketIndex?.advancing ?? marketIndex?.breadth?.advancing ?? 0);
+ const breadthDecliners = Number(marketIndex?.sentiment?.declining ?? marketIndex?.declining ?? marketIndex?.breadth?.declining ?? 0);
+ const hasBreadthFallback = !nonZeroRows.length && (breadthAdvancers > 0 || breadthDecliners > 0);
+ if (!nonZeroRows.length && !hasBreadthFallback) {
+  root.hidden = true;
+  return;
+ }
+ const advancers = hasBreadthFallback ? breadthAdvancers : rows.filter(value => value > 0.05).length;
+ const decliners = hasBreadthFallback ? breadthDecliners : rows.filter(value => value < -0.05).length;
+ const distributionTotal = hasBreadthFallback
+ ? Number(marketIndex?.sentiment?.total || marketIndex?.topCount || advancers + decliners || 0)
+ : rows.length;
+ const flat = Math.max(0, distributionTotal - advancers - decliners);
+ const total = Math.max(1, distributionTotal);
  const declinePct = Math.max(4, (decliners / total) * 100);
  const flatPct = flat > 0 ? Math.max(4, (flat / total) * 100) : 0;
  const advancePct = Math.max(4, 100 - declinePct - flatPct);
@@ -446,7 +470,7 @@ function renderPriceChangeDistribution(results = []) {
  const aEl = document.getElementById('pcdAdvancers');
  if (dEl) dEl.textContent = `D ${decliners}`;
  if (aEl) aEl.textContent = `A ${advancers}`;
- root.title = `Price Change Distribution\nDecliners: ${decliners}\nFlat: ${flat}\nAdvancers: ${advancers}`;
+ root.title = `Price Change Distribution\nDecliners: ${decliners}\nFlat: ${flat}\nAdvancers: ${advancers}${hasBreadthFallback ? '\nSource: market breadth fallback because scan rows have no price-change values yet.' : ''}`;
  root.hidden = false;
 }
 
@@ -476,31 +500,61 @@ document.addEventListener('visibilitychange', () => {
 // ==================================================================
 // STATUS BAR
 // ==================================================================
+function formatScanStripStatus(statusText) {
+ const text = String(statusText || '').trim();
+ let match = text.match(/^Loading (?:Dhan )?quotes for (.+?) \(breadth (\d+), deep (\d+)\)\.\.\.$/i);
+ if (match) return `Preparing ${match[1]} scan (${match[2]} symbols)`;
+ match = text.match(/^Loading (?:Dhan )?quotes for (.+?) \(requested (\d+)\)\.\.\.$/i);
+ if (match) return `Preparing ${match[1]} scan (${match[2]} symbols)`;
+ match = text.match(/^Loaded (\d+) quotes for (.+?); loading products\.\.\.$/i);
+ if (match) return `Loaded ${match[2]} quotes (${match[1]}), preparing scan`;
+ match = text.match(/^Scanning (.+?):\s*([A-Z0-9&.\-]+)\s*\((\d+\/\d+),.*?\)$/i);
+ if (match) return `Scanning ${match[2]} (${match[3]}) | ${match[1]}`;
+ if (/^Loading NIFTY reference/i.test(text)) return 'Loading Nifty 50 benchmark reference';
+ return text;
+}
+
 function updateStatusBar(status, pct, lastScan, scanActive = false, scanHeartbeat = 0, preloaded = null) {
  const dot = document.getElementById('sdot');
  const stxt = document.getElementById('stxt');
  const slst = document.getElementById('slst');
  const progw = document.getElementById('progwrap');
  const pfill = document.getElementById('pfill');
- const pcoin = document.getElementById('pcoin');
+ const pstock = document.getElementById('psymbol') || document.getElementById('pstock');
  const ppct = document.getElementById('ppct');
  const btnS = document.getElementById('btnScan');
+ const universeMeta = preloaded?.scannerUniverseMeta || {};
+ const strategyUniverse = preloaded?.strategy?.scanUniverse || '';
+ const universeLabel = universeMeta.label || getScannerUniverseLabel(strategyUniverse || 'fno_stocks');
+ const scannedCount = Number(universeMeta.scanned || preloaded?.scannedStocks || 0);
+ const totalCount = Number(universeMeta.total || universeMeta.count || preloaded?.totalStocks || 0);
  const progress = Number.isFinite(+pct) ? Math.max(0, Math.min(100, +pct)) : 0;
  const statusText = String(status || '').trim();
  const completedScanWithPartialWarning = !!lastScan && !scanActive && /using partial results/i.test(statusText);
- const scanLikeStatus = !!statusText && /loading|scanning/i.test(statusText);
+ const failedStatus = /stopped|failed|rate limit|too many|unavailable|error/i.test(statusText);
+ const completedStatus = /^ok done|^ready\b|complete/i.test(statusText) || progress >= 100;
+ const scanLikeStatus = !!statusText && /loading|scanning/i.test(statusText) && !failedStatus && !completedStatus;
  const heartbeatFresh = Number.isFinite(+scanHeartbeat) && (Date.now() - Number(scanHeartbeat)) < SCAN_HEARTBEAT_STALE_MS;
  const scanRunning = !!scanActive && heartbeatFresh && scanLikeStatus && progress < 100;
  const staleScanState = scanLikeStatus && progress < 100 && !scanRunning;
 
  if (scanRunning) {
- dot.className = 'sdot pulse';
- stxt.textContent = statusText;
- progw.style.display = 'block';
- pfill.style.width = progress + '%';
- pcoin.textContent = statusText;
- ppct.textContent = progress + '%';
- btnS.disabled = true;
+ if (dot) dot.className = 'sdot pulse';
+ const stripStatusText = formatScanStripStatus(statusText);
+ if (stxt) {
+  stxt.textContent = stripStatusText;
+  stxt.title = statusText;
+ }
+ if (progw) progw.style.display = 'block';
+ if (pfill) pfill.style.width = progress + '%';
+ if (pstock) pstock.textContent = stripStatusText;
+ if (ppct) ppct.textContent = progress + '%';
+ if (btnS) {
+  btnS.disabled = false;
+  btnS.textContent = 'Stop Scan';
+  btnS.classList.add('danger');
+  btnS.title = 'Stop the running scan';
+ }
  scanning = true;
  } else {
  if (completedScanWithPartialWarning && (Date.now() - lastScanRecoveryAt > 10000)) {
@@ -522,33 +576,56 @@ function updateStatusBar(status, pct, lastScan, scanActive = false, scanHeartbea
  scanProgress: 0,
  });
  }
- dot.className = progress === 100 ? 'sdot green' : 'sdot';
- stxt.textContent = staleScanState
- ? 'Scan stopped - ready to restart'
- : (completedScanWithPartialWarning ? `Ready - last scan ${lastScan}` : (statusText || 'Ready - click Scan Now'));
- progw.style.display = 'none';
- btnS.disabled = false;
- if (scanning) {
+ if (dot) dot.className = failedStatus ? 'sdot red' : (progress === 100 ? 'sdot green' : 'sdot');
+ const readyText = lastScan
+ ? `Ready - last scan ${lastScan}${universeLabel ? ` | ${universeLabel}` : ''}${scannedCount || totalCount ? ` | ${scannedCount || '--'}/${totalCount || '--'} scanned` : ''}`
+ : 'Ready - click Scan Now';
+ if (stxt) stxt.textContent = staleScanState
+ ? (lastScan ? `Scan stopped - last complete ${lastScan}` : 'Scan stopped - ready to restart')
+ : (completedScanWithPartialWarning || completedStatus ? readyText : (statusText && !/^starting/i.test(statusText) ? statusText : readyText));
+ if (progw) progw.style.display = 'none';
+ if (btnS) {
+  btnS.disabled = false;
+  btnS.textContent = 'Scan Now';
+  btnS.classList.remove('danger');
+  btnS.title = 'Run scanner now';
+ }
+if (scanning) {
  scanning = false;
- markWorkspaceTabsDirty(['scanner', 'watchlist', 'chart', 'corr']);
- if (globalThis.v16IsLiveAnalyticsAutoRefreshEnabled?.() ?? false) markWorkspaceTabsDirty('liveanalytics');
+ markWorkspaceTabsDirty(['scanner', 'strategies', 'chart', 'strategy']);
  if (isWorkspaceTabDirty(activeWorkspaceTab)) {
  scheduleWorkspaceTabRender(activeWorkspaceTab, { preloaded });
  }
  }
  }
- if (lastScan) slst.textContent = 'Last: ' + lastScan;
+ if (lastScan && slst) slst.textContent = `Last: ${lastScan}${universeLabel ? ` | ${universeLabel}` : ''}${scannedCount || totalCount ? ` | ${scannedCount || '--'}/${totalCount || '--'}` : ''}`;
 }
 
 
 // ==================================================================
 // HEADER STATS
 // ==================================================================
-function updateHeaderStats(results, alerts, scanned, total) {
- document.getElementById('cSignals').textContent = (results || []).length;
- document.getElementById('cAlerts').textContent = (alerts || []).length;
+function updateHeaderStats(results, alerts, scanned, total, universeMeta = null) {
+ const signalsEl = document.getElementById('cSignals');
+ const alertsEl = document.getElementById('cAlerts');
+ const symbolsEl = document.getElementById('cStocks') || document.getElementById('csymbols');
+ const meta = universeMeta || {};
+ const universeLabel = meta.label || getScannerUniverseLabel(meta.id || meta.universe || '');
+ const requested = Number(meta.requested || meta.limit || total || 0);
+ const actualScanned = Number(scanned || meta.scanned || 0);
+ const available = Number(meta.count || meta.total || total || 0);
+ if (signalsEl) signalsEl.textContent = (results || []).length;
+ if (alertsEl) alertsEl.textContent = (alerts || []).length;
  if (scanned !== undefined && total !== undefined) {
- document.getElementById('cCoins').textContent = `${scanned}/${total}`;
+ if (symbolsEl) {
+  symbolsEl.textContent = `${actualScanned || 0}/${requested || available || total || 0}`;
+  symbolsEl.title = [
+   universeLabel ? `Scanner universe: ${universeLabel}` : '',
+   `Scanned this run: ${actualScanned || 0}`,
+   requested ? `Requested scan limit: ${requested}` : '',
+   available ? `Available symbols in selected universe: ${available}` : '',
+  ].filter(Boolean).join('\n');
+ }
  }
  const badge = document.getElementById('tbAlert');
  const ac = (alerts || []).length;
@@ -560,17 +637,18 @@ function updateHeaderStats(results, alerts, scanned, total) {
 
 async function refreshStats() {
  const d = await storeGet([
- 'scanResults','alerts','scanStatus','scanProgress','lastScan',
- 'scannedCoins','totalCoins','marketIndex','sectorSummary','watchlist','manualWatchlist',
+ 'scanResults','alerts','scanStatus','scanProgress','lastScan','lastScanTs',
+ 'scannedStocks','totalStocks','marketIndex','sectorSummary','watchlist','manualWatchlist',
  'analyticsPositions',
- 'scanActive','scanHeartbeat'
+ 'scanActive','scanHeartbeat','scannerUniverseMeta','strategy'
  ]);
  const liveAlerts = getLiveAlertSnapshot(d.alerts, d.scanResults);
- updateHeaderStats(d.scanResults, liveAlerts, d.scannedCoins, d.totalCoins);
+ const universeMeta = d.scannerUniverseMeta || {};
+ updateHeaderStats(d.scanResults, liveAlerts, universeMeta.scanned || d.scannedStocks, universeMeta.requested || universeMeta.count || universeMeta.total || d.totalStocks, universeMeta);
  updateApiUsageMeter(true);
- updateStatusBar(d.scanStatus, d.scanProgress, d.lastScan, d.scanActive, d.scanHeartbeat);
- renderPriceChangeDistribution(d.scanResults);
- updateMarketIndex(d.marketIndex);
+ updateStatusBar(d.scanStatus, d.scanProgress, d.lastScan, d.scanActive, d.scanHeartbeat, d);
+ renderPriceChangeDistribution(d.scanResults, d.marketIndex);
+ refreshLiveMarketIndex(d.marketIndex);
  updateSectorBar(d.sectorSummary);
  updateWorkspaceInsights(d);
  currentWatchlist = d.manualWatchlist || d.watchlist || [];
@@ -578,16 +656,520 @@ async function refreshStats() {
  currentAnalyticsPositions = Array.isArray(d.analyticsPositions) ? d.analyticsPositions : currentAnalyticsPositions;
 }
 
+function failManualScan(message, detail = '') {
+ const scanBtn = document.getElementById('btnScan');
+ const dotEl = document.getElementById('sdot');
+ const statusEl = document.getElementById('stxt');
+ const progressEl = document.getElementById('progwrap');
+ if (scanBtn) {
+  scanBtn.disabled = false;
+  scanBtn.textContent = 'Scan Now';
+  scanBtn.classList.remove('danger');
+  scanBtn.title = 'Run scanner now';
+ }
+ if (dotEl) dotEl.className = 'sdot';
+ if (progressEl) progressEl.style.display = 'none';
+ if (statusEl) statusEl.textContent = message;
+ scanning = false;
+ showSystemToast?.('Scan failed', detail || message, 'error', 5000);
+}
+
+function startManualScan() {
+ if (scanning) {
+  const scanBtn = document.getElementById('btnScan');
+  const statusEl = document.getElementById('stxt');
+  if (scanBtn) scanBtn.disabled = true;
+  if (statusEl) statusEl.textContent = 'Stopping scan...';
+  globalThis.chrome?.runtime?.sendMessage?.({ action: 'stopScan' }, response => {
+   if (scanBtn) {
+    scanBtn.disabled = false;
+    scanBtn.textContent = 'Scan Now';
+    scanBtn.classList.remove('danger');
+   }
+   scanning = false;
+   if (statusEl) statusEl.textContent = response?.ok ? 'Scan stopped by user' : `Stop failed: ${response?.error || 'unknown'}`;
+   void refreshStats().catch(() => {});
+  });
+  return;
+ }
+ scanning = true;
+ const scanBtn = document.getElementById('btnScan');
+ const dotEl = document.getElementById('sdot');
+ const statusEl = document.getElementById('stxt');
+ const progressEl = document.getElementById('progwrap');
+ if (scanBtn) {
+  scanBtn.disabled = false;
+  scanBtn.textContent = 'Stop Scan';
+  scanBtn.classList.add('danger');
+  scanBtn.title = 'Stop the running scan';
+ }
+ if (dotEl) dotEl.className = 'sdot pulse';
+ const currentUniverse = sanitizeScannerUniverseId(getScannerSettingValue('sScanUniverse', 'fno_stocks'));
+ const currentUniverseLabel = getScannerUniverseLabel(currentUniverse);
+ if (statusEl) statusEl.textContent = `Starting ${currentUniverseLabel} scan...`;
+ if (progressEl) progressEl.style.display = 'block';
+ chrome.storage?.local?.set?.({
+ scanActive: true,
+ scanHeartbeat: Date.now(),
+ scanStatus: `Starting ${currentUniverseLabel} scan...`,
+ scanProgress: 1,
+ });
+
+ if (typeof globalThis.chrome?.runtime?.sendMessage !== 'function') {
+ failManualScan('Scan error: background not ready', 'Runtime messaging is not available.');
+ return;
+ }
+
+ globalThis.chrome.runtime.sendMessage({ action: 'startScan' }, response => {
+ const runtimeError = globalThis.chrome?.runtime?.lastError;
+ if (runtimeError) {
+ failManualScan('Scan error: background not ready', runtimeError.message || 'Background not ready.');
+ return;
+ }
+  if (!response?.ok) {
+  failManualScan(`Scan error: ${response?.error || 'unknown'}`, response?.error || 'Unknown scan error.');
+  return;
+  }
+  if (statusEl) statusEl.textContent = response?.alreadyRunning
+  ? `Scan already running - ${currentUniverseLabel}`
+  : `Scan started - ${currentUniverseLabel}`;
+  setTimeout(() => refreshStats().catch(() => {}), 750);
+ });
+}
+
+function updateAutoScanButton(enabled = false, interval = null) {
+ const btn = document.getElementById('btnAutoScan');
+ if (!btn) return;
+ const safeInterval = sanitizeAutoScanInterval(interval);
+ btn.textContent = enabled ? `Auto ${safeInterval}m On` : 'Auto Off';
+ btn.classList.toggle('active', !!enabled);
+ btn.title = enabled ? `Auto-scan every ${safeInterval} minutes` : 'Toggle auto-scan';
+}
+
+async function loadAutoScanState() {
+ try {
+ const d = await storeGet(['autoScan', 'autoScanInterval', 'strategy']);
+ const enabled = d.autoScan ?? d.strategy?.autoScan ?? false;
+ const interval = sanitizeAutoScanInterval(d.autoScanInterval ?? d.strategy?.autoScanInterval);
+ updateAutoScanButton(enabled, interval);
+ } catch (error) {
+ console.warn('Auto-scan state load failed:', error);
+ updateAutoScanButton(false);
+ }
+}
+
+async function toggleAutoScanFromHeader() {
+ const d = await storeGet(['autoScan', 'autoScanInterval', 'strategy']);
+ const current = d.autoScan ?? d.strategy?.autoScan ?? false;
+ const nextEnabled = !current;
+ const interval = sanitizeAutoScanInterval(d.autoScanInterval ?? d.strategy?.autoScanInterval);
+ updateAutoScanButton(nextEnabled, interval);
+
+ if (typeof globalThis.chrome?.runtime?.sendMessage !== 'function') {
+ updateAutoScanButton(current, interval);
+ showSystemToast?.('Auto scan failed', 'Runtime messaging is not available.', 'error', 5000);
+ return;
+ }
+
+ globalThis.chrome.runtime.sendMessage({ action: 'toggleAutoScan', enable: nextEnabled, interval }, response => {
+ const runtimeError = globalThis.chrome?.runtime?.lastError;
+ if (runtimeError || !response?.ok) {
+ updateAutoScanButton(current, interval);
+ showSystemToast?.('Auto scan failed', runtimeError?.message || response?.error || 'Could not update schedule.', 'error', 5000);
+ return;
+ }
+ updateAutoScanButton(response.enabled ?? nextEnabled, response.interval ?? interval);
+ showSystemToast?.(
+ nextEnabled ? 'Auto scan enabled' : 'Auto scan disabled',
+ nextEnabled ? `Scanner will run every ${sanitizeAutoScanInterval(response.interval ?? interval)} minutes.` : 'Scheduled scanner has been stopped.',
+ 'success',
+ 2600
+ );
+ });
+}
+
+function getScannerSettingInput(id) {
+ return document.getElementById(id);
+}
+
+function getScannerSettingValue(id, fallback = '') {
+ const input = getScannerSettingInput(id);
+ return input ? input.value : fallback;
+}
+
+function setScannerSettingValue(id, value) {
+ const input = getScannerSettingInput(id);
+ if (input) input.value = String(value ?? '');
+}
+
+function getScannerSettingChecked(id, fallback = false) {
+ const input = getScannerSettingInput(id);
+ return input ? !!input.checked : !!fallback;
+}
+
+function setScannerSettingChecked(id, value) {
+ const input = getScannerSettingInput(id);
+ if (input) input.checked = !!value;
+}
+
+function getScannerSettingNumber(id, fallback, min = -Infinity, max = Infinity) {
+ const raw = Number(getScannerSettingValue(id, fallback));
+ const numeric = Number.isFinite(raw) ? raw : Number(fallback);
+ return Math.max(min, Math.min(max, Number.isFinite(numeric) ? numeric : 0));
+}
+
+function setMaxScanSymbolsValue(value) {
+ setScannerSettingValue('sMaxsymbols', value);
+ setScannerSettingValue('sMaxCoins', value);
+}
+
+function getMaxScanSymbolsValue(fallback = 500) {
+ const activeInput = getScannerSettingInput('sMaxsymbols') || getScannerSettingInput('sMaxCoins');
+ const raw = activeInput ? Number(activeInput.value) : Number(fallback);
+ return Math.max(5, Math.min(3500, Number.isFinite(raw) ? raw : Number(fallback) || 500));
+}
+
+function sanitizeScannerUniverseId(value = '') {
+ if (typeof globalThis.normalizeDhanScannerUniverse === 'function') return globalThis.normalizeDhanScannerUniverse(value);
+ const raw = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+ if (['nifty500', 'nifty_500'].includes(raw)) return 'nifty500';
+ if (['midcap150', 'midcap_150', 'midcap'].includes(raw)) return 'midcap150';
+ if (['smallcap250', 'smallcap_250', 'smallcap'].includes(raw)) return 'smallcap250';
+ if (['all_nse', 'all', 'nse'].includes(raw)) return 'all_nse';
+ return 'fno_stocks';
+}
+
+function sanitizeScannerTimeframe(value = '', fallback = '15m') {
+ const raw = String(value || '').trim().toLowerCase();
+ if (['15m', '4h', '1d', '1w'].includes(raw)) return raw;
+ if (['1h', '60m', '60', '240'].includes(raw)) return '4h';
+ if (['1wk', 'w', 'weekly', 'week'].includes(raw)) return '1w';
+ if (['d', 'day', 'daily'].includes(raw)) return '1d';
+ if (['1m', '3m', '5m', '15'].includes(raw)) return '15m';
+ return ['15m', '4h', '1d', '1w'].includes(fallback) ? fallback : '15m';
+}
+
+function getScannerUniverseLabel(value = '') {
+ const id = sanitizeScannerUniverseId(value);
+ return {
+  fno_stocks: 'F&O Stocks',
+  nifty500: 'Nifty 500',
+  midcap150: 'Midcap 150',
+  smallcap250: 'Smallcap 250',
+  all_nse: 'All NSE Equity',
+ }[id] || 'F&O Stocks';
+}
+
+function getScannerUniverseDefaultLimit(value = '') {
+ const id = sanitizeScannerUniverseId(value);
+ return {
+  fno_stocks: 250,
+  nifty500: 500,
+  midcap150: 150,
+  smallcap250: 250,
+  all_nse: 3000,
+ }[id] || 250;
+}
+
+function sanitizeScannerMode(value = '') {
+ const raw = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+ return ['standard', 'penny_awakening'].includes(raw) ? raw : 'standard';
+}
+
+function updateScannerUniverseButtons(universe = 'fno_stocks') {
+ const activeUniverse = sanitizeScannerUniverseId(universe);
+ document.querySelectorAll('[data-scan-universe]').forEach(button => {
+ const isActive = sanitizeScannerUniverseId(button.dataset.scanUniverse || '') === activeUniverse;
+ button.classList.toggle('active', isActive);
+ button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+ });
+ const select = getScannerSettingInput('sScanUniverse');
+ if (select) select.value = activeUniverse;
+}
+
+function sanitizeScannerKeyLevels(raw = {}) {
+ return globalThis.FWDTradeDeskShared?.sanitizeKeyLevelSettings
+ ? globalThis.FWDTradeDeskShared.sanitizeKeyLevelSettings(raw)
+ : (raw || {});
+}
+
+function sanitizeScannerChartDefaults(raw = {}) {
+ return globalThis.FWDTradeDeskShared?.sanitizeChartDefaults
+ ? globalThis.FWDTradeDeskShared.sanitizeChartDefaults(raw)
+ : (raw || {});
+}
+
+function sanitizeScannerChartCacheEnabled(value) {
+ return globalThis.FWDTradeDeskShared?.sanitizeChartCacheEnabled
+ ? globalThis.FWDTradeDeskShared.sanitizeChartCacheEnabled(value)
+ : value !== false;
+}
+
+function sanitizeScannerMarketDataMode(value) {
+ return globalThis.FWDTradeDeskShared?.sanitizeMarketDataMode
+ ? globalThis.FWDTradeDeskShared.sanitizeMarketDataMode(value)
+ : (String(value || '').trim().toLowerCase() || 'auto');
+}
+
+function sanitizeScannerMarketIndexSettings(raw = {}) {
+ return globalThis.FWDTradeDeskShared?.sanitizeMarketIndexSettings
+ ? globalThis.FWDTradeDeskShared.sanitizeMarketIndexSettings(raw)
+ : (raw || {});
+}
+
+function setScannerSettingsStatus(message = '', tone = '') {
+ const saveOk = document.getElementById('saveOK');
+ if (saveOk) {
+ saveOk.textContent = message;
+ saveOk.style.color = tone || '';
+ }
+ const label = document.getElementById('settingsSaveStateLabel');
+ if (label && message) label.textContent = message;
+}
+
+async function loadScannerSettings() {
+ if (!getScannerSettingInput('sE1')) return;
+ const d = await storeGet(['strategy', 'autoScan', 'autoScanInterval']);
+ const s = d.strategy || {};
+ const keyLevels = sanitizeScannerKeyLevels(s.keyLevelSettings || {});
+ const chartDefaults = sanitizeScannerChartDefaults(s.chartDefaults || {});
+ const marketIndex = sanitizeScannerMarketIndexSettings(s.marketIndexSettings || {});
+ const autoScanInterval = sanitizeAutoScanInterval(d.autoScanInterval ?? s.autoScanInterval);
+ const autoScan = d.autoScan ?? s.autoScan ?? false;
+
+ setScannerSettingValue('sE1', s.ema1 ?? 9);
+ setScannerSettingValue('sE2', s.ema2 ?? 30);
+ setScannerSettingValue('sE3', s.ema3 ?? 100);
+ setScannerSettingValue('sOBV', s.obvPeriod ?? 50);
+  const scanUniverse = sanitizeScannerUniverseId(s.scanUniverse || 'fno_stocks');
+  const scanMode = sanitizeScannerMode(s.scanMode || 'standard');
+  setScannerSettingValue('sTF1', sanitizeScannerTimeframe(s.tf1, '1d'));
+  setScannerSettingValue('sTF2', sanitizeScannerTimeframe(s.tf2, '15m'));
+  setScannerSettingValue('sScanUniverse', scanUniverse);
+  setScannerSettingValue('sScanMode', scanMode);
+  updateScannerUniverseButtons(scanUniverse);
+ setScannerSettingValue('sMinScore', s.minScore ?? 15);
+ setScannerSettingValue('sAlertScore', s.alertScore ?? 65);
+ setMaxScanSymbolsValue(s.maxCoins ?? 500);
+ setScannerSettingValue('sMinVol', s.minVolume ?? 0);
+ setScannerSettingValue('sFundingMinVol', s.fundingMinVolume ?? 100000);
+ setScannerSettingValue('sMarketIndexMaxConstituents', marketIndex.maxConstituents ?? 250);
+ setScannerSettingValue('sMarketIndexRebalanceDays', marketIndex.rebalanceDays ?? 1);
+ setScannerSettingValue('sMarketIndexExcludedSymbols', Array.isArray(marketIndex.excludedSymbols) ? marketIndex.excludedSymbols.join(', ') : '');
+ setScannerSettingValue('sAutoInterval', autoScanInterval);
+ setScannerSettingChecked('sAutoScan', autoScan);
+ setScannerSettingChecked('sLiveAccountSync', s.liveAccountSync !== false);
+ setScannerSettingChecked('sLiveOrderPreviewChart', s.liveOrderPreviewChart !== false);
+ setScannerSettingValue('sMarketDataMode', sanitizeScannerMarketDataMode(s.marketDataMode));
+ setScannerSettingValue('sKeyPivotLength', keyLevels.pivotLength ?? 6);
+ setScannerSettingValue('sKeyPivotMemory', keyLevels.pivotMemory ?? 50);
+ setScannerSettingValue('sKeyLevelCount', keyLevels.numberOfLevels ?? 4);
+ setScannerSettingValue('sKeyStrengthDisplay', keyLevels.displayStrengthAs ?? 'score');
+ setScannerSettingValue('sKeyThickness', keyLevels.thickness ?? 3);
+ setScannerSettingChecked('sKeyShowPivotCircles', keyLevels.showPivotCircles !== false);
+ setScannerSettingChecked('sKeyShowLevelGlow', keyLevels.showLevelGlow !== false);
+ setScannerSettingValue('sChartDefaultPreset', chartDefaults.defaultPreset ?? 'clean');
+ setScannerSettingChecked('sChartShowOrders', !!chartDefaults.showOrders);
+ setScannerSettingChecked('sChartShowVwap', !!chartDefaults.showVwap);
+ setScannerSettingChecked('sChartCacheEnabled', sanitizeScannerChartCacheEnabled(s.chartCacheEnabled));
+ globalThis.deltaMarketDataMode = sanitizeScannerMarketDataMode(s.marketDataMode);
+ updateAutoScanButton(autoScan, autoScanInterval);
+ setScannerSettingsStatus('No visible changes');
+}
+
+async function saveScannerSettings() {
+ if (!getScannerSettingInput('sE1')) return;
+ const fundingMinVolume = getScannerSettingNumber('sFundingMinVol', 100000, 0);
+ const current = await storeGet(['strategy']);
+ const previous = current.strategy || {};
+ const autoScanInterval = sanitizeAutoScanInterval(getScannerSettingValue('sAutoInterval', previous.autoScanInterval));
+ const autoScan = getScannerSettingChecked('sAutoScan', previous.autoScan);
+ const marketDataMode = sanitizeScannerMarketDataMode(getScannerSettingValue('sMarketDataMode', previous.marketDataMode));
+  const scanUniverse = sanitizeScannerUniverseId(getScannerSettingValue('sScanUniverse', previous.scanUniverse || 'fno_stocks'));
+  const scanMode = sanitizeScannerMode(getScannerSettingValue('sScanMode', previous.scanMode || 'standard'));
+ const keyLevelSettings = sanitizeScannerKeyLevels({
+ pivotLength: getScannerSettingValue('sKeyPivotLength', previous.keyLevelSettings?.pivotLength ?? 6),
+ pivotMemory: getScannerSettingValue('sKeyPivotMemory', previous.keyLevelSettings?.pivotMemory ?? 50),
+ numberOfLevels: getScannerSettingValue('sKeyLevelCount', previous.keyLevelSettings?.numberOfLevels ?? 4),
+ displayStrengthAs: getScannerSettingValue('sKeyStrengthDisplay', previous.keyLevelSettings?.displayStrengthAs ?? 'score'),
+ thickness: getScannerSettingValue('sKeyThickness', previous.keyLevelSettings?.thickness ?? 3),
+ showPivotCircles: getScannerSettingChecked('sKeyShowPivotCircles', previous.keyLevelSettings?.showPivotCircles !== false),
+ showLevelGlow: getScannerSettingChecked('sKeyShowLevelGlow', previous.keyLevelSettings?.showLevelGlow !== false),
+ });
+ const chartDefaults = sanitizeScannerChartDefaults({
+ defaultPreset: getScannerSettingValue('sChartDefaultPreset', previous.chartDefaults?.defaultPreset ?? 'clean'),
+ showOrders: getScannerSettingChecked('sChartShowOrders', previous.chartDefaults?.showOrders),
+ showVwap: getScannerSettingChecked('sChartShowVwap', previous.chartDefaults?.showVwap),
+ });
+ const existingMarketIndex = sanitizeScannerMarketIndexSettings(previous.marketIndexSettings || {});
+ const marketIndexSettings = sanitizeScannerMarketIndexSettings({
+ maxConstituents: getScannerSettingValue('sMarketIndexMaxConstituents', existingMarketIndex.maxConstituents ?? 250),
+ rebalanceDays: getScannerSettingValue('sMarketIndexRebalanceDays', existingMarketIndex.rebalanceDays ?? 1),
+ rebuildNonce: existingMarketIndex.rebuildNonce,
+ excludedSymbols: getScannerSettingValue('sMarketIndexExcludedSymbols', Array.isArray(existingMarketIndex.excludedSymbols) ? existingMarketIndex.excludedSymbols.join(', ') : ''),
+ });
+ const strategy = {
+ ...previous,
+ ema1: getScannerSettingNumber('sE1', 9, 1, 200),
+ ema2: getScannerSettingNumber('sE2', 30, 1, 200),
+ ema3: getScannerSettingNumber('sE3', 100, 1, 200),
+ obvPeriod: getScannerSettingNumber('sOBV', 50, 1, 500),
+ tf1: sanitizeScannerTimeframe(getScannerSettingValue('sTF1', '1d'), '1d'),
+ tf2: sanitizeScannerTimeframe(getScannerSettingValue('sTF2', '15m'), '15m'),
+ minScore: getScannerSettingNumber('sMinScore', 15, 0, 100),
+ alertScore: getScannerSettingNumber('sAlertScore', 65, 0, 100),
+  maxCoins: getMaxScanSymbolsValue(previous.maxCoins ?? 500),
+  scanUniverse,
+  scanMode,
+ minVolume: getScannerSettingNumber('sMinVol', 0, 0),
+ fundingMinVolume: Math.round(fundingMinVolume),
+ autoScan,
+ autoScanInterval,
+ liveAccountSync: getScannerSettingChecked('sLiveAccountSync', previous.liveAccountSync !== false),
+ liveOrderPreviewChart: getScannerSettingChecked('sLiveOrderPreviewChart', previous.liveOrderPreviewChart !== false),
+ marketDataMode,
+ marketIndexSettings,
+ keyLevelSettings,
+ chartDefaults,
+ chartCacheEnabled: sanitizeScannerChartCacheEnabled(getScannerSettingChecked('sChartCacheEnabled', previous.chartCacheEnabled !== false)),
+ notify: previous.notify ?? true,
+ soundAlert: previous.soundAlert ?? true,
+ alertTone: sanitizeAlertTone(previous.alertTone),
+ };
+ const ok = await storeSet({ strategy, autoScan, autoScanInterval });
+ if (!ok) {
+ showSystemToast?.('Settings failed', 'Could not save scanner settings.', 'error', 5000);
+ return;
+ }
+ globalThis.deltaMarketDataMode = marketDataMode;
+ updateScannerUniverseButtons(scanUniverse);
+ updateAutoScanButton(autoScan, autoScanInterval);
+ if (typeof globalThis.chrome?.runtime?.sendMessage === 'function') {
+ globalThis.chrome.runtime.sendMessage({ action: 'toggleAutoScan', enable: autoScan, interval: autoScanInterval }, () => {
+ void globalThis.chrome?.runtime?.lastError;
+ });
+ }
+ setScannerSettingsStatus('Settings saved', '#22e0a4');
+ showSystemToast?.('Settings saved', `${getScannerUniverseLabel(scanUniverse)} scanner, strategy, chart, and API defaults were saved.`, 'success', 3000);
+}
+
+function applyScannerProfilePreset(presetId = '') {
+ const presets = {
+ manual_clean: { minScore: 15, alertScore: 65, maxCoins: 500, tf1: '1d', tf2: '15m', chart: 'key', universe: 'nifty500' },
+ breakout_validation: { minScore: 24, alertScore: 78, maxCoins: 350, tf1: '1d', tf2: '15m', chart: 'analysis', universe: 'nifty500' },
+ trend_follow: { minScore: 20, alertScore: 72, maxCoins: 450, tf1: '1d', tf2: '4h', chart: 'ema', universe: 'nifty500' },
+ mean_reversion: { minScore: 24, alertScore: 76, maxCoins: 250, tf1: '1d', tf2: '15m', chart: 'key', universe: 'fno_stocks' },
+ };
+ const preset = presets[String(presetId || '').trim()];
+ if (!preset) return;
+ setScannerSettingValue('sMinScore', preset.minScore);
+ setScannerSettingValue('sAlertScore', preset.alertScore);
+ setMaxScanSymbolsValue(preset.maxCoins);
+ setScannerSettingValue('sTF1', preset.tf1);
+ setScannerSettingValue('sTF2', preset.tf2);
+ setScannerSettingValue('sScanUniverse', preset.universe);
+ updateScannerUniverseButtons(preset.universe);
+ setScannerSettingValue('sChartDefaultPreset', preset.chart);
+ setScannerSettingsStatus('Preset applied. Review and save.');
+ const note = document.getElementById('strategyProfilePresetStatus');
+ if (note) note.textContent = 'Preset applied. Review the visible scanner and chart settings, then Save Strategy.';
+}
+
+async function rebuildMarketIndexOnNextScan() {
+ const data = await storeGet(['strategy']);
+ const strategy = data.strategy || {};
+ const marketIndexSettings = sanitizeScannerMarketIndexSettings({
+ ...(strategy.marketIndexSettings || {}),
+ rebuildNonce: Date.now(),
+ });
+ const ok = await storeSet({ strategy: { ...strategy, marketIndexSettings } });
+ if (ok) {
+ setScannerSettingsStatus('Benchmark refresh queued', '#22e0a4');
+ showSystemToast?.('Benchmark queued', 'Nifty/F&O breadth context will refresh on the next scan.', 'success', 3000);
+ }
+}
+
+async function selectScannerUniverse(universe = 'fno_stocks', { runNow = false } = {}) {
+ const scanUniverse = sanitizeScannerUniverseId(universe);
+ const data = await storeGet(['strategy']);
+  const strategy = {
+  ...(data.strategy || {}),
+  scanUniverse,
+  scanMode: scanUniverse === 'all_nse' ? sanitizeScannerMode(data.strategy?.scanMode === 'penny_awakening' ? 'standard' : (data.strategy?.scanMode || 'standard')) : sanitizeScannerMode(data.strategy?.scanMode || 'standard'),
+  tf1: sanitizeScannerTimeframe(data.strategy?.tf1, '1d'),
+  tf2: sanitizeScannerTimeframe(data.strategy?.tf2, '15m'),
+  };
+  strategy.maxCoins = getScannerUniverseDefaultLimit(scanUniverse);
+  await storeSet({ strategy });
+  setScannerSettingValue('sScanUniverse', scanUniverse);
+  setScannerSettingValue('sScanMode', strategy.scanMode);
+  setMaxScanSymbolsValue(strategy.maxCoins);
+ updateScannerUniverseButtons(scanUniverse);
+ showSystemToast?.(
+ `${getScannerUniverseLabel(scanUniverse)} selected`,
+ 'Use Scan Now to run this universe.',
+ 'success',
+ 2400
+ );
+}
+
+globalThis.startManualScan = startManualScan;
+globalThis.loadAutoScanState = loadAutoScanState;
+globalThis.loadScannerSettings = loadScannerSettings;
+globalThis.saveScannerSettings = saveScannerSettings;
+globalThis.getScannerUniverseLabel = getScannerUniverseLabel;
+
 
 // ==================================================================
-// FWD-100 INDEX - cumulative equal-weight benchmark plus sentiment tape
+// FWD index tape plus F&O breadth
 // ==================================================================
+async function refreshLiveMarketIndex(mi) {
+ if (!mi || _liveIndexInFlight || !window.fwdDesktopNative?.sendNativeMessage) {
+  updateMarketIndex(mi);
+  return;
+ }
+ _liveIndexInFlight = true;
+ try {
+  const response = await window.fwdDesktopNative.sendNativeMessage({ type: 'dhan_data', action: 'live_feed_status', limit: 24 });
+  const ticks = Array.isArray(response?.ticks) ? response.ticks : [];
+  if (!response?.connected || !ticks.length || !Array.isArray(mi.indexTape)) {
+   updateMarketIndex(mi);
+   return;
+  }
+  const bySymbol = new Map(ticks.map(tick => [String(tick.symbol || tick.tradingSymbol || '').trim().toUpperCase(), tick]));
+  const indexTape = mi.indexTape.map(item => {
+   const tick = bySymbol.get(String(item.symbol || '').trim().toUpperCase());
+   const price = Number(tick?.lastPrice || 0);
+   if (!tick || !(price > 0)) return item;
+   const storedPrice = Number(item.price || 0);
+   const storedPoints = Number(item.pointChange || 0);
+   const baseline = storedPrice > 0 && Number.isFinite(storedPoints) ? storedPrice - storedPoints : Number(tick.close || 0);
+   const pointChange = baseline > 0 ? price - baseline : storedPoints;
+   const changePct = baseline > 0 ? (pointChange / baseline) * 100 : Number(item.changePct || 0);
+   return { ...item, price, pointChange, changePct };
+  });
+  const nifty = indexTape.find(item => item.symbol === 'NIFTY');
+  updateMarketIndex({
+   ...mi,
+   indexTape,
+   composite: Number(nifty?.price || mi.composite || 0),
+   indexValue: Number(nifty?.price || mi.indexValue || 0),
+   indexChangePct: Number(nifty?.changePct ?? mi.indexChangePct ?? 0),
+  });
+ } catch (_) {
+  updateMarketIndex(mi);
+ } finally {
+  _liveIndexInFlight = false;
+ }
+}
+
 function updateMarketIndex(mi) {
  const bar = document.getElementById('d10bar');
  if (!mi) { bar.style.display = 'none'; return; }
  bar.style.display = 'flex';
 
  const v = Number(mi.sentiment?.value ?? mi.value ?? 0);
+ const breadthPct = Number(mi.sentiment?.breadthPct ?? 0);
  const indexMove = Number(mi.indexChangePct ?? 0);
  const comp = normalizeFwd100DisplayValue(mi.composite, v);
  const pointMove = getFwd100PointMove(mi, comp);
@@ -623,63 +1205,43 @@ function updateMarketIndex(mi) {
  }
  const subEl = document.getElementById('d10sub');
  if (subEl) {
- subEl.textContent = '';
- subEl.style.display = 'none';
+  subEl.textContent = 'LIVE';
+ subEl.style.display = '';
  }
  updateMarketBenchmarks(mi, cond);
 
- const coinsEl = document.getElementById('d10coins');
- if (coinsEl) coinsEl.innerHTML = '';
+ const stocksEl = document.getElementById('d10stocks');
+ if (stocksEl) stocksEl.innerHTML = '';
 }
 
-// -- FWD-100 Detail Modal --------------------------------------
+// -- NIFTY 50 Detail Modal --------------------------------------
 function updateMarketBenchmarks(mi, cond = {}) {
- const houseCard = document.getElementById('d10houseBenchmark');
- const cfCard = document.getElementById('d10cfBenchmark');
- const spCard = document.getElementById('d10spBenchmark');
- const cf = mi?.benchmarks?.cf || null;
- const sp = mi?.benchmarks?.sp || null;
- if (houseCard) {
- const value = Number(mi?.indexChangePct || 0);
- const points = getFwd100PointMove(mi);
- const moveLabel = getFwd100MoveLabel(mi);
+ const wrap = document.getElementById('d10benchmarks');
+ if (!wrap) return;
  const sentiment = Number(mi?.sentiment?.value ?? mi?.value ?? 0);
- const tone = sentiment > 2 ? 'good' : sentiment < -2 ? 'bad' : 'warn';
- houseCard.className = `d10-benchmark-card ${tone}`;
- houseCard.querySelector('.d10-benchmark-value').textContent = `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
- houseCard.querySelector('.d10-benchmark-copy').textContent = `${formatFwd100Points(points)} pts ${moveLabel} | Sentiment ${sentiment >= 0 ? '+' : ''}${sentiment.toFixed(2)}%`;
- houseCard.title = `FWD-100 is the cumulative equal-weight benchmark. Sentiment tape is separate: ${cond.text || 'NEUTRAL'}. Composite ${normalizeFwd100DisplayValue(mi?.composite, sentiment).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.`;
- }
- if (cfCard) {
- if (cf) {
- const value = Number(cf.value || 0);
- const tone = value > 2 ? 'good' : value < -2 ? 'bad' : 'warn';
- cfCard.className = `d10-benchmark-card ${tone}`;
- cfCard.querySelector('.d10-benchmark-value').textContent = `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
- cfCard.querySelector('.d10-benchmark-copy').textContent = `${cf.method || 'Proxy'} | ${Number(cf.coveragePct || 0).toFixed(1)}% cov`;
- cfCard.title = `${cf.label || 'CF-style'} internal benchmark. ${cf.selectionLabel || ''}. ${cf.notes || ''}`;
- } else {
- cfCard.className = 'd10-benchmark-card pending';
- cfCard.querySelector('.d10-benchmark-value').textContent = 'Ready';
- cfCard.querySelector('.d10-benchmark-copy').textContent = 'Calc pending';
- cfCard.title = 'Internal CF-style benchmark will render once live benchmark inputs are available.';
- }
- }
- if (spCard) {
- if (sp) {
- const value = Number(sp.value || 0);
- const tone = value > 2 ? 'good' : value < -2 ? 'bad' : 'warn';
- spCard.className = `d10-benchmark-card ${tone}`;
- spCard.querySelector('.d10-benchmark-value').textContent = `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
- spCard.querySelector('.d10-benchmark-copy').textContent = `${sp.method || 'Top set'} | ${Number((sp.constituents || []).length || 0)} names`;
- spCard.title = `${sp.label || 'S&P-style'} internal benchmark. ${sp.selectionLabel || ''}. ${sp.notes || ''}`;
- } else {
- spCard.className = 'd10-benchmark-card pending';
- spCard.querySelector('.d10-benchmark-value').textContent = 'Ready';
- spCard.querySelector('.d10-benchmark-copy').textContent = 'Calc pending';
- spCard.title = 'Internal S&P-style benchmark will render once live benchmark inputs are available.';
- }
- }
+ const fallbackTape = [{
+  label: mi?.benchmarkLabel || 'Nifty 50',
+  shortLabel: 'N50',
+  price: normalizeFwd100DisplayValue(mi?.composite, sentiment),
+  changePct: Number(mi?.indexChangePct || 0),
+  pointChange: getFwd100PointMove(mi),
+  symbol: mi?.benchmarkSymbol || 'NIFTY',
+ }];
+ const indexTape = Array.isArray(mi?.indexTape) && mi.indexTape.length ? mi.indexTape : fallbackTape;
+ wrap.innerHTML = indexTape.slice(0, 6).map((item, index) => {
+  const changePct = Number(item?.changePct ?? (index === 0 ? mi?.indexChangePct : 0) ?? 0);
+  const points = Number(item?.pointChange ?? (index === 0 ? getFwd100PointMove(mi) : 0) ?? 0);
+  const price = Number(item?.price || 0);
+  const tone = changePct > 0.03 ? 'good' : changePct < -0.03 ? 'bad' : 'warn';
+  const pointCopy = Number.isFinite(points) && Math.abs(points) > 0.005 ? `${points >= 0 ? '+' : ''}${points.toFixed(2)} pts` : '-- pts';
+  const pctCopy = Number.isFinite(changePct) ? `${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%` : '--%';
+  const direction = changePct > 0.03 ? '&#8599;' : changePct < -0.03 ? '&#8600;' : '';
+  return `<div class="d10-ribbon-quote ${tone}" title="${escapeHtml(`${item?.label || item?.symbol || 'Index'} live quote. F&O breadth remains separate: ${cond.text || 'NEUTRAL'}.`)}">
+ <span class="d10-benchmark-label">${escapeHtml(item?.label || item?.symbol || 'Index')}</span>
+ <strong class="d10-benchmark-value">${escapeHtml(price > 0 ? price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '--')}</strong>
+ <small class="d10-benchmark-copy">${escapeHtml(`${pointCopy} (${pctCopy})`)} <span aria-hidden="true">${direction}</span></small>
+ </div>`;
+ }).join('');
 }
 
 let d10IndexChartHandle = null;
@@ -784,9 +1346,9 @@ function buildD10HistoryModel(history = [], marketIndex = null) {
  sentimentValue: d10Finite(marketIndex.sentiment?.value, d10Finite(marketIndex.value, 0)),
  sentimentScore: d10Finite(marketIndex.sentiment?.score, 0),
  sentimentLabel: String(marketIndex.sentiment?.label || ''),
- advancing: Array.isArray(marketIndex.topCoins) ? marketIndex.topCoins.filter(coin => Number(coin?.change || 0) > 0).length : 0,
- declining: Array.isArray(marketIndex.topCoins) ? marketIndex.topCoins.filter(coin => Number(coin?.change || 0) < 0).length : 0,
- topCount: Array.isArray(marketIndex.topCoins) ? marketIndex.topCoins.length : 0,
+ advancing: Array.isArray(marketIndex.topStocks) ? marketIndex.topStocks.filter(stock => Number(stock?.change || 0) > 0).length : 0,
+ declining: Array.isArray(marketIndex.topStocks) ? marketIndex.topStocks.filter(stock => Number(stock?.change || 0) < 0).length : 0,
+ topCount: Array.isArray(marketIndex.topStocks) ? marketIndex.topStocks.length : 0,
  totalVolumeUSD: d10Finite(marketIndex.totalVolumeUSD, 0),
  condition: String(marketIndex.condition || ''),
  });
@@ -865,7 +1427,7 @@ function ensureD10LightweightCharts() {
  script.dataset.loaded = 'true';
  resolve();
  };
- const fail = () => reject(new Error('FWD-100 chart library failed to load'));
+ const fail = () => reject(new Error('Nifty 50 chart library failed to load'));
  script.addEventListener('load', finish, { once: true });
  script.addEventListener('error', fail, { once: true });
  if (!existing) {
@@ -887,7 +1449,7 @@ async function renderD10IndexChart(model = null) {
  }
  d10IndexChartHandle = null;
  if (!model.line.length || model.line.length < 2) {
- host.innerHTML = '<div class="d10-chart-empty">Run a few scans to build enough FWD-100 history for the chart.</div>';
+ host.innerHTML = '<div class="d10-chart-empty">Run a few scans to build enough Nifty 50 history for the chart.</div>';
  return;
  }
  await ensureD10LightweightCharts();
@@ -918,7 +1480,7 @@ async function renderD10IndexChart(model = null) {
  lineWidth: 2,
  priceLineVisible: false,
  lastValueVisible: true,
- title: 'FWD-100',
+ title: 'Nifty 50',
  });
  area?.setData(model.line);
  const sma = d10SeriesApi(chart, globalThis.LightweightCharts.LineSeries, {
@@ -956,18 +1518,20 @@ async function renderD10IndexChart(model = null) {
  d10IndexChartHandle = { chart, resizeObserver };
 }
 
-document.getElementById('d10chart')?.addEventListener('click', async () => {
+async function openD10SyntheticChart(symbol = 'NIFTY', label = 'Nifty 50 chart') {
+ const normalizedSymbol = String(symbol || 'NIFTY').trim().toUpperCase() || 'NIFTY';
+ const isMetricSymbol = normalizedSymbol === 'FNO-CARRY' || normalizedSymbol === 'FNO-BREADTH' || normalizedSymbol === 'FNO-AD';
  if (typeof setActiveWorkspaceTab === 'function') setActiveWorkspaceTab('chart', true, true);
  else document.querySelector('[data-tab="chart"]')?.click();
  try {
  if (typeof globalThis.ensurePopupFeatureModulesForTab === 'function') {
  await globalThis.ensurePopupFeatureModulesForTab('chart');
  }
- await globalThis.FWDTradeDeskChartWorkspace?.setChartState?.({
- symbol: 'FWD100',
+ const nextChartState = {
+ symbol: normalizedSymbol,
  chartViewMode: 'tab',
- preset: 'ema_obv',
- chartType: 'candles',
+ preset: isMetricSymbol ? 'clean' : 'ema_obv',
+ chartType: isMetricSymbol ? 'line' : 'candles',
  timeframe: '1d',
  primaryTimeframe: '1d',
  executionTimeframe: '1d',
@@ -978,16 +1542,40 @@ document.getElementById('d10chart')?.addEventListener('click', async () => {
  intelligenceOverlays: false,
  deskLayoutMode: 'single',
  overlayDensity: 'minimal',
+ showIndicatorLegend: !isMetricSymbol,
  refreshNonce: Date.now(),
- });
+ };
+ if (isMetricSymbol) {
+ nextChartState.indicators = {
+ volume: false,
+ ema: false,
+ emaRemoved: true,
+ ema9: false,
+ ema30: false,
+ ema100: false,
+ vwap: false,
+ vwapRemoved: true,
+ obv: false,
+ obvRemoved: true,
+ obvLine: false,
+ obvSma: false,
+ atr: false,
+ atrRemoved: true,
+ };
+ }
+ await globalThis.FWDTradeDeskChartWorkspace?.setChartState?.(nextChartState);
  await globalThis.FWDTradeDeskChartWorkspace?.requestChartTabRender?.(true);
  } catch (error) {
- globalThis.showSystemToast?.('FWD-100 chart unavailable', error?.message || 'Open Chart and search FWD100.', 'warn', 3200);
+ globalThis.showSystemToast?.(`${label} unavailable`, error?.message || `Open Chart and search ${normalizedSymbol}.`, 'warn', 3200);
  }
+}
+
+document.getElementById('d10chart')?.addEventListener('click', () => {
+ openD10SyntheticChart('NIFTY', 'Nifty 50 chart');
 });
 
 document.getElementById('d10detail')?.addEventListener('click', async () => {
- const d = await storeGet(['marketIndex', 'marketIndexHistoryMigration']);
+ const d = await storeGet(['marketIndex', 'marketIndexHistoryMigration', 'fnoCarryMetricHistoryV1']);
  const mi = d.marketIndex;
  if (!mi) return;
 
@@ -998,21 +1586,27 @@ document.getElementById('d10detail')?.addEventListener('click', async () => {
  const indexMoveDetail = describeFwd100MoveWindow(mi);
  const sentimentScore = Number(mi.sentiment?.score || 0);
  const sentimentLabel = String(mi.sentiment?.label || mi.condition || 'Neutral');
+ const carryHistory = Array.isArray(d.fnoCarryMetricHistoryV1) ? d.fnoCarryMetricHistoryV1 : [];
+ const latestCarry = carryHistory[carryHistory.length - 1] || null;
+ const carryAnnualPct = Number(latestCarry?.carryAnnualPct);
+ const carryLabel = Number.isFinite(carryAnnualPct)
+ ? `${carryAnnualPct >= 0 ? '+' : ''}${carryAnnualPct.toFixed(2)}% annualized (${Number(latestCarry.carryExecutableRows || 0)} executable rows)`
+ : 'Refresh F&O Carry to build implied-basis history';
  const comp = normalizeFwd100DisplayValue(mi.composite, v);
- const totalVol = mi.totalVolumeUSD ? '$' + fmtLarge(mi.totalVolumeUSD) : '-';
- const coins = mi.topCoins || [];
+ const totalVol = mi.totalVolumeUSD ? 'Rs ' + fmtLarge(mi.totalVolumeUSD) : '-';
+ const stocks = mi.fnoConstituents || mi.topStocks || mi.topCoins || [];
  const method = String(mi.method || 'Cumulative equal-weight index').trim();
- const selectionLabel = String(mi.selectionLabel || `Top ${coins.length || 10} coins`).trim();
+ const selectionLabel = String(mi.selectionLabel || `Top ${stocks.length || 10} stocks`).trim();
  const excludedSymbols = Array.isArray(mi.excludedSymbols) ? mi.excludedSymbols : [];
  const excludedLabel = excludedSymbols.length ? excludedSymbols.join(', ') : 'None';
  const lastRebalance = mi.lastRebalancedAt ? new Date(mi.lastRebalancedAt).toLocaleString() : 'Pending';
  const nextRebalance = mi.nextRebalanceAt ? new Date(mi.nextRebalanceAt).toLocaleString() : 'Pending';
  const migration = d.marketIndexHistoryMigration || null;
  const migrationNote = migration?.migratedAt
- ? `<div style="font-size:9px;color:#ffc840;line-height:1.7;margin:0 4px 10px">History reset: v2 cumulative FWD-100 history started ${new Date(migration.migratedAt).toLocaleString()} after ${Number(migration.legacyCount || 0)} legacy snapshot points.</div>`
+ ? `<div style="font-size:9px;color:#ffc840;line-height:1.7;margin:0 4px 10px">History reset: v2 cumulative Nifty 50 history started ${new Date(migration.migratedAt).toLocaleString()} after ${Number(migration.legacyCount || 0)} legacy snapshot points.</div>`
  : '';
 
- const coinRows = coins.map((c, i) => {
+ const stockRows = stocks.map((c, i) => {
  const barW = Math.max(2, c.weight);
  const barColor = c.change >= 0 ? '#00e5a0' : '#ff4560';
  return `
@@ -1023,13 +1617,13 @@ document.getElementById('d10detail')?.addEventListener('click', async () => {
  <div class="d10c-weight-fill" style="width:${barW}%;background:${barColor}"></div>
  </div>
  <div class="d10c-weight">${c.weight}%</div>
- <div class="d10c-vol">$${c.vol || '?'}M</div>
+ <div class="d10c-vol">Rs ${c.vol || '?'}M</div>
  <div class="d10c-change" style="color:${c.change >= 0 ? '#00e5a0' : '#ff4560'}">${c.change >= 0 ? '+' : ''}${c.change}%</div>
  </div>`;
  }).join('');
 
  const sectorCounts = {};
- coins.forEach(c => {
+ stocks.forEach(c => {
  const sec = getSector(c.sym);
  sectorCounts[sec] = (sectorCounts[sec] || 0) + 1;
  });
@@ -1038,25 +1632,26 @@ document.getElementById('d10detail')?.addEventListener('click', async () => {
  .map(([s, n]) => `<span class="d10-sec-pill">${s} ${n}</span>`)
  .join('');
 
- const cf = mi?.benchmarks?.cf || null;
- const sp = mi?.benchmarks?.sp || null;
- const benchmarkCardHtml = benchmark => benchmark
- ? `<div class="d10-benchmark-modal-card">
- <span>${benchmark.label || 'Internal'}</span>
- <strong>${Number(benchmark.value || 0) >= 0 ? '+' : ''}${Number(benchmark.value || 0).toFixed(2)}%</strong>
- <small>${benchmark.method || ''} | ${benchmark.selectionLabel || ''}</small>
- </div>`
- : `<div class="d10-benchmark-modal-card">
- <span>Internal</span>
- <strong>Pending</strong>
- <small>Benchmark data will populate after the next live scan.</small>
+ const indexTape = Array.isArray(mi.indexTape) && mi.indexTape.length
+ ? mi.indexTape
+ : [{ symbol: 'NIFTY', label: 'Nifty 50', price: comp, changePct: indexMove, pointChange: indexPoints }];
+ const indexTapeHtml = indexTape.slice(0, 6).map(item => {
+ const changePct = Number(item?.changePct || 0);
+ const price = Number(item?.price || 0);
+ const points = Number(item?.pointChange || 0);
+ const pointCopy = Number.isFinite(points) ? `${points >= 0 ? '+' : ''}${points.toFixed(2)} pts` : '-- pts';
+ return `<div class="d10-benchmark-modal-card ${String(item?.symbol || '').toUpperCase() === 'NIFTY' ? 'active' : ''}">
+ <span>${escapeHtml(item?.label || item?.symbol || 'Index')}</span>
+ <strong>${escapeHtml(pointCopy)}</strong>
+ <small>${price > 0 ? price.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '--'} | ${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}% | FWD</small>
  </div>`;
+ }).join('');
  const sentimentDrivers = Array.isArray(mi.sentiment?.drivers) && mi.sentiment.drivers.length
  ? mi.sentiment.drivers
  : [
  `${Number(mi.sentiment?.breadthPct || 0).toFixed(1)}% breadth`,
  `${Number(mi.sentiment?.advancingVolumePct || 0).toFixed(1)}% advancing volume`,
- `BTC ${Number(mi.sentiment?.btcChange || 0).toFixed(2)}% / ETH ${Number(mi.sentiment?.ethChange || 0).toFixed(2)}%`,
+ `Large-cap proxy ${Number(mi.sentiment?.btcChange || 0).toFixed(2)}% / ${Number(mi.sentiment?.ethChange || 0).toFixed(2)}%`,
  ];
  const sentimentDriverHtml = sentimentDrivers
  .map(driver => `<span class="d10-sec-pill">${escapeHtml(String(driver || ''))}</span>`)
@@ -1065,12 +1660,12 @@ document.getElementById('d10detail')?.addEventListener('click', async () => {
 
  document.getElementById('d10body').innerHTML = `
  <div class="d10-modal-hero">
- <div class="d10-modal-logo">FWD-100</div>
+ <div class="d10-modal-logo">FWD INDICES</div>
  <div class="d10-modal-val">${comp.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
  <div class="d10-modal-change" style="color:${indexMove >= 0 ? '#00e5a0' : '#ff4560'}">
- INDEX ${indexMoveLabel.toUpperCase()} ${formatFwd100Points(indexPoints)} pts (${indexMove >= 0 ? '+' : ''}${indexMove.toFixed(2)}%) | SENTIMENT ${v >= 0 ? '+' : ''}${v.toFixed(2)}%
+ NIFTY ${indexMoveLabel.toUpperCase()} ${formatFwd100Points(indexPoints)} pts (${indexMove >= 0 ? '+' : ''}${indexMove.toFixed(2)}%) | F&O BREADTH ${breadthPct.toFixed(1)}%
  </div>
- <div class="d10-modal-meta">Total Volume: ${totalVol} | ${coins.length} constituents | ${sentimentLabel}</div>
+ <div class="d10-modal-meta">Total Volume: ${totalVol} | ${stocks.length} constituents | ${sentimentLabel}</div>
  </div>
  <div style="font-size:9px;color:#8a9ab8;line-height:1.8;margin:0 4px 10px">
  Basket: <b>${selectionLabel}</b> | Method: <b>${method}</b> | Excluded: <b>${excludedLabel}</b><br/>
@@ -1080,36 +1675,30 @@ document.getElementById('d10detail')?.addEventListener('click', async () => {
  ${migrationNote}
  <div class="mo-section">CALCULATION AUDIT</div>
  ${auditHtml}
- <div class="mo-section">HOW FWD-100 WORKS</div>
+ <div class="mo-section">HOW NIFTY 50 BENCHMARK WORKS</div>
  <div style="font-size:9.5px;color:#8a9ab8;line-height:1.8;margin-bottom:10px;padding:0 4px">
- Like India's <b style="color:#ffc840">NIFTY 50 Equal Weight</b>, FWD-100 is a
- <b>${method.toLowerCase()}</b> built from ${selectionLabel.toLowerCase()} on Delta Exchange.
- Base value: <b style="color:#00e5c0">10,000</b>. Each selected coin is reset to equal weight at rebalance. The displayed index move uses a rolling 24-hour baseline from stored scans when available; it does not reset at midnight. The sentiment tape is separate and uses 24h breadth, BTC/ETH leadership, funding stress, OI expansion, and volume participation.
+ Nifty 50, Bank Nifty, Fin Nifty, India VIX, Midcap Nifty, and Nifty IT appear as <b style="color:#ffc840">FWD Index</b> quotes. The app uses Nifty 50 as the primary reference and keeps F&O stock breadth separate.
  </div>
  <div class="mo-section">SENTIMENT TAPE</div>
  <div style="font-size:9.5px;color:#8a9ab8;line-height:1.8;margin-bottom:10px;padding:0 4px">
  Score: <b style="color:${sentimentScore >= 0 ? '#00e5a0' : '#ff4560'}">${sentimentScore >= 0 ? '+' : ''}${sentimentScore}</b> |
  Breadth: <b>${Number(mi.sentiment?.breadthPct || 0).toFixed(1)}%</b> |
  Advancing volume: <b>${Number(mi.sentiment?.advancingVolumePct || 0).toFixed(1)}%</b> |
- Funding stress: <b>${Number(mi.sentiment?.fundingStressPct || 0).toFixed(1)}%</b>
+ Implied carry: <b>${escapeHtml(carryLabel)}</b>
+ </div>
+ <div class="d10-sec-row">
+  <button class="d10-detail-btn" type="button" data-d10-synthetic-chart="NIFTY">Nifty Chart</button>
+  <button class="d10-detail-btn" type="button" data-d10-synthetic-chart="FNO-CARRY">F&O Carry Chart</button>
+  <button class="d10-detail-btn" type="button" data-d10-synthetic-chart="FNO-BREADTH">F&O Breadth Chart</button>
+  <button class="d10-detail-btn" type="button" data-d10-synthetic-chart="FNO-AD">F&O A/D Chart</button>
  </div>
  <div class="d10-sec-row">${sentimentDriverHtml}</div>
- <div class="mo-section">CONSTITUENTS (equal-weight basket)</div>
+ <div class="mo-section">F&O STOCK BREADTH</div>
  <div class="d10-sec-row">${sectorPills}</div>
- <div class="d10-constituents-list">${coinRows}</div>
- <div class="mo-section" style="margin-top:12px">BENCHMARK STACK</div>
+ <div class="d10-constituents-list">${stockRows}</div>
+ <div class="mo-section" style="margin-top:12px">FWD INDEX TAPE</div>
  <div class="d10-benchmark-modal-grid">
- <div class="d10-benchmark-modal-card active">
- <span>FWD-100 Index</span>
- <strong>${indexMove >= 0 ? '+' : ''}${indexMove.toFixed(2)}%</strong>
- <small>${formatFwd100Points(indexPoints)} pts ${indexMoveLabel} | ${selectionLabel} | cumulative equal weight.</small>
- </div>
- ${benchmarkCardHtml(cf)}
- ${benchmarkCardHtml(sp)}
- </div>
- <div style="font-size:9px;color:#8a9ab8;line-height:1.8;margin:0 4px 10px">
- CF-style and S&amp;P-style here are <b>internal calculations</b> inspired by those methodology families, not fetched publisher values.
- They use Delta's live universe, liquidity, OI, and buffered basket rules so they stay self-contained inside the extension.
+ ${indexTapeHtml}
  </div>
  <div class="mo-section" style="margin-top:12px">TRADING GUIDE</div>
  <div style="font-size:9px;color:#8a9ab8;line-height:1.8;padding:0 4px">
@@ -1120,6 +1709,14 @@ document.getElementById('d10detail')?.addEventListener('click', async () => {
  </div>`;
 
  document.getElementById('d10overlay').style.display = 'flex';
+});
+
+document.getElementById('d10body')?.addEventListener('click', event => {
+ const button = event.target?.closest?.('[data-d10-synthetic-chart]');
+ if (!button) return;
+ const symbol = String(button.dataset.d10SyntheticChart || '').trim().toUpperCase();
+ if (!symbol) return;
+ openD10SyntheticChart(symbol, button.textContent?.trim() || symbol);
 });
 
 document.getElementById('d10close')?.addEventListener('click', () => {
@@ -1167,6 +1764,51 @@ document.querySelectorAll('.workspace-group').forEach(btn => {
  requestDesktopPaneReveal?.();
  setWorkspaceGroup(btn.dataset.group, true, true);
  });
+});
+
+document.getElementById('btnScan')?.addEventListener('click', startManualScan);
+document.getElementById('btnAutoScan')?.addEventListener('click', () => {
+ toggleAutoScanFromHeader().catch(error => {
+ console.warn('Auto-scan toggle failed:', error);
+ showSystemToast?.('Auto scan failed', error?.message || 'Could not update schedule.', 'error', 5000);
+ void loadAutoScanState();
+ });
+});
+void loadAutoScanState();
+document.addEventListener('DOMContentLoaded', () => {
+ void loadScannerSettings();
+});
+
+document.addEventListener('click', event => {
+ const saveButton = event.target?.closest?.('#btnSave');
+ if (saveButton) {
+ event.preventDefault();
+ void saveScannerSettings();
+ return;
+ }
+ const presetButton = event.target?.closest?.('[data-settings-profile-preset]');
+ if (presetButton) {
+ event.preventDefault();
+ applyScannerProfilePreset(presetButton.dataset.settingsProfilePreset || '');
+ return;
+ }
+ const benchmarkButton = event.target?.closest?.('#sMarketIndexRebuildNow');
+ if (benchmarkButton) {
+ event.preventDefault();
+ void rebuildMarketIndexOnNextScan();
+ return;
+ }
+ const universeButton = event.target?.closest?.('[data-scan-universe]');
+ if (universeButton) {
+ event.preventDefault();
+ void selectScannerUniverse(universeButton.dataset.scanUniverse || 'fno_stocks', { runNow: false });
+ }
+});
+
+document.addEventListener('change', event => {
+ if (event.target?.id === 'sScanUniverse') {
+ void selectScannerUniverse(event.target.value || 'fno_stocks', { runNow: false });
+ }
 });
 
 document.getElementById('btnSettingsDrawer')?.addEventListener('click', event => {
@@ -1265,7 +1907,7 @@ document.addEventListener('keydown', (e) => {
  if (k === 's') {
  document.querySelector('[data-tab="scanner"]')?.click();
  } else if (k === 'w') {
- document.querySelector('[data-tab="watchlist"]')?.click();
+ document.querySelector('[data-tab="strategies"]')?.click();
  } else if (k === 'c') {
  document.querySelector('[data-tab="chart"]')?.click();
  }

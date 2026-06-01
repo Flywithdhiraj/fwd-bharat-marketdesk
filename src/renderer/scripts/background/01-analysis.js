@@ -90,38 +90,65 @@ function calcFundingCash(notional, fundingRatePct, side) {
  return +(n * (fr / 100) * (String(side || '').includes('short') ? 1 : -1)).toFixed(6);
 }
 
-function buildPersistentCandleMemoryKey(symbol, resolution) {
- return `candles_raw_${String(symbol || '').trim().toUpperCase()}_${String(resolution || '').trim().toLowerCase()}`;
+function buildPersistentCandleSymbolKey(symbol, instrument = null) {
+ const safeSymbol = String(symbol || '').trim().toUpperCase();
+ const exchangeSegment = String(instrument?.exchangeSegment || '').trim().toUpperCase();
+ const securityId = String(instrument?.securityId || '').trim();
+ return exchangeSegment && securityId ? `${exchangeSegment}_${securityId}_${safeSymbol}` : safeSymbol;
+}
+
+function buildPersistentCandleMemoryKey(symbol, resolution, instrument = null) {
+ return `candles_raw_${buildPersistentCandleSymbolKey(symbol, instrument)}_${String(resolution || '').trim().toLowerCase()}`;
+}
+
+function normalizeCandleTimeSec(value = 0) {
+ const raw = Number(value || 0);
+ if (!Number.isFinite(raw) || raw <= 0) return 0;
+ if (raw > 1e15) return Math.floor(raw / 1000000);
+ if (raw > 1000000000000) return Math.floor(raw / 1000);
+ return Math.floor(raw);
+}
+
+function normalizeCandleRowsForScanner(rows = []) {
+ return (Array.isArray(rows) ? rows : [])
+ .map(row => ({
+ ...row,
+ time: normalizeCandleTimeSec(row?.time ?? row?.t ?? row?.timestamp ?? 0),
+ }))
+ .filter(row => row.time > 0);
 }
 
 function mergeCachedCandleRows(existing = [], incoming = []) {
  const merged = new Map();
- (Array.isArray(existing) ? existing : []).forEach(row => {
- const ts = Number(row?.time || 0);
+ normalizeCandleRowsForScanner(existing).forEach(row => {
+ const ts = normalizeCandleTimeSec(row?.time || 0);
  if (ts > 0) merged.set(ts, row);
  });
- (Array.isArray(incoming) ? incoming : []).forEach(row => {
- const ts = Number(row?.time || 0);
+ normalizeCandleRowsForScanner(incoming).forEach(row => {
+ const ts = normalizeCandleTimeSec(row?.time || 0);
  if (ts > 0) merged.set(ts, row);
  });
  return Array.from(merged.values()).sort((a, b) => Number(a?.time || 0) - Number(b?.time || 0));
 }
 
 function trimPersistentCandleRows(rows = [], resolution = '') {
- const safeRows = Array.isArray(rows) ? rows : [];
+ const safeRows = normalizeCandleRowsForScanner(rows);
  return safeRows;
 }
 
-function candleCacheRefreshMs(resolution = '') {
+function candleCacheRefreshMs(resolution = '', options = {}) {
  const periodSec = resolveCandleResolutionSec(resolution);
  if (!(periodSec > 0)) return 5 * 60 * 1000;
+ if (options.closedOnly && String(resolution || '').trim().toLowerCase() === '1d') {
+  return 12 * 60 * 60 * 1000;
+ }
  return Math.max(60 * 1000, Math.min(periodSec * 1000, 6 * 60 * 60 * 1000));
 }
 
 function filterCandlesByRequestedRange(rows = [], startSec = 0, endSec = 0, resolution = '') {
  const periodSec = resolveCandleResolutionSec(resolution);
  return (Array.isArray(rows) ? rows : []).filter(row => {
- const ts = Number(row?.time || 0);
+ const ts = normalizeCandleTimeSec(row?.time || 0);
  return ts > 0 && ts >= startSec && ts <= (endSec + Math.max(0, periodSec));
  });
 }
@@ -129,23 +156,24 @@ function filterCandlesByRequestedRange(rows = [], startSec = 0, endSec = 0, reso
 function doesCandleCacheCoverRange(rows = [], startSec = 0, endSec = 0, resolution = '') {
  const safeRows = Array.isArray(rows) ? rows : [];
  if (!safeRows.length) return false;
- const firstTs = Number(safeRows[0]?.time || 0);
- const lastTs = Number(safeRows[safeRows.length - 1]?.time || 0);
+ const firstTs = normalizeCandleTimeSec(safeRows[0]?.time || 0);
+ const lastTs = normalizeCandleTimeSec(safeRows[safeRows.length - 1]?.time || 0);
  const periodSec = resolveCandleResolutionSec(resolution);
  return firstTs > 0 && lastTs > 0 && firstTs <= startSec && (lastTs + Math.max(0, periodSec)) >= endSec;
 }
 
-async function loadPersistentCandleCacheRecord(symbol, resolution) {
- const memoryKey = buildPersistentCandleMemoryKey(symbol, resolution);
+async function loadPersistentCandleCacheRecord(symbol, resolution, instrument = null) {
+ const cacheSymbol = buildPersistentCandleSymbolKey(symbol, instrument);
+ const memoryKey = buildPersistentCandleMemoryKey(symbol, resolution, instrument);
  const memoryRows = cached(memoryKey);
  if (Array.isArray(memoryRows) && memoryRows.length) {
- return { rows: memoryRows, updatedAt: Date.now(), memoryKey, fromMemory: true };
+ return { rows: normalizeCandleRowsForScanner(memoryRows), updatedAt: Date.now(), memoryKey, fromMemory: true };
  }
  if (typeof v17ReadPersistentCandleCache !== 'function') {
  return { rows: [], updatedAt: 0, memoryKey, fromMemory: false };
  }
- const record = await v17ReadPersistentCandleCache(symbol, resolution);
- const rows = Array.isArray(record?.rows) ? record.rows : [];
+ const record = await v17ReadPersistentCandleCache(cacheSymbol, resolution);
+ const rows = normalizeCandleRowsForScanner(Array.isArray(record?.rows) ? record.rows : []);
  if (rows.length) setCache(memoryKey, rows);
  return {
  rows,
@@ -155,15 +183,16 @@ async function loadPersistentCandleCacheRecord(symbol, resolution) {
  };
 }
 
-async function persistPersistentCandleCacheRecord(symbol, resolution, rows = []) {
+async function persistPersistentCandleCacheRecord(symbol, resolution, rows = [], instrument = null) {
  const trimmedRows = trimPersistentCandleRows(rows, resolution);
- const memoryKey = buildPersistentCandleMemoryKey(symbol, resolution);
+ const cacheSymbol = buildPersistentCandleSymbolKey(symbol, instrument);
+ const memoryKey = buildPersistentCandleMemoryKey(symbol, resolution, instrument);
  setCache(memoryKey, trimmedRows);
  if (typeof v17WritePersistentCandleCache === 'function') {
- await v17WritePersistentCandleCache(symbol, resolution, {
- rows: trimmedRows,
- updatedAt: Date.now(),
- });
+ await v17WritePersistentCandleCache(cacheSymbol, resolution, {
+  rows: trimmedRows,
+  updatedAt: Date.now(),
+  });
  }
  return trimmedRows;
 }
@@ -180,26 +209,30 @@ async function fetchCandlesRange(symbol, resolution, startSec, endSec) {
  const touchesRecentData = endSec >= (nowSec - Math.max(resolveCandleResolutionSec(safeResolution), 60));
  const cacheFresh = persisted.fromMemory || ((Date.now() - Number(persisted.updatedAt || 0)) < refreshMs);
  if (cachedRange.length && rangeCovered && (!touchesRecentData || cacheFresh)) {
- return cachedRange;
+  globalThis.dhanCandleFetchStats = {
+   ...(globalThis.dhanCandleFetchStats || {}),
+   cacheHits: Number(globalThis.dhanCandleFetchStats?.cacheHits || 0) + 1,
+  };
+  return cachedRange;
  }
- const resOpts = RES_MAP[resolution] || [resolution];
- for (const res of resOpts) {
+ if (typeof globalThis.dhanFetchCandlesForRenderer === 'function') {
  try {
- const url = `${BASE}/history/candles?symbol=${encodeURIComponent(symbol)}&resolution=${res}&start=${startSec}&end=${endSec}`;
- const r = await rateLimitedFetch(url);
- if (!r.ok) continue;
- const d = await r.json();
- const raw = d.result ?? d.data ?? (Array.isArray(d) ? d : null);
- if (!raw?.length) continue;
- const fetchedRows = raw.map(parseCandle).filter(Boolean).sort((a, b) => a.time - b.time);
- const mergedRows = await persistPersistentCandleCacheRecord(
- safeSymbol,
- safeResolution,
- mergeCachedCandleRows(cachedRows, fetchedRows)
- );
- return filterCandlesByRequestedRange(mergedRows, startSec, endSec, safeResolution);
+   const fetchedRows = await globalThis.dhanFetchCandlesForRenderer(safeSymbol, safeResolution, startSec, endSec);
+   if (fetchedRows?.length) {
+    globalThis.dhanCandleFetchStats = {
+     ...(globalThis.dhanCandleFetchStats || {}),
+     apiFetches: Number(globalThis.dhanCandleFetchStats?.apiFetches || 0) + 1,
+     apiRows: Number(globalThis.dhanCandleFetchStats?.apiRows || 0) + fetchedRows.length,
+    };
+    const mergedRows = await persistPersistentCandleCacheRecord(
+    safeSymbol,
+    safeResolution,
+    mergeCachedCandleRows(cachedRows, fetchedRows)
+   );
+   return filterCandlesByRequestedRange(mergedRows, startSec, endSec, safeResolution);
+  }
  } catch (e) {
- dlog(`Candle range err ${symbol}: ${e.message}`);
+  dlog(`Candle range error ${safeSymbol}: ${e.message}`);
  }
  }
  return cachedRange;
@@ -1898,7 +1931,7 @@ function parseCandle(c) {
  volume = c?.volume ?? c?.v ?? c?.turnover ?? 0;
  quoteVolume = c?.quote_volume ?? c?.quoteVolume ?? c?.turnover_usd ?? c?.turnover_24h ?? 0;
  }
- close = +close; high = +high; low = +low; open = +open; volume = +volume; quoteVolume = +quoteVolume; time = +time;
+ close = +close; high = +high; low = +low; open = +open; volume = +volume; quoteVolume = +quoteVolume; time = normalizeCandleTimeSec(time);
  if (!close || !high || !low || isNaN(close) || close <= 0) return null;
  return { time, open: open || close, high, low, close, volume: volume || 0, quoteVolume: quoteVolume || 0, quote_volume: quoteVolume || 0 };
 }
@@ -1929,7 +1962,7 @@ function filterClosedCandles(candles = [], resolution = '', options = {}) {
  if (!(periodSec > 0) || !(nowSec > 0)) return list;
  const cutoffSec = nowSec - closeBufferSec;
  return list.filter(candle => {
- const openSec = Number(candle?.time || 0);
+ const openSec = normalizeCandleTimeSec(candle?.time || 0);
  return openSec > 0 && (openSec + periodSec) <= cutoffSec;
  });
 }
@@ -1937,16 +1970,26 @@ function filterClosedCandles(candles = [], resolution = '', options = {}) {
 async function fetchCandles(symbol, resolution, limit = 200, options = {}) {
  const closedOnly = !!options?.closedOnly;
  const timeoutMs = Math.max(0, Number(options?.timeoutMs || 0));
- const cKey = `${symbol}_${resolution}_${closedOnly ? 'closed' : 'live'}`;
+ const instrument = options?.instrument || options?.dhanInstrument || null;
+ const instrumentKey = instrument?.exchangeSegment && instrument?.securityId
+ ? `${String(instrument.exchangeSegment).trim().toUpperCase()}:${String(instrument.securityId).trim()}`
+ : String(symbol || '').trim().toUpperCase();
+ const cKey = `${instrumentKey}_${resolution}_${closedOnly ? 'closed' : 'live'}`;
  const c = cached(cKey);
- if (c) return c;
+ if (c) {
+  globalThis.dhanCandleFetchStats = {
+   ...(globalThis.dhanCandleFetchStats || {}),
+   cacheHits: Number(globalThis.dhanCandleFetchStats?.cacheHits || 0) + 1,
+  };
+  return c;
+ }
  const safeSymbol = String(symbol || '').trim().toUpperCase();
  const safeResolution = String(resolution || '').trim();
  const secs = resolveCandleResolutionSec(resolution);
  const end = Math.floor(Date.now() / 1000);
  const start = end - (limit + 50) * secs;
- const refreshMs = candleCacheRefreshMs(safeResolution);
- const persisted = await loadPersistentCandleCacheRecord(safeSymbol, safeResolution);
+ const refreshMs = candleCacheRefreshMs(safeResolution, { closedOnly });
+ const persisted = await loadPersistentCandleCacheRecord(safeSymbol, safeResolution, instrument);
  const cachedRows = Array.isArray(persisted.rows) ? persisted.rows : [];
  const persistedCandles = (() => {
  if (!cachedRows.length) return [];
@@ -1956,43 +1999,71 @@ async function fetchCandles(symbol, resolution, limit = 200, options = {}) {
  })();
  const lastCachedTs = cachedRows.length ? Number(cachedRows[cachedRows.length - 1]?.time || 0) : 0;
  const cacheFresh = persisted.fromMemory || ((Date.now() - Number(persisted.updatedAt || 0)) < refreshMs);
- const largeNativeHistoryRequest = ['1d', '15m'].includes(safeResolution) && Number(limit || 0) >= 1000;
- if (!largeNativeHistoryRequest && persistedCandles.length >= Math.min(20, limit) && lastCachedTs >= (end - Math.max(secs, 60)) && cacheFresh) {
- setCache(cKey, persistedCandles);
- return persistedCandles;
- }
- const resOpts = RES_MAP[resolution] || [resolution];
+ const largeNativeHistoryRequest = ['15m', '4h', '1d', '1w'].includes(safeResolution) && Number(limit || 0) >= 1000;
+ const reusableClosedSeries = closedOnly && cacheFresh;
+ const reusableLiveSeries = lastCachedTs >= (end - Math.max(secs, 60)) && cacheFresh;
+ if (!largeNativeHistoryRequest && persistedCandles.length >= Math.min(20, limit) && (reusableClosedSeries || reusableLiveSeries)) {
+  globalThis.dhanCandleFetchStats = {
+   ...(globalThis.dhanCandleFetchStats || {}),
+   cacheHits: Number(globalThis.dhanCandleFetchStats?.cacheHits || 0) + 1,
+  };
+  setCache(cKey, persistedCandles);
+  return persistedCandles;
+  }
  const incrementalStart = largeNativeHistoryRequest
  ? start
  : lastCachedTs > 0
- ? Math.max(start, lastCachedTs - (secs * Math.min(5, Math.max(1, limit))))
+ ? Math.max(start, lastCachedTs - (secs * Math.min(2, Math.max(1, limit))))
  : start;
- for (const res of resOpts) {
+ const withCandleTimeout = promise => {
+  if (!(timeoutMs > 0)) return promise;
+  return Promise.race([
+   promise,
+   new Promise((_, reject) => setTimeout(() => reject(new Error(`Candle timeout after ${timeoutMs}ms`)), timeoutMs)),
+  ]);
+ };
+ if (typeof globalThis.dhanFetchCandlesForRenderer === 'function') {
  try {
- const url = `${BASE}/history/candles?symbol=${encodeURIComponent(symbol)}&resolution=${res}&start=${incrementalStart}&end=${end}`;
- const fetchOptions = timeoutMs > 0 && typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
- ? { signal: AbortSignal.timeout(timeoutMs) }
- : {};
- const r = await rateLimitedFetch(url, fetchOptions);
- if (!r.ok) continue;
- const d = await r.json();
- const raw = d.result ?? d.data ?? (Array.isArray(d) ? d : null);
- if (!raw?.length) continue;
- const fetchedRows = raw.map(parseCandle).filter(Boolean).sort((a, b) => a.time - b.time);
- const mergedRows = await persistPersistentCandleCacheRecord(
- safeSymbol,
- safeResolution,
- mergeCachedCandleRows(cachedRows, fetchedRows)
- );
- let candles = mergedRows.slice();
- if (closedOnly) candles = filterClosedCandles(candles, res);
- candles = candles.slice(-limit);
- if (candles.length >= 20) { setCache(cKey, candles); return candles; }
- } catch (e) { dlog(`Candle err ${symbol}: ${e.message}`); }
+   const fetchedRows = await withCandleTimeout(globalThis.dhanFetchCandlesForRenderer(safeSymbol, safeResolution, incrementalStart || start, end, { timeoutMs, instrument }));
+   if (fetchedRows?.length) {
+    globalThis.dhanCandleFetchStats = {
+     ...(globalThis.dhanCandleFetchStats || {}),
+     apiFetches: Number(globalThis.dhanCandleFetchStats?.apiFetches || 0) + 1,
+     apiRows: Number(globalThis.dhanCandleFetchStats?.apiRows || 0) + fetchedRows.length,
+    };
+    const mergedRows = await persistPersistentCandleCacheRecord(
+    safeSymbol,
+    safeResolution,
+    mergeCachedCandleRows(cachedRows, fetchedRows),
+    instrument
+    );
+   let candles = mergedRows.slice();
+   if (closedOnly) candles = filterClosedCandles(candles, safeResolution);
+   candles = candles.slice(-limit);
+   if (candles.length) {
+    setCache(cKey, candles);
+    return candles;
+   }
+  }
+  } catch (e) {
+   const message = String(e?.message || e || '');
+   const instrumentLabel = instrument?.exchangeSegment && instrument?.securityId
+   ? `${String(instrument.exchangeSegment).trim().toUpperCase()}:${String(instrument.securityId).trim()}`
+   : 'instrument unresolved';
+   if (/DH-905|incorrect parameters|no data present/i.test(message)) {
+    dlog(`Candle skipped ${safeSymbol}: market feed returned no/invalid candle data for ${safeResolution} (${instrumentLabel}) - ${message.slice(0, 160)}`);
+   } else {
+    dlog(`Candle error ${safeSymbol} ${safeResolution} (${instrumentLabel}): ${message}`);
+   }
+  }
  }
- if (persistedCandles.length >= 20) {
- setCache(cKey, persistedCandles);
- return persistedCandles;
+  if (persistedCandles.length >= 20) {
+  globalThis.dhanCandleFetchStats = {
+   ...(globalThis.dhanCandleFetchStats || {}),
+   fallbackCacheHits: Number(globalThis.dhanCandleFetchStats?.fallbackCacheHits || 0) + 1,
+  };
+  setCache(cKey, persistedCandles);
+  return persistedCandles;
  }
  return null;
 }
@@ -2001,148 +2072,41 @@ async function fetchCandles(symbol, resolution, limit = 200, options = {}) {
 // FETCH ALL TICKERS
 // BUG FIX #2: OI multi-field detection + debug log for BTC
 // ================================================================
-async function fetchAllTickers() {
- const map = {};
- const tickerURLs = [
- `${BASE}/tickers`,
- `${BASE}/tickers?contract_types=perpetual_futures`,
- ];
-
- for (const url of tickerURLs) {
+async function fetchAllTickers(options = {}) {
+ if (typeof globalThis.dhanFetchTickerMapForRenderer === 'function') {
  try {
- const r = await rateLimitedFetch(url);
- if (!r.ok) { dlog(`Ticker ${r.status}: ${url}`); continue; }
- const d = await r.json();
- const list = d.result ?? d.data ?? (Array.isArray(d) ? d : []);
- dlog(`Tickers from ${url.includes('?') ? url.split('?')[1] : 'all'}: ${list.length}`);
-
- for (const t of list) {
- if (!t.symbol || map[t.symbol]) continue;
- const ct = (t.contract_type || '').toLowerCase();
- if (ct.includes('_option') || ct.includes('call_') || ct.includes('put_') || ct === 'spot') continue;
- const sym = t.symbol;
- const isPerp = ct.includes('perpetual') || ct === '' ||
- sym.endsWith('USD') || sym.endsWith('USDT') || t.is_perpetual === true;
- if (!isPerp && ct && ct !== 'perpetual_futures') continue;
-
- const price = +(t.mark_price || t.close || t.last_price || t.price || 0);
- if (!price || isNaN(price)) continue;
-
- let chg = t.change_24h ?? t.change24h ?? t.price_change_24h ?? null;
- let change24h = 0;
- if (chg !== null) {
- change24h = +chg;
- if (change24h !== 0 && Math.abs(change24h) < 1 && Math.abs(change24h) > 0.0001) change24h *= 100;
- if (Math.abs(change24h) > 500) change24h = 0;
- } else {
- const open24 = +(t.open || t.open_24h || 0);
- if (open24 > 0) change24h = (price - open24) / open24 * 100;
+  const dhanMap = await globalThis.dhanFetchTickerMapForRenderer(options);
+  const universe = globalThis.dhanLastUniverseMeta?.label || options.universe || 'Market universe';
+  dlog(`Tickers: ${Object.keys(dhanMap || {}).length} NSE/BSE symbols (${universe})`);
+  return dhanMap || {};
+ } catch (e) {
+  dlog(`Ticker error: ${e.message}`);
+  throw e;
  }
-
- // BUG FIX #2: Multi-field OI detection - Delta India uses different field names
- const oi = +(
- t.open_interest_usd ?? // common field
- t.oi_value_usd ?? // documented by Delta ticker
- t.oi_value ??
- t.open_interest ??
- t.oi ??
- t.notional_value ??
- t.size ??
- 0
- );
-
- // Debug log for BTC to reveal exact OI field name
- if (sym.startsWith('BTC') && !map[sym]) {
- dlog(`BTC OI fields - open_interest_usd:${t.open_interest_usd} open_interest:${t.open_interest} oi_value:${t.oi_value} oi:${t.oi} size:${t.size} notional_value:${t.notional_value} -> resolved:${oi}`);
  }
-
- const rawVol = +(t.volume || t.quote_volume || t.turnover_24h || t.turnover_usd || 0);
- const usdVol = +(t.turnover_usd || t.turnover_24h || t.quote_volume || 0) || (rawVol * price);
-
- map[sym] = {
- price, change24h: +change24h.toFixed(2),
- volume24h: rawVol, usdVol24h: usdVol, oi,
- // Funding exchange interval is product-specific. Ticker may include the rate,
- // while products carry product_specs.rate_exchange_interval in seconds.
- fundingRate: parseFundingRate(t.funding_rate_8h || t.funding_rate || t.predicted_funding_rate || 0),
- nextFundingAt: parseExchangeTimestampMs(t.next_funding_realization || t.next_funding_time || t.next_funding_at || 0),
- fundingIntervalSeconds: parseFundingIntervalSeconds(t.rate_exchange_interval || t.funding_interval || t.fi || 0),
- };
- }
- } catch (e) { dlog(`Ticker err: ${e.message}`); }
- }
-
- // Secondary: products supplement
- try {
- const r = await rateLimitedFetch(`${BASE}/products?contract_types=perpetual_futures&page_size=500`);
- if (r.ok) {
- const d = await r.json();
- const list = d.result ?? d.data ?? [];
- let added = 0;
- for (const p of list) {
- if (!p.symbol || map[p.symbol]) continue;
- const state = (p.state || '').toLowerCase();
- if (state === 'expired' || state === 'inactive') continue;
- map[p.symbol] = {
- price: +(p.mark_price || p.last_price || 0),
- change24h: 0, volume24h: 0, usdVol24h: 0, oi: 0, fundingRate: 0, nextFundingAt: 0,
- fundingIntervalSeconds: parseFundingIntervalSeconds(p.product_specs?.rate_exchange_interval || p.rate_exchange_interval || 0),
- };
- added++;
- }
- if (added) dlog(`Products: +${added} extra symbols`);
- }
- } catch (e) { dlog(`Products supplement err: ${e.message}`); }
-
- dlog(`Tickers: ${Object.keys(map).length} total (${detectedRegion})`);
- return map;
+ dlog('Market-data bridge unavailable; scanner cannot load NSE/BSE quotes.');
+ throw new Error('Market-data bridge unavailable; scanner cannot load NSE/BSE quotes.');
 }
 
 // -- Fetch all products -------------------------------------------
-async function fetchProducts() {
- const results = [], seen = new Set();
- for (let page = 1; page <= 5; page++) {
- const urls = [
- `${BASE}/products?page_size=500&page_num=${page}`,
- `${BASE}/products?contract_types=perpetual_futures&page_size=500&page_num=${page}`,
- ];
- let foundNew = false;
- for (const url of urls) {
+async function fetchProducts(options = {}) {
+ if (typeof globalThis.dhanFetchProductsForRenderer === 'function') {
  try {
- const r = await rateLimitedFetch(url);
- if (!r.ok) continue;
- const d = await r.json();
- const list = d.result ?? d.data ?? (Array.isArray(d) ? d : []);
- for (const p of list) {
- if (!p.symbol || seen.has(p.symbol)) continue;
- const ct = (p.contract_type || '').toLowerCase();
- if (ct.includes('_option') || ct === 'spot') continue;
- if (!ct.includes('perpetual') && !p.symbol.endsWith('USD') && !p.symbol.endsWith('USDT')) continue;
- seen.add(p.symbol);
- const productDescription = describeDeltaInstrument(p, p.description || p.name || '');
- const assetInfo = classifyDeltaInstrument(p, productDescription);
- results.push({
- symbol: p.symbol,
- name: productDescription,
- description: productDescription,
- instrumentDescription: productDescription,
- sector: assetInfo.sector || getSector(p.symbol),
- assetClass: assetInfo.assetClass,
- assetLabel: assetInfo.assetLabel,
- assetBadge: assetInfo.assetBadge,
- assetInfo: assetInfo.info,
- underlyingSymbol: assetInfo.underlyingSymbol,
- underlyingName: assetInfo.underlyingName,
- fundingIntervalSeconds: parseFundingIntervalSeconds(p.product_specs?.rate_exchange_interval || p.rate_exchange_interval || 0),
- });
- foundNew = true;
+  const products = await globalThis.dhanFetchProductsForRenderer({
+   limit: Math.max(1, Number(options.limit || 3000)),
+   universe: options.universe || 'fno_stocks',
+   force: !!options.force,
+  });
+  const universe = globalThis.dhanLastUniverseMeta?.label || options.universe || 'Market universe';
+  dlog(`Products: ${products.length} (${universe})`);
+  return products;
+ } catch (e) {
+  dlog(`Product error: ${e.message}`);
+  return [];
  }
- } catch (e) { dlog(`Products page ${page}: ${e.message}`); }
  }
- if (!foundNew) break;
- }
- dlog(`Products: ${results.length}`);
- return results;
+ dlog('Market-data bridge unavailable; product master cannot load.');
+ return [];
 }
 
 // ================================================================

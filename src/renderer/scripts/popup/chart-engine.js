@@ -134,6 +134,7 @@
  function normalizeChartType(raw = '') {
  const value = String(raw || '').trim().toLowerCase();
  if (value === 'candle' || value === 'candles' || value === 'candlestick') return 'candles';
+ if (value === 'line' || value === 'lines') return 'line';
  return 'bars';
  }
 
@@ -432,7 +433,9 @@
  const tf = String(value || '').trim().toLowerCase();
  if (tf === 'w' || tf === '1wk' || tf === 'week' || tf === 'weekly') return '1w';
  if (tf === '1d' || tf === 'day' || tf === 'daily') return '1d';
- return ['1m', '5m', '15m', '1h', '4h'].includes(tf) ? tf : '15m';
+ if (tf === '1h' || tf === '60m' || tf === '60' || tf === '240') return '4h';
+ if (tf === '1m' || tf === '3m' || tf === '5m' || tf === '15') return '15m';
+ return ['15m', '4h'].includes(tf) ? tf : '15m';
  }
 
  function isDailyDarvasTimeframe(value = '') {
@@ -1416,10 +1419,21 @@ ${tooltip}
  ? { showTitle: true, lastValueVisible: true }
  : { showTitle: false, lastValueVisible: false };
  const isSyntheticIndex = payload.dataset?.syntheticIndex === true;
+ const isCarryMetric = payload.dataset?.syntheticMetric === 'carryAnnualPct';
  const latestClose = Number(visibleCandles[visibleCandles.length - 1]?.close || candles[candles.length - 1]?.close || 0);
  const pricePrecision = isSyntheticIndex ? 2 : latestClose >= 1000 ? 2 : latestClose >= 1 ? 4 : 6;
- const priceFormat = { type: 'price', precision: pricePrecision, minMove: pricePrecision >= 6 ? 0.000001 : pricePrecision >= 4 ? 0.0001 : 0.01 };
- const priceSeries = chartType === 'bars'
+ const priceFormat = isCarryMetric
+ ? { type: 'custom', formatter: value => `${Number(value || 0).toFixed(2)}%`, minMove: 0.01 }
+ : { type: 'price', precision: pricePrecision, minMove: pricePrecision >= 6 ? 0.000001 : pricePrecision >= 4 ? 0.0001 : 0.01 };
+ const priceSeries = chartType === 'line'
+ ? series(chart, globalThis.LightweightCharts.LineSeries, {
+ color: COLORS.up,
+ lineWidth: 3,
+ priceLineVisible: true,
+ lastValueVisible: true,
+ priceFormat,
+ }, 0)
+ : chartType === 'bars'
  ? series(chart, globalThis.LightweightCharts.BarSeries, {
  seriesType: 'Bar',
  upColor: COLORS.up,
@@ -1437,7 +1451,9 @@ ${tooltip}
  wickDownColor: COLORS.down,
  priceFormat,
  }, 0);
- priceSeries.setData(visibleCandles);
+ priceSeries.setData(chartType === 'line'
+ ? visibleCandles.map(candle => ({ time: candle.time, value: candle.close }))
+ : visibleCandles);
 
  const compareData = state.compareWithIndex !== false
  ? indexComparisonData(candles, payload.indexComparison?.candles || [], visibleTimes)

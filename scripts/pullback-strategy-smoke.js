@@ -77,13 +77,15 @@ function makeTrendReclaim(count = 90) {
  const ema9 = ema(closes, 9);
  return closes.map((value, index) => {
   let final = value;
-  if (index === count - 2) final = Number(ema9[index] || value) * 0.985;
-  if (index === count - 1) final = Number(ema9[index] || value) * 1.018;
+  if (index === count - 2) final = Number(ema9[index] || value) * 0.992;
+  if (index === count - 1) final = Number(ema9[index] || value) * 1.006;
+  const ema = Number(ema9[index] || final);
+  const isPullback = index >= count - 2;
   return {
    time: 1700000000 + index * 86400,
-   open: final * 0.992,
-   high: final * 1.025,
-   low: index >= count - 2 ? Number(ema9[index] || final) * 0.982 : final * 0.986,
+   open: isPullback ? final * 0.998 : final * 0.992,
+   high: isPullback ? final * 1.006 : final * 1.025,
+   low: isPullback ? ema * 0.997 : final * 0.986,
    close: final,
    volume: index === count - 1 ? 8000 : 4200,
    quoteVolume: final * (index === count - 1 ? 8000 : 4200),
@@ -114,13 +116,15 @@ function makeShortReject(count = 90) {
  const ema9 = ema(closes, 9);
  return closes.map((value, index) => {
   let final = value;
-  if (index === count - 2) final = Number(ema9[index] || value) * 1.014;
-  if (index === count - 1) final = Number(ema9[index] || value) * 0.982;
+  if (index === count - 2) final = Number(ema9[index] || value) * 1.008;
+  if (index === count - 1) final = Number(ema9[index] || value) * 0.994;
+  const ema = Number(ema9[index] || final);
+  const isPullback = index >= count - 2;
   return {
    time: 1700000000 + index * 86400,
-   open: final * 1.008,
-   high: index >= count - 2 ? Number(ema9[index] || final) * 1.018 : final * 1.014,
-   low: final * 0.976,
+   open: isPullback ? final * 1.002 : final * 1.008,
+   high: isPullback ? ema * 1.003 : final * 1.014,
+   low: isPullback ? final * 0.994 : final * 0.976,
    close: final,
    volume: index === count - 1 ? 8600 : 4400,
    quoteVolume: final * (index === count - 1 ? 8600 : 4400),
@@ -146,6 +150,71 @@ function makeWeakTrend(count = 80) {
  return rows;
 }
 
+function makeIntradayLongReady(price, count = 60) {
+ const rows = [];
+ let close = price * 0.94;
+ for (let i = 0; i < count; i += 1) {
+  close *= i > count - 8 ? 1.0018 : 1.0009;
+  rows.push({
+   time: 1700000000 + i * 900,
+   open: close * 0.998,
+   high: close * 1.004,
+   low: close * 0.996,
+   close,
+   volume: 3000,
+   quoteVolume: close * 3000,
+  });
+ }
+ const last = rows[rows.length - 1];
+ rows[rows.length - 1] = {
+  ...last,
+  open: price * 0.996,
+  high: price * 1.006,
+  low: price * 0.994,
+  close: price * 1.004,
+ };
+ return rows;
+}
+
+function makeIntradayShortReady(price, count = 60) {
+ const rows = [];
+ let close = price * 1.06;
+ for (let i = 0; i < count; i += 1) {
+  close *= i > count - 8 ? 0.9982 : 0.9991;
+  rows.push({
+   time: 1700000000 + i * 900,
+   open: close * 1.002,
+   high: close * 1.004,
+   low: close * 0.996,
+   close,
+   volume: 3200,
+   quoteVolume: close * 3200,
+  });
+ }
+ const last = rows[rows.length - 1];
+ rows[rows.length - 1] = {
+  ...last,
+  open: price * 1.004,
+  high: price * 1.006,
+  low: price * 0.994,
+  close: price * 0.996,
+ };
+ return rows;
+}
+
+function makeIntradayWait(price, count = 60) {
+ const rows = makeIntradayLongReady(price, count);
+ const last = rows[rows.length - 1];
+ rows[rows.length - 1] = {
+  ...last,
+  open: price * 1.001,
+  high: price * 1.004,
+  low: price * 0.997,
+  close: price * 1.002,
+ };
+ return rows;
+}
+
 runScript('src/renderer/scripts/shared/strategy-registry.js');
 runScript('src/renderer/scripts/background/14-pullback-scanner.js');
 
@@ -155,12 +224,39 @@ const reclaimRows = makeTrendReclaim();
 const extendedRows = makeExtendedTrend();
 const shortRows = makeShortReject();
 const weakRows = makeWeakTrend();
+const bullMarket = {
+ condition: 'bull',
+ indexChangePct: 1.1,
+ sentiment: { label: 'Constructive', score: 24, breadthPct: 62 },
+ leadership: { state: 'broad_risk_on' },
+};
+const bearMarket = {
+ condition: 'bear',
+ indexChangePct: -1.2,
+ sentiment: { label: 'Defensive', score: -24, breadthPct: 38 },
+ leadership: { state: 'broad_risk_off' },
+};
 
 const reclaim = pullback.pullbackAnalyzeSymbol('HYPEUSD', reclaimRows, reclaimRows.slice(-80), {
  price: reclaimRows[reclaimRows.length - 1].close,
  usdVol24h: 3000000,
  change24h: 4.8,
-});
+}, { marketIndex: bullMarket });
+const reclaimReady = pullback.pullbackAnalyzeSymbol('HYPEREADYUSD', reclaimRows, makeIntradayLongReady(reclaimRows[reclaimRows.length - 1].close), {
+ price: reclaimRows[reclaimRows.length - 1].close,
+ usdVol24h: 3000000,
+ change24h: 4.8,
+}, { marketIndex: bullMarket });
+const reclaimWait = pullback.pullbackAnalyzeSymbol('HYPEWAITUSD', reclaimRows, makeIntradayWait(reclaimRows[reclaimRows.length - 1].close), {
+ price: reclaimRows[reclaimRows.length - 1].close,
+ usdVol24h: 3000000,
+ change24h: 4.8,
+}, { marketIndex: bullMarket });
+const marketAgainst = pullback.pullbackAnalyzeSymbol('HYPEBEARUSD', reclaimRows, makeIntradayLongReady(reclaimRows[reclaimRows.length - 1].close), {
+ price: reclaimRows[reclaimRows.length - 1].close,
+ usdVol24h: 3000000,
+ change24h: 4.8,
+}, { marketIndex: bearMarket });
 const extended = pullback.pullbackAnalyzeSymbol('LATEUSD', extendedRows, extendedRows.slice(-80), {
  price: extendedRows[extendedRows.length - 1].close,
  usdVol24h: 2500000,
@@ -170,13 +266,18 @@ const shortReject = pullback.pullbackAnalyzeSymbol('SLIDEUSD', shortRows, shortR
  price: shortRows[shortRows.length - 1].close,
  usdVol24h: 2800000,
  change24h: -6.4,
-});
+}, { marketIndex: bearMarket });
+const shortReady = pullback.pullbackAnalyzeSymbol('SLIDEREADYUSD', shortRows, makeIntradayShortReady(shortRows[shortRows.length - 1].close), {
+ price: shortRows[shortRows.length - 1].close,
+ usdVol24h: 2800000,
+ change24h: -6.4,
+}, { marketIndex: bearMarket });
 const weak = pullback.pullbackAnalyzeSymbol('WEAKUSD', weakRows, weakRows.slice(-60), {
  price: weakRows[weakRows.length - 1].close,
  usdVol24h: 1200000,
  change24h: 0.6,
 });
-const counts = pullback.pullbackSignalCounts([reclaim, extended, shortReject, weak]);
+const counts = pullback.pullbackSignalCounts([reclaimReady, reclaimWait, marketAgainst, extended, shortReady, weak]);
 const sorted = pullback.pullbackSortRows([
  { symbol: 'R', eventType: 'review', score: 90 },
  { symbol: 'E', eventType: 'ema_reclaim', score: 72 },
@@ -193,17 +294,19 @@ const packageText = fs.readFileSync(path.join(root, 'package.json'), 'utf8');
 
 assert('registry exposes pullback lab', strategies.getStrategy('pullback').id === 'pullback');
 assert('pullback strategy is scanner only advisory', strategies.getStrategy('pullback').mode === 'scanner_only' && strategies.getStrategy('pullback').canLiveTrade === false);
-assert('trend reclaim creates a pullback buy/watch row', reclaim.strategyId === 'pullback' && ['BUY', 'WATCHLIST'].includes(reclaim.signal) && ['ema_reclaim', 'round_support', 'ema_pullback'].includes(reclaim.eventType));
-assert('short rejection creates a pullback sell/watch row', shortReject.strategyId === 'pullback' && shortReject.direction === 'short' && ['SELL', 'WATCHLIST'].includes(shortReject.signal) && ['ema_reject_short', 'round_resistance_short', 'ema_pullback_short'].includes(shortReject.eventType));
+assert('trend reclaim separates daily setup from 15m entry trigger', reclaimReady.strategyId === 'pullback' && reclaimReady.signal === 'BUY' && reclaimReady.raw.workflowStage === 'entry_ready' && reclaimReady.checks.intradayReady === true);
+assert('daily pullback setup waits when 15m trigger is not ready', reclaimWait.strategyId === 'pullback' && reclaimWait.signal === 'WATCHLIST' && reclaimWait.raw.workflowStage === 'daily_setup_wait_trigger' && reclaimWait.checks.intradayReady === false);
+assert('market regime can block a long pullback entry', marketAgainst.strategyId === 'pullback' && marketAgainst.signal !== 'BUY' && marketAgainst.checks.marketFit === false && marketAgainst.riskFlags.includes('Market regime against setup'));
+assert('short rejection creates an entry-ready short row', shortReady.strategyId === 'pullback' && shortReady.direction === 'short' && shortReady.signal === 'SELL' && shortReady.raw.workflowStage === 'entry_ready' && ['ema_reject_short', 'round_resistance_short'].includes(shortReady.eventType));
 assert('late extension is rejected as avoid chase', extended.strategyId === 'pullback' && extended.eventType === 'avoid_chase' && extended.signal === 'IGNORE');
 assert('weak trend is not promoted to buy', weak.strategyId === 'pullback' && weak.signal !== 'BUY');
-assert('pullback rows include EMA and reward metrics', Number(reclaim.raw.ema9) > 0 && Number(reclaim.raw.rrToTarget1) >= 0 && Array.isArray(reclaim.raw.scoreParts.rows));
+assert('pullback rows include EMA, 15m timing, market, and reward metrics', Number(reclaimReady.raw.ema9) > 0 && Number(reclaimReady.raw.rrToTarget1) >= 0 && reclaimReady.raw.timing.ready === true && reclaimReady.raw.marketRegime.state === 'aligned' && Array.isArray(reclaimReady.raw.scoreParts.rows));
 assert('pullback counts include long and short buckets', counts.long >= 1 && counts.short >= 1 && counts.ema_reclaim + counts.ema_pullback + counts.round_support + counts.ema_reject_short + counts.ema_pullback_short + counts.round_resistance_short + counts.avoid_chase >= 2);
 assert('pullback sort prioritizes reclaim/reject over pullback and review', sorted === 'S,E,P,R' || sorted === 'E,S,P,R');
 assert('pullback storage is namespaced', pullbackText.includes("'strategyResults.pullback'") && pullbackText.includes("'strategyStatus.pullback'") && registryText.includes("resultKey: 'strategyResults.pullback'"));
 assert('pullback scanner does not write current scanResults key', !/chrome\.storage\.local\.set\(\s*\{[^}]*scanResults\s*:/m.test(pullbackText));
 assert('strategy snapshot includes pullback rows', wizardText.includes("'strategyResults.pullback'") && wizardText.includes('pullback:'));
-assert('strategy lab UI includes pullback filters and detail drawer', popupText.includes("activeStrategyLabId === 'pullback'") && popupText.includes("['reclaim', '9 EMA Reclaim']") && popupText.includes('buildPullbackDetail'));
+assert('strategy lab UI includes pullback filters and detail drawer', popupText.includes("activeStrategyLabId === 'pullback'") && popupText.includes("['reclaim', '9 EMA Reclaim']") && popupText.includes('buildPullbackDetail') && popupText.includes('15m Timing') && popupText.includes('Trade Plan'));
 assert('strategy lab UI separates long and short pullback rows', popupText.includes("['short', 'Short']") && popupText.includes('strategy-direction-badge') && popupText.includes('ema_reject_short'));
 assert('strategy lab UI includes pullback chart draft handoff', popupText.includes('buildPullbackChartDraft') && popupText.includes('data-pullback-chart-draft'));
 assert('desktop background lazy-loads pullback scanner', backgroundText.includes('scripts/background/00-lazy-modules.js') && lazyLoaderText.includes('scripts/background/14-pullback-scanner.js') && lazyLoaderText.includes("'pullback:startScan'"));

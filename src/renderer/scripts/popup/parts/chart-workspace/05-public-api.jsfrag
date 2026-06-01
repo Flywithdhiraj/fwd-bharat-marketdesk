@@ -12,7 +12,7 @@
  const replaySeed = normalizeReplaySeed(options.replaySeed);
  const patch = {
  symbol: String(options.symbol || previewSurface.getDisplaySymbol?.() || '').trim().toUpperCase(),
- timeframe: normalizeTimeframe(options.timeframe || '5m'),
+ timeframe: normalizeTimeframe(options.timeframe || '15m'),
  preset: normalizePreset(options.preset || defaults.defaultPreset || 'clean'),
  showOrders: Object.prototype.hasOwnProperty.call(options, 'showOrders') ? !!options.showOrders : !!defaults.showOrders,
  showVwap: Object.prototype.hasOwnProperty.call(options, 'showVwap') ? !!options.showVwap : !!defaults.showVwap,
@@ -24,7 +24,7 @@
  orderContext: normalizeOrderContext(typeof options.getOrderContext === 'function' ? options.getOrderContext() : options.orderContext),
  visibleCandleCount: Math.max(
  24,
- Number(options.visibleCandleCount || replaySeed?.baselineVisibleCount || defaultVisibleCount(options.timeframe || '5m'))
+ Number(options.visibleCandleCount || replaySeed?.baselineVisibleCount || defaultVisibleCount(options.timeframe || '15m'))
  ),
  uiMode: previewSurface.uiMode,
  chartViewMode: 'preview',
@@ -57,7 +57,7 @@
  tabSurface.autoSelectedBest = true;
  }
  await setChartState(currentState => ({
- preset: currentState.keyDefaultAppliedV1 ? normalizePreset(currentState.preset || 'key') : 'key',
+ preset: currentState.keyDefaultAppliedV1 ? normalizePreset(currentState.preset || 'clean') : 'clean',
  timeframe: currentState.cleanDefaultAppliedV1 ? normalizeTimeframe(currentState.timeframe || '15m') : '15m',
  visibleCandleCount: currentState.cleanDefaultAppliedV1 ? (currentState.visibleCandleCount || defaultVisibleCount(currentState.timeframe || '15m')) : defaultVisibleCount('15m'),
  chartViewMode: 'tab',
@@ -234,6 +234,7 @@
  bindStorageListener();
  bindKeyboardShortcuts(SURFACE_DETACHED);
  await queueSurfaceRender(SURFACE_DETACHED, true);
+ globalThis.__fwdDetachedChartRenderComplete = true;
  }
 
  globalThis.DS_V17_CHART_STATE_KEY = DS_V17_CHART_STATE_KEY;

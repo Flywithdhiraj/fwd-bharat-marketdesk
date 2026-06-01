@@ -5,6 +5,9 @@ node_modules/
 release/
 dist/
 out/
+output/
+test-artifacts/
+release-history/
 
 # Local logs and smoke-test output
 *.log

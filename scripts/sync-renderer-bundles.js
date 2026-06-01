@@ -31,16 +31,6 @@ const bundles = [
    'src/renderer/scripts/popup/parts/chart-workspace/05-public-api.jsfrag',
   ],
  },
- {
-  target: 'src/renderer/scripts/popup/08-options-workspace.js',
-  parts: [
-   'src/renderer/scripts/popup/parts/options-workspace/01-state-and-normalize.jsfrag',
-   'src/renderer/scripts/popup/parts/options-workspace/02-data-refresh-and-health.jsfrag',
-   'src/renderer/scripts/popup/parts/options-workspace/03-chain-builder-analyzer-render.jsfrag',
-   'src/renderer/scripts/popup/parts/options-workspace/04-straddle-and-skew-render.jsfrag',
-   'src/renderer/scripts/popup/parts/options-workspace/05-events-and-public-api.jsfrag',
-  ],
- },
 ];
 
 function read(relativePath) {

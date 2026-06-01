@@ -1,4 +1,91 @@
 'use strict';
+
+function installRendererBootRecovery() {
+ if (window.__fwdRendererBootRecoveryInstalled) return;
+ window.__fwdRendererBootRecoveryInstalled = true;
+
+ const benignRuntimeMessage = message => /ResizeObserver loop (?:completed with undelivered notifications|limit exceeded)/i.test(String(message || ''));
+ const isDetachedChartStartup = () => new URLSearchParams(location.search).get('chart') === '1';
+ const escapeRecoveryHtml = value => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+ const errorText = error => {
+  if (!error) return 'The renderer did not finish starting.';
+  if (typeof error === 'string') return error;
+  return String(error.message || error.reason || error.type || 'The renderer did not finish starting.');
+ };
+
+ function showRecoveryNotice(title, detail) {
+  if (typeof globalThis.reportUiError === 'function') {
+   globalThis.reportUiError(title, detail, { timeoutMs: 12000 });
+  }
+  let panel = document.getElementById('rendererBootRecovery');
+  if (!panel) {
+   panel = document.createElement('div');
+   panel.id = 'rendererBootRecovery';
+   panel.setAttribute('role', 'alert');
+   panel.style.cssText = [
+    'position:fixed',
+    'right:18px',
+    'bottom:18px',
+    'z-index:99999',
+    'max-width:420px',
+    'padding:14px 16px',
+    'border:1px solid rgba(255,88,124,.5)',
+    'border-radius:10px',
+    'background:rgba(12,18,30,.96)',
+    'box-shadow:0 18px 48px rgba(0,0,0,.42)',
+    'color:#eaf3ff',
+    'font:12px/1.45 system-ui,-apple-system,Segoe UI,sans-serif'
+   ].join(';');
+   document.body?.appendChild(panel);
+  }
+  panel.innerHTML = `<strong style="display:block;color:#ff87a5;font-size:13px;margin-bottom:4px;">${escapeRecoveryHtml(String(title || 'Startup recovered'))}</strong><span>${escapeRecoveryHtml(String(detail || 'The app recovered the normal workspace.'))}</span>`;
+ }
+
+ function reloadToNormalWorkspace(reason) {
+  showRecoveryNotice('Chart startup recovered', reason || 'Chart mode did not finish loading. Opening the normal workspace now.');
+  const nextUrl = `${location.pathname}?w=1&desktop=1&app=windows&chartRecovery=1`;
+  setTimeout(() => {
+   try {
+    location.replace(nextUrl);
+   } catch (_) {
+    location.href = nextUrl;
+   }
+  }, 900);
+ }
+
+ function recoverBlankChartMode(reason) {
+  const body = document.body;
+  if (!body?.classList.contains('chart-mode')) return false;
+  const chartRoot = document.getElementById('chartWorkspaceRoot');
+  const chartHasContent = !!(chartRoot && !chartRoot.hidden && chartRoot.querySelector('.live-order-chart-card, .ds-lwc-chart, canvas'));
+  if (chartHasContent) return false;
+  reloadToNormalWorkspace(reason || 'Chart mode opened without a mounted chart. Opening the normal workspace now.');
+  return true;
+ }
+
+ window.addEventListener('error', event => {
+  if (benignRuntimeMessage(event?.message)) return;
+  const detail = errorText(event?.error || event?.message);
+  if (isDetachedChartStartup()) showRecoveryNotice('Chart runtime issue', detail);
+  else if (typeof globalThis.reportUiError === 'function') globalThis.reportUiError('Unexpected error', detail, { timeoutMs: 7000 });
+ });
+
+ window.addEventListener('unhandledrejection', event => {
+  const message = errorText(event?.reason);
+  if (benignRuntimeMessage(message)) return;
+  if (isDetachedChartStartup()) showRecoveryNotice('Chart request issue', message);
+  else if (typeof globalThis.reportUiError === 'function') globalThis.reportUiError('Request failed', message, { timeoutMs: 7000 });
+ });
+
+ globalThis.FWDRecoverBlankChartMode = recoverBlankChartMode;
+}
+
+installRendererBootRecovery();
 const V16_MOJIBAKE_TEST_RE = /[\u00c2\u00c3\u00e2\u00f0\u0153\u0178\u017e\u0161\u20ac\u2122\u2019\ufffd]/;
 const V16_MOJIBAKE_ATTRS = ['title', 'placeholder', 'aria-label', 'value'];
 const V16_CP1252_REVERSE = new Map([
@@ -147,27 +234,21 @@ const POPUP_LAZY_SCRIPT_PATHS = Object.freeze({
  chartIndicators: 'scripts/shared/chart-indicators.js',
  chartEngine: 'scripts/popup/chart-engine.js',
  chart: 'scripts/popup/07-chart-workspace.js',
- options: 'scripts/popup/08-options-workspace.js',
+ optionsHub: 'scripts/popup/08-options-hub.js',
+ fnoCarry: 'scripts/popup/10-fno-carry.js',
+ commodities: 'scripts/popup/11-commodities.js',
  strategyLab: 'scripts/popup/09-strategy-lab.js',
+ researchRisk: 'scripts/popup/04-research-risk.js',
+ debug: 'scripts/popup/05-settings-webhooks-helpers.js',
 });
 const POPUP_LAZY_STYLE_PATHS = Object.freeze({
  chart: 'styles/05-chart-workspace.css',
- options: 'styles/06-options-workspace.css',
 });
 const popupLazyScriptPromises = new Map();
 const popupLazyStylePromises = new Map();
 let popupV16InitPromise = null;
 let popupV16Initialized = false;
-const POPUP_V16_TABS = new Set([
- 'liveanalytics',
- 'funds',
- 'positions',
- 'orders',
- 'tradecheck',
- 'riskcalc',
- 'strategy',
-]);
-const POPUP_OPTIONS_TABS = new Set(['options']);
+const POPUP_V16_TABS = new Set(['strategy']);
 const POPUP_STRATEGY_LAB_TABS = new Set(['strategies']);
 
 function popupRequestIdleCallback(task, timeout = 1200) {
@@ -268,36 +349,25 @@ function loadPopupStyleOnce(href) {
 }
 
 function renderLazyPaneState(tab) {
- if (!['liveanalytics', 'funds', 'positions', 'orders', 'chart'].includes(String(tab || ''))) return;
+ if (!['chart', 'options', 'carry', 'commodities'].includes(String(tab || ''))) return;
  const pane = document.getElementById(`pane-${tab}`);
  if (!pane || pane.dataset.lazyReady === 'true') return;
+ if (tab === 'options') {
+  pane.innerHTML = `<div class="chart-pane-loading"><div class="chart-pane-loading-title">Options Hub</div><div class="chart-pane-loading-copy">Loading option-chain analytics...</div></div>`;
+  return;
+ }
+ if (tab === 'carry') {
+  pane.innerHTML = `<div class="chart-pane-loading"><div class="chart-pane-loading-title">F&amp;O Carry</div><div class="chart-pane-loading-copy">Loading stock futures basis...</div></div>`;
+  return;
+ }
+ if (tab === 'commodities') {
+  pane.innerHTML = `<div class="chart-pane-loading"><div class="chart-pane-loading-title">Commodities</div><div class="chart-pane-loading-copy">Loading MCX futures watch...</div></div>`;
+  return;
+ }
  if (tab === 'chart') {
- pane.innerHTML = `<div class="chart-pane-loading"><div class="chart-pane-loading-title">Chart workspace</div><div class="chart-pane-loading-copy">Loading the decision chart...</div></div>`;
- return;
+  pane.innerHTML = `<div class="chart-pane-loading"><div class="chart-pane-loading-title">Chart workspace</div><div class="chart-pane-loading-copy">Loading the decision chart...</div></div>`;
+  return;
  }
- if (tab === 'liveanalytics') {
- const statusEl = document.getElementById('liveAnalyticsStatus');
- if (statusEl) statusEl.textContent = 'Loading live analytics...';
- return;
- }
- if (tab === 'funds') {
- const statusEl = document.getElementById('liveFundsStatus');
- if (statusEl) statusEl.textContent = 'Loading fund details...';
- return;
- }
- if (tab === 'positions') {
- const statusEl = document.getElementById('liveAccountStatus');
- const metaEl = document.getElementById('livePositionsMeta');
- if (statusEl) statusEl.textContent = 'Loading live account data...';
- if (metaEl) metaEl.textContent = 'Loading positions...';
- return;
- }
- const statusEl = document.getElementById('liveOrdersStatus');
- const protectionMetaEl = document.getElementById('livePositionProtectionMeta');
- const orderMetaEl = document.getElementById('liveOpenOrdersMeta');
- if (statusEl) statusEl.textContent = 'Loading live Delta order controls...';
- if (protectionMetaEl) protectionMetaEl.textContent = 'Loading protection controls...';
- if (orderMetaEl) orderMetaEl.textContent = 'Loading open orders...';
 }
 
 async function ensureV16CapabilityUpgradeLoaded() {
@@ -305,13 +375,13 @@ async function ensureV16CapabilityUpgradeLoaded() {
  await loadPopupScriptOnce(POPUP_LAZY_SCRIPT_PATHS.v16);
  if (popupV16Initialized) return;
  if (!popupV16InitPromise) {
- popupV16InitPromise = Promise.resolve(globalThis.initV16CapabilityUpgrade?.())
- .then(() => {
- popupV16Initialized = true;
- document.querySelectorAll('#pane-liveanalytics, #pane-funds, #pane-positions, #pane-orders').forEach(pane => {
- pane.dataset.lazyReady = 'true';
- });
- })
+  popupV16InitPromise = Promise.resolve(globalThis.initV16CapabilityUpgrade?.())
+  .then(() => {
+   popupV16Initialized = true;
+   document.querySelectorAll('#pane-strategy').forEach(pane => {
+    pane.dataset.lazyReady = 'true';
+   });
+  })
  .catch(error => {
  popupV16InitPromise = null;
  throw error;
@@ -328,17 +398,39 @@ async function ensureChartWorkspaceLoaded() {
  await loadPopupScriptOnce(POPUP_LAZY_SCRIPT_PATHS.chart);
 }
 
-async function ensureOptionsWorkspaceLoaded() {
- await loadPopupStyleOnce(POPUP_LAZY_STYLE_PATHS.options);
- await loadPopupScriptOnce(POPUP_LAZY_SCRIPT_PATHS.options);
-}
-
 async function ensureStrategyLabLoaded() {
  await loadPopupScriptOnce(POPUP_LAZY_SCRIPT_PATHS.strategyLab);
 }
 
+async function ensureOptionsHubLoaded() {
+ await loadPopupScriptOnce(POPUP_LAZY_SCRIPT_PATHS.optionsHub);
+}
+
+async function ensureFnoCarryLoaded() {
+ await loadPopupScriptOnce(POPUP_LAZY_SCRIPT_PATHS.fnoCarry);
+}
+
+async function ensureCommoditiesLoaded() {
+ await loadPopupScriptOnce(POPUP_LAZY_SCRIPT_PATHS.commodities);
+}
+
 async function ensurePopupFeatureModulesForTab(tab) {
  const safeTab = String(tab || '').trim().toLowerCase();
+ if (safeTab === 'options') {
+ renderLazyPaneState(safeTab);
+ await ensureOptionsHubLoaded();
+ return;
+ }
+ if (safeTab === 'carry') {
+  renderLazyPaneState(safeTab);
+  await ensureFnoCarryLoaded();
+  return;
+ }
+ if (safeTab === 'commodities') {
+  renderLazyPaneState(safeTab);
+  await ensureCommoditiesLoaded();
+  return;
+ }
  if (POPUP_STRATEGY_LAB_TABS.has(safeTab)) {
  renderLazyPaneState(safeTab);
  await ensureStrategyLabLoaded();
@@ -349,12 +441,14 @@ async function ensurePopupFeatureModulesForTab(tab) {
  await ensureV16CapabilityUpgradeLoaded();
  return;
  }
- if (POPUP_OPTIONS_TABS.has(safeTab)) {
- await ensureOptionsWorkspaceLoaded();
- }
  if (safeTab === 'chart') {
  renderLazyPaneState(safeTab);
  await ensureChartWorkspaceLoaded();
+ return;
+ }
+ if (safeTab === 'debug') {
+ renderLazyPaneState(safeTab);
+ await loadPopupScriptOnce(POPUP_LAZY_SCRIPT_PATHS.debug);
  }
 }
 
@@ -374,19 +468,22 @@ async function openSignalInChartWorkspace(signal = {}, options = {}) {
  const isStageSignal = String(signal?.strategyId || '').toLowerCase() === 'stage' || !!signal?.raw?.stageMetrics;
  await ensureChartWorkspaceLoaded();
  const openAsOverlay = options.overlay !== false;
+ const requestedTimeframe = options.timeframe || signal?.timeframe || signal?.raw?.timeframe || (isStageSignal ? '1d' : '15m');
+ const reviewTimeframe = openAsOverlay ? requestedTimeframe : requestedTimeframe;
+ const requestedVisibleCount = Number(options.visibleCandleCount || 0);
  const chartOptions = {
  chartViewMode: openAsOverlay ? 'review' : 'tab',
- preset: openAsOverlay ? 'ema_obv' : 'clean',
- timeframe: isStageSignal ? '1d' : '15m',
- visibleCandleCount: openAsOverlay ? 20000 : undefined,
- chartTradingDraft: signal.chartTradingDraft || null,
+ preset: options.preset || (openAsOverlay ? 'ema_obv' : 'clean'),
+ timeframe: reviewTimeframe,
+ visibleCandleCount: requestedVisibleCount > 0 ? requestedVisibleCount : (openAsOverlay ? 120 : undefined),
+ chartTradingDraft: options.chartTradingDraft || signal.chartTradingDraft || null,
  showOrders: isStageSignal,
  showVwap: false,
  rightPanelOpen: false,
  intelligenceOverlays: false,
  deskLayoutMode: 'single',
  overlayDensity: 'minimal',
- primaryTimeframe: isStageSignal ? '1d' : '15m',
+ primaryTimeframe: options.primaryTimeframe || reviewTimeframe,
  returnTab: options.returnTab || '',
  returnSymbol: options.returnSymbol || signal.symbol || '',
  overlay: openAsOverlay,
@@ -411,31 +508,25 @@ async function openSignalInChartWorkspace(signal = {}, options = {}) {
 function warmPopupFeatureModules(params, activeTab) {
  if (params.get('chart') === '1') return;
  popupRequestIdleCallback(() => {
- const tasks = [];
- const safeActiveTab = String(activeTab || '').trim().toLowerCase();
- if (POPUP_V16_TABS.has(safeActiveTab)) {
- tasks.push(ensureV16CapabilityUpgradeLoaded());
- }
- if (POPUP_OPTIONS_TABS.has(safeActiveTab)) {
- tasks.push(ensureOptionsWorkspaceLoaded());
- }
- Promise.all(tasks).catch(error => {
- globalThis.reportUiError?.('Warm-up failed', error, { timeoutMs: 5000 });
- });
+  const tasks = [];
+  const safeActiveTab = String(activeTab || '').trim().toLowerCase();
+  if (POPUP_V16_TABS.has(safeActiveTab)) tasks.push(ensureV16CapabilityUpgradeLoaded());
+  Promise.all(tasks).catch(error => {
+   globalThis.reportUiError?.('Warm-up failed', error, { timeoutMs: 5000 });
+  });
  }, 1600);
 }
 
 globalThis.ensurePopupFeatureModulesForTab = ensurePopupFeatureModulesForTab;
 globalThis.ensureV16CapabilityUpgradeLoaded = ensureV16CapabilityUpgradeLoaded;
 globalThis.ensureChartWorkspaceLoaded = ensureChartWorkspaceLoaded;
-globalThis.ensureOptionsWorkspaceLoaded = ensureOptionsWorkspaceLoaded;
 globalThis.ensureStrategyLabLoaded = ensureStrategyLabLoaded;
 globalThis.renderChartWorkspacePane = renderChartWorkspacePane;
 globalThis.openSignalInChartWorkspace = openSignalInChartWorkspace;
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
  v16EnsureUiTextNormalization();
- console.log('[FWD] FWD TradeDesk Pro popup loaded');
+ console.log('[FWD] FWD Bharat MarketDesk popup loaded');
  const params = new URLSearchParams(location.search);
  loadTheme();
  if (params.get('w') === '1') {
@@ -449,9 +540,15 @@ document.addEventListener('DOMContentLoaded', () => {
  if (params.get('chart') === '1') {
  migrateStrategy();
  document.body.classList.add('chart-mode');
+ globalThis.__fwdDetachedChartRenderComplete = false;
  ensureChartWorkspaceLoaded()
- .then(() => globalThis.FWDTradeDeskChartWorkspace?.initDetachedChartWorkspace?.())
+ .then(() => {
+ const initDetached = globalThis.FWDTradeDeskChartWorkspace?.initDetachedChartWorkspace;
+ if (typeof initDetached !== 'function') throw new Error('Chart workspace API is unavailable.');
+ return initDetached();
+ })
  .catch(error => {
+ globalThis.FWDRecoverBlankChartMode?.('Chart workspace could not load. Scanner controls were restored.');
  globalThis.reportUiError?.('Chart workspace failed', error, { timeoutMs: 7000 });
  })
  .finally(() => {
@@ -460,20 +557,16 @@ document.addEventListener('DOMContentLoaded', () => {
  return;
  }
  migrateStrategy();
- loadStrategy();
+ await loadPopupScriptOnce(POPUP_LAZY_SCRIPT_PATHS.researchRisk);
  loadAutoScanState();
  loadAutoTradeState();
- updateSessionBadge();
  refreshStats();
  storeGet([
  'analyticsFocusMode', 'workspaceGroup', 'activeWorkspaceTab',
- 'scannerPreset', 'scannerSessionFilter', 'alertSortMode', 'workspaceFocusMode', 'desktopZoomMode'
+ 'scannerPreset', 'alertSortMode', 'workspaceFocusMode', 'desktopZoomMode'
  ]).then(async d => {
  scannerPreset = ['trend', 'reversal', 'crowding', 'tracked', ''].includes(String(d.scannerPreset || ''))
  ? String(d.scannerPreset || '')
- : '';
- scannerSessionFilter = ['asia', 'london', 'newyork', 'closed', ''].includes(String(d.scannerSessionFilter || ''))
- ? String(d.scannerSessionFilter || '')
  : '';
  alertSortMode = ['portfolio', 'score', 'newest'].includes(String(d.alertSortMode || ''))
  ? String(d.alertSortMode || '')
@@ -483,8 +576,8 @@ document.addEventListener('DOMContentLoaded', () => {
  applyStoredFilterUi();
  const storedTab = String(d.activeWorkspaceTab || '');
  const restoreLastTab = params.get('restoreLastTab') === '1';
- const desiredTab = restoreLastTab && TAB_TITLES[storedTab === 'analytics' ? 'liveanalytics' : storedTab]
- ? (storedTab === 'analytics' ? 'liveanalytics' : storedTab)
+ const desiredTab = restoreLastTab && TAB_TITLES[storedTab]
+ ? storedTab
  : 'home';
  const desiredGroup = restoreLastTab && WORKSPACE_GROUP_META[d.workspaceGroup] ? d.workspaceGroup : getWorkspaceGroupForTab(desiredTab);
  workspaceGroup = desiredGroup;
@@ -513,11 +606,11 @@ document.addEventListener('DOMContentLoaded', () => {
  });
  const desktopBtn = document.getElementById('btnDesktopApp');
  if (desktopBtn) {
- desktopBtn.title = 'Open FWD TradeDesk Pro workspace';
+ desktopBtn.title = 'Open FWD Bharat MarketDesk workspace';
  }
  const popoutBtn = document.getElementById('btnPopOut');
  if (popoutBtn) {
- popoutBtn.title = 'Open FWD TradeDesk Pro workspace';
+ popoutBtn.title = 'Open FWD Bharat MarketDesk workspace';
  }
 
  document.getElementById('systemToastDismiss')?.addEventListener('click', () => {

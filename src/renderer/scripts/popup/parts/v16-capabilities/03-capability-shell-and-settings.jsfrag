@@ -14,8 +14,8 @@ function renderV16CredentialModeStatus(profile = null, secret = null) {
 
  if (usesNative) {
  noteEl.textContent = label
- ? `Stored in encrypted Windows app storage as "${label}". Leave key fields blank to keep it, or enter new values to replace it.`
- : 'Stored in encrypted Windows app storage. Leave key fields blank to keep it, or enter new values to replace it.';
+ ? `Market Data Only | Manual Trading Only. Stored in encrypted Windows app storage as "${label}". Leave fields blank to keep it, or enter new values to replace it.`
+ : 'Market Data Only | Manual Trading Only. Stored in encrypted Windows app storage. Leave fields blank to keep it, or enter new values to replace it.';
  noteEl.className = 'account-inline-note good';
  keyInput.placeholder = 'Stored in encrypted Windows app storage';
  secretInput.placeholder = 'Stored in encrypted Windows app storage';
@@ -23,14 +23,14 @@ function renderV16CredentialModeStatus(profile = null, secret = null) {
  }
 
  if (v16NativeCredentialState.available) {
- noteEl.textContent = 'Encrypted Windows app storage is available. Saving a full key and secret will move them out of session storage.';
+ noteEl.textContent = 'Market Data Only | Manual Trading Only. Encrypted Windows app storage is available for your client ID and access token.';
  noteEl.className = 'account-inline-note good';
  } else {
- noteEl.textContent = 'Encrypted Windows app storage is not responding yet. Keys saved now stay only in this app session.';
+ noteEl.textContent = 'Encrypted Windows app storage is not responding yet. Do not paste credentials in chat; enter them only in this app.';
  noteEl.className = 'account-inline-note warn';
  }
- keyInput.placeholder = 'Required for live account data';
- secretInput.placeholder = 'Required for live account data';
+ keyInput.placeholder = 'Client ID';
+ secretInput.placeholder = 'Access Token';
 }
 
 function v16UpsertEditorProfileDraft(metadata, secrets, profile, secret, options = {}) {
@@ -195,7 +195,7 @@ async function renderV16CapabilityShell(preloaded = null) {
  ], ' | ');
  shell.innerHTML = `
  <div class="cap-shell-copy">
- <div class="cap-shell-kicker">FWD TradeDesk Pro Layer</div>
+ <div class="cap-shell-kicker">FWD Bharat MarketDesk Layer</div>
  <div class="cap-shell-title">${v16Esc(capabilityTitle)}</div>
  <div class="cap-shell-meta">${v16Esc(capabilityMetaLine)}</div>
  </div>
@@ -210,10 +210,10 @@ async function renderV16CapabilityShell(preloaded = null) {
  </button>
  <button class="cap-shell-card" data-v16-open-tab="strategy">
  <span>Active Guard</span>
- <strong class="${killSwitch.enabled ? 'bad' : capabilityMeta.tone === 'trade' ? 'good' : 'warn'}">${killSwitch.enabled ? 'Kill Switch' : v16Esc(capabilityLabel)}</strong>
+ <strong class="${killSwitch.enabled ? 'bad' : capabilityMeta.tone === 'trade' ? 'good' : 'warn'}">${killSwitch.enabled ? 'Manual Orders Disabled' : v16Esc(capabilityLabel)}</strong>
  <small>${killSwitch.enabled ? v16Esc(killSwitch.reason || 'Execution locked') : hasSecret ? (v16UsesNativeCredential(profile) ? 'Windows credential ready' : 'Session credential ready') : 'Preview mode, no key required'}</small>
  </button>
- <button class="cap-shell-kill ${killSwitch.enabled ? 'armed' : ''}" id="btnCapabilityKillSwitch">${killSwitch.enabled ? 'Disarm Kill Switch' : 'Arm Kill Switch'}</button>
+ <button class="cap-shell-kill ${killSwitch.enabled ? 'armed' : ''}" id="btnCapabilityKillSwitch" hidden>${killSwitch.enabled ? 'Enable Reviews' : 'Disable Reviews'}</button>
  </div>`;
 
  shell.querySelectorAll('[data-v16-capability]').forEach(button => {
@@ -268,7 +268,7 @@ async function renderV16DecisionEngineShell(preloaded = null) {
  </div>
  <div class="decision-grid">
  <article class="decision-card">
- <span>Profile</span>
+ <span>Workspace</span>
  <strong>${v16Esc(profileCardTitle)}</strong>
  <small>${v16Esc(profile.venue)} | risk ${Number(profile.riskPerTradePct || 0).toFixed(2)}%</small>
  </article>
@@ -280,7 +280,7 @@ async function renderV16DecisionEngineShell(preloaded = null) {
  <article class="decision-card">
  <span>Execution State</span>
  <strong class="${killSwitch.enabled ? 'bad' : capabilityMeta.tone === 'trade' ? 'good' : 'warn'}">${killSwitch.enabled ? 'Locked' : v16Esc(capabilityLabel)}</strong>
- <small>${killSwitch.enabled ? v16Esc(killSwitch.reason || 'Kill switch armed') : hasSecret ? (v16UsesNativeCredential(profile) ? 'Windows credential ready' : 'Session credential ready') : 'No trading key required yet'}</small>
+ <small>${killSwitch.enabled ? v16Esc(killSwitch.reason || 'Manual review only') : hasSecret ? (v16UsesNativeCredential(profile) ? 'Windows credential ready' : 'Session credential ready') : 'No trading key required yet'}</small>
  </article>
  <article class="decision-card">
  <span>Live Queue</span>
@@ -307,7 +307,7 @@ async function renderV16DecisionEngineShell(preloaded = null) {
  <div class="regime-block">
  <span>Freshness</span>
  <strong>${v16Esc(lastScanText)}</strong>
- <small>${summary.executeCount} execute alerts ready${killSwitch.enabled ? ' | kill switch armed' : summary.killSwitchSuggested ? ' | loss guard breached' : ''}</small>
+ <small>${summary.executeCount} execute alerts ready${killSwitch.enabled ? ' | manual review only' : summary.killSwitchSuggested ? ' | loss guard breached' : ''}</small>
  </div>
  </div>`;
 }
@@ -333,19 +333,21 @@ function renderV16RiskBridgeBanner() {
  <div class="risk-bridge-title">${v16Esc(v16RiskBridge.symbol)} | ${v16Esc(v16RiskBridge.side.toUpperCase())}</div>
  </div>
  <div class="risk-bridge-actions">
- <button class="bsm" id="btnRiskBridgeOpenDelta">Open in Delta</button>
+ <button class="bsm" id="btnRiskBridgeOpenDelta">Open Broker</button>
  <button class="bsm" id="btnRiskBridgePreview">Preview Trade</button>
  <button class="bsm" id="btnRiskBridgeClear">Clear</button>
  </div>
  </div>
  <div class="risk-bridge-grid">
- <div class="risk-bridge-card"><span>Profile</span><strong>${v16Esc(profile.name)}</strong><small>${v16Esc(v16ReadableCapabilityLabel(capabilityMeta.label))}</small></div>
- <div class="risk-bridge-card"><span>Entry / Stop</span><strong>$${fmtPrice(v16RiskBridge.entry)}</strong><small>SL $${fmtPrice(v16RiskBridge.stopLoss)}${v16RiskBridge.takeProfit ? ` | TP $${fmtPrice(v16RiskBridge.takeProfit)}` : ''}</small></div>
- <div class="risk-bridge-card"><span>Suggested Risk</span><strong>${Number(profile.riskPerTradePct || 0).toFixed(2)}%</strong><small>$${v16FmtNumber(suggestedRiskCash, 2)} on ${v16Esc(riskSeed.symbol)} wallet $${v16FmtNumber(riskSeed.balance, 2)}</small></div>
- <div class="risk-bridge-card"><span>Execution State</span><strong class="${killSwitch.enabled ? 'bad' : capabilityMeta.tone === 'trade' ? 'good' : 'warn'}">${killSwitch.enabled ? 'Locked' : capabilityMeta.label}</strong><small>${killSwitch.enabled ? v16Esc(killSwitch.reason || 'Kill switch armed') : 'Risk plan seeded from signal'}</small></div>
+ <div class="risk-bridge-card"><span>Workspace</span><strong>${v16Esc(profile.name)}</strong><small>${v16Esc(v16ReadableCapabilityLabel(capabilityMeta.label))}</small></div>
+ <div class="risk-bridge-card"><span>Entry / Stop</span><strong>Rs ${fmtPrice(v16RiskBridge.entry)}</strong><small>SL Rs ${fmtPrice(v16RiskBridge.stopLoss)}${v16RiskBridge.takeProfit ? ` | TP Rs ${fmtPrice(v16RiskBridge.takeProfit)}` : ''}</small></div>
+ <div class="risk-bridge-card"><span>Suggested Risk</span><strong>${Number(profile.riskPerTradePct || 0).toFixed(2)}%</strong><small>Rs ${v16FmtNumber(suggestedRiskCash, 2)} on ${v16Esc(riskSeed.symbol)} wallet Rs ${v16FmtNumber(riskSeed.balance, 2)}</small></div>
+ <div class="risk-bridge-card"><span>Execution State</span><strong class="good">Manual Only</strong><small>Risk plan seeded from signal</small></div>
  </div>`;
  banner.querySelector('#btnRiskBridgeOpenDelta')?.addEventListener('click', () => {
- v16OpenDeltaTradeWindow(v16RiskBridge?.symbol);
+  const symbol = String(v16RiskBridge?.symbol || '').trim().toUpperCase();
+  const url = symbol ? `https://web.dhan.co/?symbol=${encodeURIComponent(symbol)}` : 'https://web.dhan.co/';
+  window.open(url, '_blank', 'noopener,noreferrer');
  });
  banner.querySelector('#btnRiskBridgePreview')?.addEventListener('click', () => {
  const sizedContracts = parseFloat(document.getElementById('rcContracts')?.textContent || '1');
@@ -380,7 +382,7 @@ async function renderV16RiskManageBoard() {
  wrap.innerHTML = `
  <div class="risk-manage-grid">
  <div class="risk-manage-card"><span>Wallet</span><strong>$${v16FmtNumber(riskSeed.balance, 2)}</strong><small>${riskSeed.source === 'wallet' ? `Live ${v16Esc(riskSeed.symbol)} sync${riskSeed.available > 0 ? ` | Avail $${v16FmtNumber(riskSeed.available, 2)}` : ''}` : 'Profile balance fallback'}</small></div>
- <div class="risk-manage-card"><span>Kill Switch</span><strong class="${killSwitch.enabled ? 'bad' : 'good'}">${killSwitch.enabled ? 'Armed' : 'Ready'}</strong><small>${killSwitch.enabled ? v16Esc(killSwitch.reason || 'Execution locked') : 'Execution allowed by capability state'}</small></div>
+ <div class="risk-manage-card"><span>Orders</span><strong class="good">Manual Only</strong><small>Order placement is disabled in this app</small></div>
  <div class="risk-manage-card"><span>Live Positions</span><strong>${livePositions}</strong><small>Interactive reductions and closes available in Positions</small></div>
  <div class="risk-manage-card"><span>30D Review</span><strong class="${model.realized >= 0 ? 'good' : 'bad'}">${v16FmtSigned(model.realized)}</strong><small>${model.closedTrades.length} closed trades | ${model.winRate.toFixed(1)}% win rate</small></div>
  </div>
@@ -504,7 +506,7 @@ function renderV16SettingsConnectionCard(snapshot = null) {
  tickersEl.textContent = '-';
  productsEl.textContent = '-';
  candlesEl.textContent = '-';
- statusEl.textContent = 'Checking public Delta market data...';
+ statusEl.textContent = 'Checking market data...';
  statusEl.className = 'account-inline-note warn';
  if (runButton) runButton.disabled = true;
  return;
@@ -518,7 +520,7 @@ function renderV16SettingsConnectionCard(snapshot = null) {
  tickersEl.textContent = String(Number(data.tickerCount || 0));
  productsEl.textContent = String(Number(data.productCount || 0));
  candlesEl.textContent = String(Number(data.btcCandleCount || 0));
- statusEl.textContent = `Public market data OK via ${v16ShortBaseUrl(data.baseUrl)}. Add live credentials only when you want live positions or live order testing.`;
+ statusEl.textContent = `Market data ready. ${Number(data.instrumentCount || data.productCount || 0)} instruments available for scanner/chart use.`;
  statusEl.className = 'account-inline-note good';
  return;
  }
@@ -528,7 +530,7 @@ function renderV16SettingsConnectionCard(snapshot = null) {
  tickersEl.textContent = '-';
  productsEl.textContent = '-';
  candlesEl.textContent = '-';
- statusEl.textContent = v16ApiHealthState.error || 'Public market-data check failed.';
+ statusEl.textContent = v16ApiHealthState.error || 'Market-data check failed.';
  statusEl.className = 'account-inline-note bad';
  return;
  }
@@ -622,25 +624,15 @@ function activateV16SettingsPanel(panel = 'profile') {
  if (section.tagName === 'DETAILS') section.open = active;
  });
  const libraryMeta = {
- display: ['DISPLAY', 'Display & Currency', 'Report currency and fixed USD to INR display conversion.'],
- profile: ['LIVE TRADING PROFILE', 'Trading Profile', 'User identity, venue, and execution mode for the active desk.'],
- 'paper-mode': ['LIVE TRADING PROFILE', 'Paper Trading', 'Forward-test signals in the local shadow ledger while real futures auto-trade remains off.'],
- security: ['LIVE TRADING PROFILE', 'Login Security', 'Password and Microsoft Authenticator settings for this local Windows app.'],
- 'api-keys': ['LIVE TRADING PROFILE', 'API Keys & Kill Switch', 'Delta credentials, session secret state, and the global execution lock.'],
- connection: ['LIVE TRADING PROFILE', 'Connection Check', 'Public market-data readiness checks for scanner and live account setup.'],
- risk: ['RISK RULES', 'Risk Defaults', 'Base balance, session balance, risk-per-trade, and daily loss assumptions.'],
- guards: ['RISK RULES', 'Live Guards', 'Hard limits for live order size and blocked symbols.'],
- var: ['RISK RULES', 'VaR Planning', 'Drawdown cycles, slot capacity, sector limits, and per-trade loss caps.'],
- 'risk-templates': ['RISK RULES', 'Scanner Risk Templates', 'ATR stop and target R:R defaults used by scanner context.'],
- api: ['DEVELOPER / DEBUG', 'API Health', 'Runtime quota, cooldown, and candle-cache status.'],
- recovery: ['DEVELOPER / DEBUG', 'Recovery Center', 'Common blocked states and recovery actions for scanner, account sync, and execution readiness.'],
+ profile: ['LOCAL DESK', 'Workspace', 'Local defaults for the active desk.'],
+ security: ['LOCAL DESK', 'Login Security', 'Password and Microsoft Authenticator settings for this local Windows app.'],
+ 'api-keys': ['MARKET DATA ONLY', 'Market Data API', 'Read-only NSE/BSE market data credentials.'],
+ connection: ['MARKET DATA', 'Connection Check', 'Market-data readiness checks for scanner setup.'],
+ api: ['APP SUPPORT', 'API Health', 'Runtime quota, cooldown, and candle-cache status.'],
+ recovery: ['APP SUPPORT', 'Recovery Center', 'Common blocked states and recovery actions for scanner and data readiness.'],
  'scanner-rules': ['SCANNER RULES', 'Scanner & Market Data', 'Signal filters, timeframes, scan limits, market-data mode, and FWD-10 basket settings.'],
- 'strategy-profiles': ['SCANNER RULES', 'Strategy Profiles', 'Presets that update scanner, paper, chart, and risk-template fields before saving.'],
- 'futures-auto': ['AUTOMATION', 'Futures Auto-Trade', 'Live futures execution gates, size limits, funding exits, and notifications.'],
- 'options-auto': ['AUTOMATION', 'Options Auto-Trade', 'Defined-risk options automation rules for the theta desk.'],
- 'straddle-auto': ['AUTOMATION', 'Short Straddle', 'Short straddle entry, re-entry, expiry, premium, skew, and auto-sizing controls.'],
- charts: ['SYSTEM', 'Charts & Levels', 'Chart presets, key levels, and risk-template defaults used by scanner context.'],
- backup: ['SYSTEM', 'Notifications & Backup', 'Alert notifications, backup folder, and local alert archive settings.'],
+ 'strategy-profiles': ['SCANNER RULES', 'Strategy Profiles', 'Presets that update scanner, strategy, and chart fields before saving.'],
+ charts: ['SYSTEM', 'Charts & Levels', 'Chart presets, key levels, and scanner context.'],
  };
  const meta = libraryMeta[target];
  if (library) {
@@ -782,7 +774,7 @@ async function v16RenderSettingsRecoveryCenter() {
  const lastScanTs = Number(store?.lastScanTs || 0);
  const rows = [
  {
- label: 'Trading Profile',
+ label: 'Workspace',
  value: capability.label || 'Public',
  detail: profile?.username || profile?.name || 'Single active user',
  tone: profile ? (capability.tone || 'info') : 'warn',
@@ -794,10 +786,10 @@ async function v16RenderSettingsRecoveryCenter() {
  tone: secretOk ? 'good' : 'warn',
  },
  {
- label: 'Kill Switch',
- value: killSwitch.enabled ? 'Armed' : 'Clear',
- detail: killSwitch.reason || (killSwitch.enabled ? 'Execution locked.' : 'Execution guard is not blocking.'),
- tone: killSwitch.enabled ? 'bad' : 'good',
+ label: 'Orders',
+ value: 'Manual Only',
+ detail: 'Order placement is disabled in this app.',
+ tone: 'good',
  },
  {
  label: 'Runtime Cooldown',
@@ -869,8 +861,8 @@ function readV16ProfileEditor() {
  updatedAt: Date.now(),
  }),
  secret: {
- tradingKey: sanitizeText(document.getElementById('accountTradingKey')?.value || '', '', 120),
- tradingSecret: sanitizeText(document.getElementById('accountTradingSecret')?.value || '', '', 180),
+ tradingKey: sanitizeText(document.getElementById('accountTradingKey')?.value || '', '', 160),
+ tradingSecret: sanitizeText(document.getElementById('accountTradingSecret')?.value || '', '', 4096),
  label: sanitizeText(document.getElementById('accountSecretLabel')?.value || '', '', 48),
  updatedAt: Date.now(),
  },
@@ -880,6 +872,15 @@ function readV16ProfileEditor() {
 async function saveV16ProfileFromEditor(setActive = false) {
  await loadV16AccountState();
  const { profile, secret } = readV16ProfileEditor();
+ if (String(secret.tradingKey || '').trim() && String(secret.tradingSecret || '').trim() && globalThis.fwdDesktopNative?.sendNativeMessage) {
+ await globalThis.fwdDesktopNative.sendNativeMessage({
+  type: 'dhan_data',
+  action: 'credentials_set',
+  clientId: secret.tradingKey,
+  accessToken: secret.tradingSecret,
+  dataMode: 'rest',
+ });
+ }
  const draft = v16UpsertEditorProfileDraft(getV16Metadata(), getV16Secrets(), profile, secret, { setActive });
  await persistV16AccountState(draft.metadata, draft.secrets);
  await v16RefreshNativeCredentialState(true);
@@ -897,6 +898,59 @@ async function saveV16ProfileFromEditor(setActive = false) {
  await renderV16All();
 }
 
+async function saveDhanCredentialsFromEditor(options = {}) {
+ const resultEl = document.getElementById('accountApiTestResult');
+ const { secret } = readV16ProfileEditor();
+ const clientId = String(secret?.tradingKey || '').trim();
+ const accessToken = String(secret?.tradingSecret || '').trim();
+ if (!clientId || !accessToken) {
+  if (resultEl) {
+   const missing = !clientId && !accessToken
+    ? 'Enter Client ID and Access Token first.'
+    : (!clientId ? 'Client ID is required along with the Access Token.' : 'Access Token is required along with the Client ID.');
+   resultEl.textContent = missing;
+   resultEl.className = 'account-inline-note bad';
+  }
+  return { ok: false, error: 'Client ID and access token are required.' };
+ }
+ if (/^eyJ/i.test(accessToken) && (accessToken.length < 220 || accessToken.split('.').length < 3)) {
+  const msg = 'Access Token looks incomplete. Copy the full token; do not paste only a token ID or a shortened value.';
+  if (resultEl) {
+   resultEl.textContent = msg;
+   resultEl.className = 'account-inline-note bad';
+  }
+  return { ok: false, error: msg };
+ }
+ if (!globalThis.fwdDesktopNative?.sendNativeMessage) {
+  if (resultEl) {
+   resultEl.textContent = 'Encrypted Windows app storage is not available in this window. Restart the desktop app and try again.';
+   resultEl.className = 'account-inline-note bad';
+  }
+  return { ok: false, error: 'Secure credential storage is not available.' };
+ }
+ const response = await globalThis.fwdDesktopNative.sendNativeMessage({
+  type: 'dhan_data',
+  action: 'credentials_set',
+  clientId,
+  accessToken,
+  dataMode: 'rest',
+ });
+ if (response?.ok) {
+  await v16RefreshNativeCredentialState(true);
+  if (resultEl && !options.silent) {
+   resultEl.textContent = 'Credentials saved in encrypted Windows app storage. Order placement remains disabled.';
+   resultEl.className = 'account-inline-note good';
+  }
+  syncV16SettingsPanelState();
+  return response;
+ }
+ if (resultEl) {
+  resultEl.textContent = `X ${response?.error || 'Credential save failed.'}`;
+  resultEl.className = 'account-inline-note bad';
+ }
+ return response || { ok: false, error: 'Credential save failed.' };
+}
+
 async function toggleV16KillSwitchFromEditor() {
  const killSwitch = getV16KillSwitchState();
  const reason = document.getElementById('accountKillSwitchReason')?.value || '';
@@ -907,7 +961,9 @@ async function toggleV16KillSwitchFromEditor() {
 async function runV16ApiHealthCheck() {
  v16ApiHealthState = { status: 'loading', data: null, error: '' };
  renderV16SettingsConnectionCard(await getV16Snapshot());
- const response = await v16RuntimeSend('v16:checkMarketData');
+ const response = await globalThis.fwdDesktopNative?.sendNativeMessage
+ ? await globalThis.fwdDesktopNative.sendNativeMessage({ type: 'dhan_data', action: 'test' })
+ : await v16RuntimeSend('v16:checkMarketData');
  if (response?.ok) {
  v16ApiHealthState = { status: 'success', data: response, error: '' };
  } else {

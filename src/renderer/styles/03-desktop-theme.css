@@ -693,10 +693,6 @@ body.desktop-mode[data-workspace-group='markets'] #pane-scanner .frow {
  box-shadow: 0 10px 24px rgba(2, 8, 14, 0.24);
 }
 
-body.desktop-mode[data-workspace-group='markets'] #pane-scanner #scannerSessions {
- display: none !important;
-}
-
 body.desktop-mode[data-workspace-group='markets'] #pane-scanner #scannerPresets {
  display: none !important;
 }
@@ -821,7 +817,6 @@ body.desktop-mode[data-workspace-group='markets'] #pane-scanner .v16-signal-meta
 }
 
 body.desktop-mode[data-workspace-group='markets'] #pane-scanner .card-session,
-body.desktop-mode[data-workspace-group='markets'] #pane-scanner #scannerSessions,
 body.desktop-mode[data-workspace-group='markets'] #pane-scanner .card-emerging,
 body.desktop-mode[data-workspace-group='markets'] #pane-scanner .card-sparkline,
 body.desktop-mode[data-workspace-group='markets'] #pane-scanner .mtf-bars,

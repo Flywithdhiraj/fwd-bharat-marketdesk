@@ -2,16 +2,16 @@
 
 (function initRadarScanner(global) {
  const RADAR_DEFAULT_SETTINGS = Object.freeze({
-  maxCoins: 150,
-  outputLimit: 180,
+  maxCoins: 500,
+  outputLimit: 500,
   focusLimit: 10,
-  newCoinLimit: 5,
+  freshListingLimit: 5,
   minUsdVolume24h: 75000,
   preferredIntradayCandles: 180,
   minIntradayCandles: 36,
   preferredDailyCandles: 120,
   minDailyCandles: 30,
-  newCoinFirstSeenHours: 72,
+  freshListingFirstSeenHours: 72,
   volumeRatioTrigger: 1.8,
   strongVolumeRatio: 3,
   pressureMovePct: 5,
@@ -170,27 +170,30 @@
   });
  }
 
- async function radarLoadSettings() {
-  const stored = await radarLoadStored(['strategySettings.radar']);
-  return {
+async function radarLoadSettings() {
+ const stored = await radarLoadStored(['strategySettings.radar']);
+  const settings = {
    ...RADAR_DEFAULT_SETTINGS,
    ...(stored['strategySettings.radar'] || {}),
   };
+  settings.maxCoins = Math.max(RADAR_DEFAULT_SETTINGS.maxCoins, Number(settings.maxCoins || 0));
+  settings.outputLimit = Math.max(RADAR_DEFAULT_SETTINGS.outputLimit, Number(settings.outputLimit || 0));
+  return settings;
  }
 
  function radarBuildUniverse(tickerMap = {}, products = [], firstSeenMap = {}, settings = RADAR_DEFAULT_SETTINGS) {
   const productSymbols = new Set((Array.isArray(products) ? products : []).map(item => String(item.symbol || '').toUpperCase()));
   const now = radarNow();
-  const freshMs = Number(settings.newCoinFirstSeenHours || 72) * 3600000;
+  const freshMs = Number(settings.freshListingFirstSeenHours || settings.newCoinFirstSeenHours || 72) * 3600000;
   return Object.entries(tickerMap || {})
   .filter(([symbol, ticker]) => {
    const sym = String(symbol || '').toUpperCase();
-   if (!sym || productSymbols.size && !productSymbols.has(sym)) return false;
-   if (!sym.endsWith('USD') && !sym.endsWith('USDT')) return false;
-   if (!(Number(ticker?.price || 0) > 0)) return false;
+ if (!sym || productSymbols.size && !productSymbols.has(sym)) return false;
+ if (!(Number(ticker?.price || 0) > 0)) return false;
    const firstSeen = Number(firstSeenMap[sym] || now);
    const fresh = now - firstSeen <= freshMs;
-   return fresh || Number(ticker?.usdVol24h || 0) >= Number(settings.minUsdVolume24h || 0);
+   const turnover = Number(ticker?.inrTurnover24h || ticker?.turnover24h || ticker?.usdVol24h || 0);
+   return fresh || !(turnover > 0) || turnover >= Number(settings.minUsdVolume24h || 0);
   })
   .map(([symbol, ticker]) => ({
    symbol: String(symbol || '').toUpperCase(),
@@ -214,7 +217,7 @@
    if (row.signal === 'WATCHLIST') acc.watch += 1;
    if (row.signal === 'IGNORE') acc.avoid += 1;
    return acc;
-  }, { buy: 0, sell: 0, watch: 0, avoid: 0, breakout: 0, ema_obv: 0, pressure: 0, new_coin: 0, vwap: 0, avoid_trap: 0, review: 0 });
+  }, { buy: 0, sell: 0, watch: 0, avoid: 0, breakout: 0, ema_obv: 0, pressure: 0, fresh_listing: 0, new_coin: 0, vwap: 0, avoid_trap: 0, review: 0 });
  }
 
  function radarBuildScoreParts(parts = {}) {
@@ -225,8 +228,7 @@
    ['OBV validation', Number(parts.obv || 0)],
    ['Resistance/support break', Number(parts.level || 0)],
    ['VWAP decision', Number(parts.vwap || 0)],
-   ['New coin activity', Number(parts.newCoin || 0)],
-   ['Funding pressure', Number(parts.funding || 0)],
+   ['Fresh listing activity', Number(parts.newCoin || 0)],
    ['Thin volume penalty', Number(parts.liquidityPenalty || 0)],
    ['Extended candle penalty', Number(parts.extensionPenalty || 0)],
   ].filter(([, value]) => value !== 0);
@@ -361,19 +363,39 @@
 
  function radarNotificationRows(rows = []) {
   return (Array.isArray(rows) ? rows : [])
-  .filter(row => ['breakout', 'pressure', 'new_coin', 'ema_obv'].includes(String(row.eventType || row.raw?.eventType || '')))
-  .filter(row => Number(row.score || 0) >= 68)
+  .filter(row => ['breakout', 'pressure', 'fresh_listing', 'new_coin', 'ema_obv'].includes(String(row.eventType || row.raw?.eventType || '')))
+  .filter(row => Number(row.score || 0) >= 78)
   .slice(0, 4);
  }
 
+ function radarNotificationState(row = {}) {
+  return {
+   setupKey: `${String(row.symbol || '').toUpperCase()}:${String(row.eventType || row.raw?.eventType || '')}`,
+   score: Math.round(Number(row.score || 0)),
+   ts: radarNow(),
+  };
+ }
+
+ function radarShouldInterruptForSetup(row = {}, prior = {}) {
+  const next = radarNotificationState(row);
+  if (!next.setupKey || next.score < 78) return { ok: false, next };
+  if (!prior || typeof prior !== 'object' || !prior.setupKey) return { ok: true, next };
+  if (next.setupKey !== String(prior.setupKey || '')) return { ok: true, next };
+  if (next.score >= Number(prior.score || 0) + 8) return { ok: true, next };
+  if (radarNow() - Number(prior.ts || 0) > 4 * 60 * 60 * 1000) return { ok: true, next };
+  return { ok: false, next };
+ }
+
  async function radarMaybeNotify(rows = [], settings = RADAR_DEFAULT_SETTINGS) {
-  const data = await radarLoadStored(['strategyLabRadarNotificationsEnabled', 'strategyLabRadarLastNotificationKey']);
-  if (data.strategyLabRadarNotificationsEnabled !== true) return;
+  const data = await radarLoadStored(['strategyLabScannerNotificationsEnabled', 'strategyLabRadarNotificationsEnabled', 'strategyLabRadarLastNotificationKey', 'strategyLabRadarLastNotificationState']);
+  if (data.strategyLabScannerNotificationsEnabled !== true || data.strategyLabRadarNotificationsEnabled !== true) return;
   const picked = radarNotificationRows(rows)[0];
   if (!picked) return;
-  const key = `${picked.symbol}:${picked.eventType}:${Math.floor(Number(picked.ts || radarNow()) / 60000)}`;
+  const interrupt = radarShouldInterruptForSetup(picked, data.strategyLabRadarLastNotificationState);
+  if (!interrupt.ok) return;
+  const key = `${picked.symbol}:${picked.eventType}:${Math.floor(radarNow() / 3600000)}`;
   if (key === data.strategyLabRadarLastNotificationKey) return;
-  await chrome.storage.local.set({ strategyLabRadarLastNotificationKey: key });
+  await chrome.storage.local.set({ strategyLabRadarLastNotificationKey: key, strategyLabRadarLastNotificationState: interrupt.next });
   const eventLabel = picked.raw?.eventLabel || picked.setupLabel || 'Radar event';
   const title = `[Radar] ${picked.symbol} ${eventLabel}`;
   const message = `${picked.actionLabel || 'Review'} | Score ${Math.round(Number(picked.score || 0))} | ${picked.raw?.volumeRatio ? `${picked.raw.volumeRatio}x volume` : 'Radar active'}`;
@@ -409,7 +431,7 @@
   if (type === 'breakout') return 'Breaking Resistance';
   if (type === 'ema_obv') return 'EMA + OBV Valid';
   if (type === 'pressure') return 'Pressure Move';
-  if (type === 'new_coin') return 'New Coin Active';
+  if (type === 'fresh_listing' || type === 'new_coin') return 'Fresh Listing Active';
   if (type === 'vwap') return 'VWAP Retest';
   if (type === 'avoid_trap') return 'Avoid / Trap';
   return 'Review';
@@ -443,7 +465,7 @@
   const move4h = radarPctChange(price, prior4h);
   const dailyMove = Number(ticker?.change24h || 0) || (daily.length > 1 ? radarPctChange(price, Number(daily[daily.length - 2]?.close || 0)) : 0);
   const firstSeenTs = Number(context.firstSeenTs || radarNow());
-  const isFirstSeenNew = radarNow() - firstSeenTs <= Number(settings.newCoinFirstSeenHours || 72) * 3600000;
+  const isFirstSeenNew = radarNow() - firstSeenTs <= Number(settings.freshListingFirstSeenHours || settings.newCoinFirstSeenHours || 72) * 3600000;
   const isShortHistory = rows.length < Number(settings.minIntradayCandles || 36) || daily.length < Number(settings.minDailyCandles || 30);
   const isNewCoin = isFirstSeenNew || isShortHistory;
   const emaBull = ema9 > 0 && ema30 > 0 && ema100 > 0 && ema9 > ema30 && ema30 > ema100 && price >= ema9 * 0.995;
@@ -456,13 +478,12 @@
   const vwapLoss = vwap > 0 && price < vwap && Math.abs(price - vwap) / vwap <= Number(settings.vwapTolerancePct || 0.012) && volumeRatio >= 1.15;
   const pressureDown = dailyMove <= -Number(settings.pressureMovePct || 5) || move4h <= -3 || (breakdown && obvDown);
   const pressureUp = dailyMove >= Number(settings.pressureMovePct || 5) || move4h >= 3;
-  const highFundingAbs = Math.abs(Number(ticker?.fundingRate || 0)) >= 0.05;
-  const lowLiquidity = Number(ticker?.usdVol24h || 0) < Number(settings.minUsdVolume24h || 0);
+  const tickerTurnover = Number(ticker?.inrTurnover24h || ticker?.turnover24h || ticker?.usdVol24h || 0);
+  const lowLiquidity = tickerTurnover > 0 && tickerTurnover < Number(settings.minUsdVolume24h || 0);
   const extended = atr14 > 0 && Math.abs(price - Number(closes[Math.max(0, closes.length - 8)] || price)) > atr14 * 3.2;
   const riskFlags = [
    lowLiquidity ? 'Thin volume' : '',
    extended ? 'Extended candle' : '',
-   highFundingAbs ? 'Funding pressure' : '',
    isShortHistory ? 'Short history' : '',
   ].filter(Boolean);
   const checks = {
@@ -537,7 +558,7 @@
    eventType = 'new_coin';
    signal = 'WATCHLIST';
    direction = pressureDown ? 'watch_short' : 'watch_long';
-   actionLabel = 'New coin watch';
+   actionLabel = 'Fresh listing watch';
    priorityLabel = 'Fresh opportunity';
    score = 68;
    scoreParts.base = 34;
@@ -571,12 +592,10 @@
 
   scoreParts.volume = checks.strongVolume ? 7 : checks.volumeExpansion ? 4 : 0;
   scoreParts.newCoin += isNewCoin ? 4 : 0;
-  scoreParts.funding = highFundingAbs ? 3 : 0;
   scoreParts.liquidityPenalty = lowLiquidity ? -18 : 0;
   scoreParts.extensionPenalty = extended ? -10 : 0;
   score += scoreParts.volume;
   score += isNewCoin ? 4 : 0;
-  score += scoreParts.funding;
   score += scoreParts.liquidityPenalty;
   score += scoreParts.extensionPenalty;
   score = Math.max(1, Math.min(96, Math.round(score)));
@@ -633,7 +652,6 @@
     resistance: radarRound(levels.resistance, 8),
     support: radarRound(levels.support, 8),
     atr14: radarRound(atr14, 8),
-    fundingRate: radarRound(Number(ticker?.fundingRate || 0), 4),
     openInterest: radarRound(Number(ticker?.oi || 0), 0),
     firstSeenTs,
     isFirstSeenNew,
@@ -665,7 +683,7 @@
  }
 
  function radarSortRows(results = []) {
-  const eventRank = { breakout: 7, ema_obv: 6, pressure: 5, new_coin: 4, vwap: 3, review: 2, avoid_trap: 1 };
+  const eventRank = { breakout: 7, ema_obv: 6, pressure: 5, fresh_listing: 4, new_coin: 4, vwap: 3, review: 2, avoid_trap: 1 };
   return (Array.isArray(results) ? results : []).slice().sort((a, b) => {
    return (eventRank[b.eventType || b.raw?.eventType] || 0) - (eventRank[a.eventType || a.raw?.eventType] || 0)
    || Number(b.score || 0) - Number(a.score || 0)
@@ -698,7 +716,7 @@
    tickerRows: Object.keys(tickerMap || {}).length,
    productRows: Array.isArray(products) ? products.length : 0,
    universeRows: universe.length,
-   freshRows: universe.filter(item => radarNow() - Number(item.firstSeenTs || radarNow()) <= Number(settings.newCoinFirstSeenHours || 72) * 3600000).length,
+   freshRows: universe.filter(item => radarNow() - Number(item.firstSeenTs || radarNow()) <= Number(settings.freshListingFirstSeenHours || settings.newCoinFirstSeenHours || 72) * 3600000).length,
   };
   const results = [];
   for (let i = 0; i < universe.length; i += 1) {
@@ -738,7 +756,7 @@
    'strategyResults.radar': output,
    'strategyStatus.radar': {
     strategyId: 'radar',
-    status: `OK Done - ${output.length} Radar rows | Breakout ${counts.breakout || 0}, EMA+OBV ${counts.ema_obv || 0}, Pressure ${counts.pressure || 0}, New ${counts.new_coin || 0}`,
+    status: `OK Done - ${output.length} Radar rows | Breakout ${counts.breakout || 0}, EMA+OBV ${counts.ema_obv || 0}, Pressure ${counts.pressure || 0}, Fresh ${counts.fresh_listing || counts.new_coin || 0}`,
     active: false,
     progress: 100,
     scanned: results.length,
@@ -780,7 +798,7 @@
    tickerRows: Object.keys(tickerMap || {}).length,
    productRows: products.length,
    universeRows: universe.length,
-   freshRows: universe.filter(item => radarNow() - Number(item.firstSeenTs || radarNow()) <= Number(settings.newCoinFirstSeenHours || 72) * 3600000).length,
+   freshRows: universe.filter(item => radarNow() - Number(item.firstSeenTs || radarNow()) <= Number(settings.freshListingFirstSeenHours || settings.newCoinFirstSeenHours || 72) * 3600000).length,
   };
   const getContextCandles = globalThis.FWDTradeDeskScanContext?.getCandles;
   const results = [];

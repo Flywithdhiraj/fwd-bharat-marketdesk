@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
  <meta charset="UTF-8"/>
- <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.delta.exchange https://api.india.delta.exchange https://www.delta.exchange https://india.delta.exchange https://api.telegram.org; frame-src 'self';">
- <title>FWD TradeDesk Pro</title>
+ <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.dhan.co https://images.dhan.co https://api.telegram.org; frame-src 'self';">
+ <title>FWD Bharat MarketDesk</title>
  <link rel="stylesheet" href="styles.css"/>
 </head>
 <body>
@@ -14,9 +14,10 @@
  --------------------------------------------------- -->
  <header class="hdr">
  <div class="hdr-brand">
+ <img class="hdr-brand-mark" src="icons/fwd-bharat-marketdesk.svg" alt="FWD Bharat MarketDesk logo">
  <div class="hdr-brand-copy">
- <div class="hn"><span>FWD</span> TradeDesk Pro</div>
- <div class="hsub">Crypto Signal Scanner &amp; Execution Workspace</div>
+ <div class="hn"><span>FWD</span> Bharat MarketDesk</div>
+ <div class="hsub">Scanner activity, strategies, chart view, and live market data</div>
  </div>
  </div>
  <div class="hdr-right">
@@ -25,23 +26,15 @@
  <div class="hdr-stats">
  <div class="hs"><span id="cSignals">0</span><b>Signals</b></div>
  <div class="hs"><span id="cAlerts">0</span><b>Alerts</b></div>
- <div class="hs"><span id="cCoins">--</span><b>Coins</b></div>
+ <div class="hs"><span id="csymbols">--</span><b>scanned/requested</b></div>
  </div>
- <div class="session-badge" id="sessionBadge" title="Current market session">--</div>
  </div>
  <div class="hdr-action-group hdr-action-group--scan" aria-label="Scan action">
  <div class="hdr-group-label">Scan action</div>
  <div class="hdr-btns">
- <button class="btn-scan" id="btnScan">Scan Now</button>
- <button class="btn-autoscan" id="btnAutoScan" title="Toggle auto-scan">Auto Off</button>
- <button class="btn-csv" id="btnCSV" title="Export CSV">CSV</button>
- </div>
- </div>
- <div class="hdr-action-group hdr-action-group--safety" aria-label="Live trading safety">
- <div class="hdr-group-label">Live trading safety</div>
- <div class="hdr-btns">
- <button class="btn-autoscan" id="btnAutoTrade" title="Toggle auto-trade - places REAL orders automatically!">Auto Trade Off</button>
- <button class="btn-autoscan btn-autoscan--reverse" id="btnAutoTradeReverse" title="Reverse futures auto-trade side">Reverse Off</button>
+ <button class="btn-scan ui-btn ui-btn--primary" id="btnScan">Scan Now</button>
+ <button class="btn-autoscan ui-btn ui-btn--ghost" id="btnAutoScan" title="Toggle auto-scan">Auto Off</button>
+ <button class="btn-csv ui-btn ui-btn--ghost ui-btn--compact" id="btnCSV" title="Export CSV">CSV</button>
  </div>
  </div>
  <div class="size-controls" aria-label="Account controls"></div>
@@ -68,7 +61,7 @@
 
  <div class="api-rate-limit-banner" id="apiRateLimitBanner" hidden>
  <span class="api-rate-limit-pill">API cooldown</span>
- <span id="apiRateLimitBannerText">Private Delta API cooldown is active.</span>
+ <span id="apiRateLimitBannerText">Market-data cooldown is active.</span>
  </div>
 
  <div class="api-rate-limit-banner secure-storage-warning-banner" id="secureStorageWarningBanner" hidden>
@@ -76,40 +69,27 @@
  <span id="secureStorageWarningText">Native secret encryption is unavailable.</span>
  </div>
 
- <!-- --- FWD-100 INDEX BAR --- -->
- <div class="d10-bar" id="d10bar" style="display:none">
+ <!-- --- FWD INDEX TAPE RIBBON --- -->
+ <div class="d10-bar d10-ribbon" id="d10bar" style="display:none">
  <div class="d10-left">
- <div class="d10-logo">F100</div>
- <div class="d10-info">
- <div class="d10-name">FWD-100 INDEX</div>
- <div class="d10-sub" id="d10sub">Equal-weight composite | Top 100 coins</div>
+ <div class="d10-name">INDICES</div>
+ <div class="d10-sub" id="d10sub">LIVE</div>
  </div>
- </div>
- <div class="d10-center">
- <div class="d10-composite" id="d10composite">10,000</div>
- <div class="d10-change" id="d10change">--</div>
- </div>
- <div class="d10-cond" id="d10cond">--</div>
  <div class="d10-benchmarks" id="d10benchmarks">
- <div class="d10-benchmark-card" id="d10houseBenchmark">
- <span class="d10-benchmark-label">House</span>
- <strong class="d10-benchmark-value">FWD-100</strong>
- <small class="d10-benchmark-copy">Live tape</small>
- </div>
- <div class="d10-benchmark-card pending" id="d10cfBenchmark" title="Internal CF-style benchmark card.">
- <span class="d10-benchmark-label">CF</span>
- <strong class="d10-benchmark-value">Ready</strong>
- <small class="d10-benchmark-copy">Calc pending</small>
- </div>
- <div class="d10-benchmark-card pending" id="d10spBenchmark" title="Internal S&amp;P-style benchmark card.">
- <span class="d10-benchmark-label">S&amp;P</span>
- <strong class="d10-benchmark-value">Ready</strong>
- <small class="d10-benchmark-copy">Calc pending</small>
+ <div class="d10-ribbon-quote" id="d10houseBenchmark">
+ <span class="d10-benchmark-label">Nifty 50</span>
+ <strong class="d10-benchmark-value">--</strong>
+ <small class="d10-benchmark-copy">--</small>
  </div>
  </div>
- <div class="d10-coins" id="d10coins"></div>
- <button class="d10-detail-btn" id="d10chart" title="Open FWD-100 in Chart workspace">Chart</button>
- <button class="d10-detail-btn" id="d10detail" title="Full FWD-100 breakdown">Info</button>
+ <div class="d10-summary" aria-hidden="true">
+ <span id="d10composite">--</span>
+ <span id="d10change">--</span>
+ <span id="d10cond">--</span>
+ <span id="d10symbols"></span>
+ </div>
+ <button class="d10-detail-btn ui-btn ui-btn--ghost ui-btn--compact" id="d10chart" title="Open Nifty 50 in Chart workspace">Chart</button>
+ <button class="d10-detail-btn ui-btn ui-btn--ghost ui-btn--compact" id="d10detail" title="Full Nifty 50 benchmark breakdown">Details</button>
  </div>
 
  <!-- --- SECTOR SUMMARY BAR --- -->
@@ -121,7 +101,7 @@
  <!-- --- PROGRESS --- -->
  <div class="progwrap" id="progwrap" style="display:none">
  <div class="prog-track"><div class="prog-fill" id="pfill"></div></div>
- <div class="prog-info"><span id="pcoin">Initializing...</span><span id="ppct">0%</span></div>
+ <div class="prog-info"><span id="psymbol">Initializing...</span><span id="ppct">0%</span></div>
  </div>
 
  <!-- --- V17 WORKSPACE SHELL --- -->
@@ -134,40 +114,23 @@
  </div>
  <div class="workspace-actions">
  <button class="workspace-focus-btn" id="btnWorkspaceFocus" title="Use compact workspace layout">Compact View</button>
- <div class="settings-drawer-wrap" id="settingsDrawerWrap" hidden>
- <button class="workspace-focus-btn settings-drawer-toggle" id="btnSettingsDrawer" aria-expanded="false" aria-controls="settingsDrawer">More</button>
- <div class="settings-drawer" id="settingsDrawer" hidden>
- <button class="settings-drawer-item" data-settings-tab="debug" type="button">Debug</button>
- </div>
- </div>
  <div class="workspace-groups" role="toolbar" aria-label="Workspace groups">
  <button class="workspace-group active" data-group="command" aria-pressed="true">Command</button>
  <button class="workspace-group" data-group="markets" aria-pressed="false">Markets</button>
- <button class="workspace-group" data-group="trading" aria-pressed="false">Trading</button>
- <button class="workspace-group" data-group="risk" aria-pressed="false">Risk & Automation</button>
- <button class="workspace-group" data-group="reports" aria-pressed="false">Reports</button>
  <button class="workspace-group" data-group="settings" aria-pressed="false">Settings</button>
  </div>
  </div>
  </div>
 
  <nav class="tabs" role="tablist" aria-label="Workspace tabs">
- <button class="tab active" data-group="command" data-tab="home" role="tab" aria-selected="true" tabindex="0">Command Center</button>
+ <button class="tab active" data-group="command" data-tab="home" role="tab" aria-selected="true" tabindex="0">Scanner Activity</button>
  <button class="tab" data-group="markets" data-tab="scanner" role="tab" aria-selected="false" tabindex="-1">Scanner</button>
+ <button class="tab" data-group="markets" data-tab="options" role="tab" aria-selected="false" tabindex="-1">Options Hub</button>
+ <button class="tab" data-group="markets" data-tab="carry" role="tab" aria-selected="false" tabindex="-1">F&amp;O Carry</button>
+ <button class="tab" data-group="markets" data-tab="commodities" role="tab" aria-selected="false" tabindex="-1">Commodities</button>
  <button class="tab" data-group="markets" data-tab="strategies" role="tab" aria-selected="false" tabindex="-1">Strategies</button>
- <button class="tab" data-group="markets" data-tab="watchlist" role="tab" aria-selected="false" tabindex="-1">Watchlist</button>
- <button class="tab" data-group="markets" data-tab="options" role="tab" aria-selected="false" tabindex="-1">Options</button>
  <button class="tab" data-group="markets" data-tab="chart" role="tab" aria-selected="false" tabindex="-1">Chart</button>
- <button class="tab" data-group="trading" data-tab="positions" role="tab" aria-selected="false" tabindex="-1">Positions</button>
- <button class="tab" data-group="trading" data-tab="orders" role="tab" aria-selected="false" tabindex="-1">Orders</button>
- <button class="tab" data-group="trading" data-tab="funds" role="tab" aria-selected="false" tabindex="-1">Funds</button>
- <button class="tab" data-group="risk" data-tab="riskcalc" role="tab" aria-selected="false" tabindex="-1">Risk Cockpit</button>
- <button class="tab" data-group="settings" data-tab="strategy" role="tab" aria-selected="false" tabindex="-1">Settings</button>
- <button class="tab" data-group="risk" data-tab="webhooks" role="tab" aria-selected="false" tabindex="-1">Integrations</button>
- <button class="tab" data-group="reports" data-tab="liveanalytics" role="tab" aria-selected="false" tabindex="-1">Reports & Journal</button>
- <button class="tab" data-group="reports" data-tab="tradecheck" role="tab" aria-selected="false" tabindex="-1">Trade Check &amp; Paper</button>
- <button class="tab" data-group="reports" data-tab="funding" role="tab" aria-selected="false" tabindex="-1">Funding</button>
- <button class="tab" data-group="reports" data-tab="corr" role="tab" aria-selected="false" tabindex="-1">Matrix</button>
+ <button class="tab" data-group="settings" data-tab="strategy" role="tab" aria-selected="false" tabindex="-1">Settings &amp; API</button>
  <button class="tab" data-group="settings" data-tab="debug" role="tab" aria-selected="false" tabindex="-1">Debug</button>
  </nav>
 
@@ -193,21 +156,27 @@
  </section>
 
  <!-- ---------------------------------------------------
+ OPTIONS HUB TAB
+ --------------------------------------------------- -->
+ <section class="pane" id="pane-options" role="tabpanel" aria-label="Options Hub">
+ </section>
+
+ <!-- ---------------------------------------------------
+ F&O CARRY TAB
+ --------------------------------------------------- -->
+ <section class="pane" id="pane-carry" role="tabpanel" aria-label="F&O Carry">
+ </section>
+
+ <!-- ---------------------------------------------------
+ COMMODITIES TAB
+ --------------------------------------------------- -->
+ <section class="pane" id="pane-commodities" role="tabpanel" aria-label="Commodities">
+ </section>
+
+ <!-- ---------------------------------------------------
  STRATEGY LAB TAB
  --------------------------------------------------- -->
  <section class="pane" id="pane-strategies" role="tabpanel" aria-label="Strategy Lab">
- </section>
-
- <!-- ---------------------------------------------------
- WATCHLIST TAB
- --------------------------------------------------- -->
- <section class="pane" id="pane-watchlist" role="tabpanel" aria-label="Watchlist">
- </section>
-
- <!-- ---------------------------------------------------
- OPTIONS TAB
- --------------------------------------------------- -->
- <section class="pane" id="pane-options" role="tabpanel" aria-label="Options">
  </section>
 
  <!-- ---------------------------------------------------
@@ -216,56 +185,8 @@
  <section class="pane" id="pane-chart" role="tabpanel" aria-label="Chart">
  <div class="chart-pane-loading">
  <div class="chart-pane-loading-title">Chart workspace</div>
- <div class="chart-pane-loading-copy">Loading the decision chart...</div>
+ <div class="chart-pane-loading-copy">Loading the market chart...</div>
  </div>
- </section>
-
- <!-- ---------------------------------------------------
- LIVE ANALYTICS TAB
- --------------------------------------------------- -->
- <section class="pane" id="pane-liveanalytics" role="tabpanel" aria-label="Live analytics">
- </section>
-
- <!-- ---------------------------------------------------
- TRADE CHECK TAB
- --------------------------------------------------- -->
- <section class="pane" id="pane-tradecheck" role="tabpanel" aria-label="Trade check">
- </section>
-
- <!-- ---------------------------------------------------
- FUND DETAILS TAB
- --------------------------------------------------- -->
- <section class="pane" id="pane-funds" role="tabpanel" aria-label="Fund details">
- </section>
-
- <!-- ---------------------------------------------------
- LIVE POSITIONS TAB
- --------------------------------------------------- -->
- <section class="pane" id="pane-positions" role="tabpanel" aria-label="Positions">
- </section>
-
- <!-- ---------------------------------------------------
- LIVE ORDERS TAB
- --------------------------------------------------- -->
- <section class="pane" id="pane-orders" role="tabpanel" aria-label="Orders">
- </section>
-
- <!-- ---------------------------------------------------
- FUNDING HEATMAP TAB
- --------------------------------------------------- -->
- <section class="pane" id="pane-funding">
- </section>
-
- <!-- ---------------------------------------------------
- CORRELATION MATRIX TAB
- --------------------------------------------------- -->
- <section class="pane" id="pane-corr">
- </section>
-
- <!-- ---------------------------------------------------
- RISK CALCULATOR TAB
- --------------------------------------------------- -->
- <section class="pane" id="pane-riskcalc">
  </section>
 
  <!-- ---------------------------------------------------
@@ -275,15 +196,9 @@
  </section>
 
  <!-- ---------------------------------------------------
- WEBHOOKS TAB - UPDATED v14
- --------------------------------------------------- -->
- <section class="pane" id="pane-webhooks">
- </section>
-
- <!-- ---------------------------------------------------
  DEBUG TAB
  --------------------------------------------------- -->
- <section class="pane" id="pane-debug">
+ <section class="pane" id="pane-debug" role="tabpanel" aria-label="Debug">
  </section>
 
 </div><!-- end .app -->
@@ -296,9 +211,9 @@
  <div class="mo-hdr">
  <div class="mo-title" id="moTitle">-</div>
  <div class="mo-hdr-btns">
- <button class="btn-tojrnl" id="btnOpenInDelta">Open in Delta</button>
- <button class="btn-tojrnl" id="btnLiveTradePreview">Preview Live</button>
- <button class="btn-tojrnl" id="btnToJrnl">Pre-Trade Checklist</button>
+ <button class="btn-tojrnl ui-btn ui-btn--ghost ui-btn--compact" id="btnOpenInDelta">Open Broker</button>
+ <button class="btn-tojrnl ui-btn ui-btn--ghost ui-btn--compact" id="btnLiveTradePreview">Manual Ticket</button>
+ <button class="btn-tojrnl ui-btn ui-btn--ghost ui-btn--compact" id="btnToJrnl">Pre-Trade Checklist</button>
  <button class="mo-close" id="moClose">X</button>
  </div>
  </div>
@@ -314,10 +229,10 @@
  <button class="mo-close" id="checklistClose">X</button>
  </div>
  <div class="mo-body" id="checklistBody"></div>
- <div class="checklist-footer">
- <button class="bsm" id="checklistCancel" style="flex:1;padding:8px">Close</button>
- <button class="bsm" id="checklistOpenDelta" style="flex:1;padding:8px" hidden>Open in Delta</button>
- <button class="bsm checklist-place-trade" id="checklistPlaceTrade" style="flex:1;padding:8px" hidden>Place Trade</button>
+ <div class="checklist-footer modal-footer-equal">
+ <button class="bsm ui-btn ui-btn--ghost" id="checklistCancel">Close</button>
+ <button class="bsm ui-btn ui-btn--ghost" id="checklistOpenDelta" hidden>Open Broker</button>
+ <button class="bsm checklist-place-trade ui-btn ui-btn--primary" id="checklistPlaceTrade" hidden>Create Manual Ticket</button>
  </div>
  </div>
 </div>
@@ -329,23 +244,22 @@
  <div class="mo-title">New Custom Alert</div>
  <button class="mo-close" id="customAlertClose">X</button>
  </div>
- <div class="mo-body" style="padding:14px">
- <div style="margin-bottom:10px">
- <label style="font-size:11px;color:#7a8ab0;font-weight:700;text-transform:uppercase;letter-spacing:0">Alert Type</label>
- <div style="display:flex;gap:6px;margin-top:5px" id="customAlertTypeRow">
- <button class="bsm active" data-alert-type="price_cross">Price Level</button>
- <button class="bsm" data-alert-type="pct_change">% Change</button>
- <button class="bsm" data-alert-type="funding_rate">Funding Rate</button>
+ <div class="mo-body modal-body-padded">
+ <div class="form-block">
+ <label class="form-label">Alert Type</label>
+ <div class="form-inline-actions" id="customAlertTypeRow">
+ <button class="bsm active ui-btn ui-btn--ghost ui-btn--compact" data-alert-type="price_cross">Price Level</button>
+ <button class="bsm ui-btn ui-btn--ghost ui-btn--compact" data-alert-type="pct_change">% Change</button>
  </div>
  </div>
 
  <!-- Price Cross Fields -->
  <div id="customAlertFieldsPriceCross">
- <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
- <label class="account-field"><span>Symbol</span><input type="text" class="si" id="caSymbol" placeholder="BTCUSD" style="text-transform:uppercase"/></label>
+ <div class="form-grid-2">
+ <label class="account-field"><span>Symbol</span><input type="text" class="si field-uppercase" id="caSymbol" placeholder="RELIANCE"/></label>
  <label class="account-field"><span>Target Price</span><input type="number" class="si" id="caTargetPrice" placeholder="95000" step="any"/></label>
  </div>
- <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+ <div class="form-grid-2">
  <label class="account-field"><span>Direction</span>
  <select class="si" id="caDirection">
  <option value="above">Crosses Above</option>
@@ -363,11 +277,11 @@
 
  <!-- % Change Fields -->
  <div id="customAlertFieldsPctChange" style="display:none">
- <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
- <label class="account-field"><span>Symbol (or ALL)</span><input type="text" class="si" id="caPctSymbol" placeholder="ALL" style="text-transform:uppercase"/></label>
+ <div class="form-grid-2">
+ <label class="account-field"><span>Symbol (or ALL)</span><input type="text" class="si field-uppercase" id="caPctSymbol" placeholder="ALL"/></label>
  <label class="account-field"><span>% Threshold</span><input type="number" class="si" id="caPctThreshold" placeholder="5" step="0.5" min="0.5"/></label>
  </div>
- <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+ <div class="form-grid-2">
  <label class="account-field"><span>Time Window</span>
  <select class="si" id="caPctWindow">
  <option value="5">5 minutes</option>
@@ -387,34 +301,11 @@
  </div>
  </div>
 
- <!-- Funding Rate Fields -->
- <div id="customAlertFieldsFunding" style="display:none">
- <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
- <label class="account-field"><span>Symbol (or ALL)</span><input type="text" class="si" id="caFundingSymbol" placeholder="ALL" style="text-transform:uppercase"/></label>
- <label class="account-field"><span>Funding Rate %</span><input type="number" class="si" id="caFundingThreshold" placeholder="0.1" step="0.01" min="0"/></label>
+ <label class="account-field form-block"><span>Note (optional)</span><input type="text" class="si" id="caNote" placeholder="Reason for this alert..." maxlength="120"/></label>
  </div>
- <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
- <label class="account-field"><span>Condition</span>
- <select class="si" id="caFundingDirection">
- <option value="above">Above threshold</option>
- <option value="below">Below (negative)</option>
- <option value="either">Either extreme</option>
- </select>
- </label>
- <label class="account-field"><span>Repeat</span>
- <select class="si" id="caFundingRepeat">
- <option value="once">Once per cycle</option>
- <option value="repeat">Every funding period</option>
- </select>
- </label>
- </div>
- </div>
-
- <label class="account-field" style="margin-bottom:8px"><span>Note (optional)</span><input type="text" class="si" id="caNote" placeholder="Reason for this alert..." maxlength="120"/></label>
- </div>
- <div class="checklist-footer">
- <button class="bsm" id="customAlertCancel" style="flex:1;padding:8px">Cancel</button>
- <button class="bsm checklist-place-trade" id="customAlertSave" style="flex:1;padding:8px">Create Alert</button>
+ <div class="checklist-footer modal-footer-equal">
+ <button class="bsm ui-btn ui-btn--ghost" id="customAlertCancel">Cancel</button>
+ <button class="bsm checklist-place-trade ui-btn ui-btn--primary" id="customAlertSave">Create Alert</button>
  </div>
  </div>
 </div>
@@ -423,14 +314,14 @@
 <div class="overlay" id="liveOrderOverlay" style="display:none">
  <div class="modal checklist-modal live-order-modal">
  <div class="mo-hdr">
- <div class="mo-title" id="liveOrderTitle">Live Order Preview</div>
+ <div class="mo-title" id="liveOrderTitle">Manual Trade Ticket</div>
  <button class="mo-close" id="liveOrderClose">X</button>
  </div>
  <div class="mo-body" id="liveOrderBody"></div>
- <div class="checklist-footer live-order-footer">
- <button class="bsm" id="liveOrderCancel" style="flex:1;padding:8px">Close</button>
- <button class="bsm" id="liveOrderOpenDelta" style="flex:1;padding:8px" hidden>Open in Delta</button>
- <button class="btn-save" id="liveOrderSubmit" style="flex:1">Place Live Order</button>
+ <div class="checklist-footer live-order-footer modal-footer-equal">
+ <button class="bsm ui-btn ui-btn--ghost" id="liveOrderCancel">Close</button>
+ <button class="bsm ui-btn ui-btn--ghost" id="liveOrderOpenDelta" hidden>Open Broker</button>
+ <button class="btn-save ui-btn ui-btn--primary" id="liveOrderSubmit">Save Manual Ticket</button>
  </div>
  </div>
 </div>
@@ -445,26 +336,11 @@
  </div>
 </div>
 
-<!-- --- LIVE JOURNAL DETAIL MODAL --- -->
-<div class="overlay" id="liveJournalOverlay" style="display:none">
- <div class="modal checklist-modal live-journal-modal">
- <div class="mo-hdr">
- <div class="mo-title">Trade Journal Detail</div>
- <button class="mo-close" id="liveJournalClose">X</button>
- </div>
- <div class="mo-body" id="liveJournalBody"></div>
- <div class="checklist-footer live-order-footer live-journal-footer">
- <button class="bsm live-journal-close-action" id="liveJournalCancel">Close</button>
- <button class="btn-save live-journal-save-action" id="liveJournalSave">Save Notes</button>
- </div>
- </div>
-</div>
-
-<!-- --- FWD-100 INDEX DETAIL MODAL --- -->
+<!-- --- FWD INDEX TAPE DETAIL MODAL --- -->
 <div class="overlay" id="d10overlay" style="display:none">
  <div class="modal d10-modal">
  <div class="mo-hdr">
- <div class="mo-title">FWD-100 INDEX - Full Breakdown</div>
+ <div class="mo-title">FWD Index Tape - Full Breakdown</div>
  <button class="mo-close" id="d10close">x</button>
  </div>
  <div class="mo-body" id="d10body"></div>
@@ -497,12 +373,16 @@
 <div class="toast-hint">Click to open full details</div>
 </div>
 
-<div class="system-toast" id="systemToast" hidden role="status" aria-live="polite" aria-atomic="true">
+<div class="system-toast" id="systemToast" hidden role="status" aria-live="polite" aria-atomic="true" data-tone="info">
+ <div class="system-toast-accent" aria-hidden="true"></div>
+ <div class="system-toast-body">
  <div class="system-toast-head">
- <strong id="systemToastTitle">Notice</strong>
- <button class="system-toast-dismiss" id="systemToastDismiss" type="button" aria-label="Dismiss notice">x</button>
+ <span class="system-toast-kicker" id="systemToastKicker">Info</span>
+ <button class="system-toast-dismiss" id="systemToastDismiss" type="button" aria-label="Dismiss notice">X</button>
  </div>
+ <strong class="system-toast-title" id="systemToastTitle">Notice</strong>
  <div class="system-toast-copy" id="systemToastMessage">Message</div>
+ </div>
 </div>
 
 <div id="chartWorkspaceRoot" hidden></div>
@@ -521,9 +401,7 @@
  <div class="command-shortcut"><span>Command / search</span><kbd>Ctrl K</kbd></div>
  <div class="command-shortcut"><span>Symbol switch</span><kbd>Alt S</kbd></div>
  <div class="command-shortcut"><span>Chart workspace</span><kbd>Alt C</kbd></div>
- <div class="command-shortcut"><span>Orders</span><kbd>Alt O</kbd></div>
- <div class="command-shortcut"><span>Positions</span><kbd>Alt P</kbd></div>
- <div class="command-shortcut"><span>Kill switch settings</span><kbd>Ctrl Shift K</kbd></div>
+ <div class="command-shortcut"><span>Settings / API</span><kbd>Ctrl Shift K</kbd></div>
  </div>
  <div class="command-palette-list" id="commandPaletteList"></div>
  </div>
@@ -531,86 +409,72 @@
 
 <div class="app-lock-overlay" id="appLockOverlay" hidden>
  <div class="app-lock-shell" role="dialog" aria-modal="true" aria-labelledby="appLockTitle">
- <header class="app-lock-nav" aria-label="FWD TradeDesk Pro home navigation">
+ <header class="app-lock-nav" aria-label="FWD Bharat MarketDesk home navigation">
  <div class="app-lock-brand-mark">
- <img src="icons/icon128.png" alt="FWD TradeDesk Pro">
- <span>FWD TradeDesk Pro</span>
+ <img src="icons/fwd-bharat-marketdesk.svg" alt="FWD Bharat MarketDesk">
+ <span>FWD Bharat MarketDesk</span>
  </div>
  <nav class="app-lock-nav-links" aria-label="Product sections">
  <a href="#appLockProductRail">Products</a>
  <a href="#appLockMarketIntelligence">Markets</a>
- <a href="#appLockRiskControls">Risk</a>
- <a href="#appLockReports">Reports</a>
+ <a href="#appLockSettings">Settings</a>
  </nav>
- <div class="app-lock-search" aria-label="Search placeholder">
- <span></span>
- <b>Search symbols, scanners, journals...</b>
- <kbd>Ctrl K</kbd>
- </div>
- <button class="app-lock-nav-login" type="button">Unlock Futures</button>
- <a class="app-lock-nav-primary" href="#appLockProductRail">See Features</a>
  </header>
 
  <main class="app-lock-main">
- <section class="app-lock-hero" aria-label="FWD TradeDesk Pro homepage">
+ <section class="app-lock-hero" aria-label="FWD Bharat MarketDesk homepage">
  <div class="app-lock-hero-copy">
- <div class="app-lock-kicker app-lock-command-kicker">Welcome to your Command Center</div>
- <h1 class="app-lock-title" id="appLockTitle">Trade futures only after the desk says <span>go</span></h1>
+ <div class="app-lock-kicker app-lock-command-kicker">Welcome to your Scanner Activity</div>
+ <h1 class="app-lock-title" id="appLockTitle">Find the best scanner setup, then review it with <span>confidence</span></h1>
  <div class="app-lock-rotator" aria-label="Product focus">
- <strong>Scanner</strong><i></i><strong>Options</strong><i></i><strong>Charts</strong><i></i><strong>Risk</strong><i></i><strong>Journal</strong>
+ <strong>Scanner</strong><i></i><strong>Strategies</strong><i></i><strong>Charts</strong><i></i><strong>Settings</strong><i></i><strong>API</strong>
  </div>
- <p>FWD keeps the trader calm: first it shows the best setup, then the risk blocker, then the next action. You unlock only when you are ready to act.</p>
+ <p>FWD keeps the workflow tight: scan first, refine the strategy, inspect the chart, and keep live market data ready when you need it.</p>
  <div class="app-lock-built-grid">
  <div><small>built for</small><strong>Active Traders</strong></div>
- <div><small>built for</small><strong>Risk-First Automation</strong></div>
+ <div><small>built for</small><strong>Manual Trading</strong></div>
  </div>
  <div class="app-lock-trust-row" aria-label="Product highlights">
- <div><b>Command Center</b><span>What to do now, not more noise.</span></div>
- <div><b>Live Risk Gate</b><span>Blocked states speak first.</span></div>
- <div><b>Options Builder</b><span>Plan before execution.</span></div>
+ <div><b>Scanner Activity</b><span>What to review now, not more noise.</span></div>
+ <div><b>Chart View</b><span>Clean price action and context.</span></div>
+ <div><b>Market Data</b><span>Keep settings and credentials ready.</span></div>
  </div>
  </div>
 
  <div class="app-lock-product-stage" aria-hidden="true">
  <div class="app-lock-chart-card">
- <div class="app-lock-card-top"><span>BTCUSDT PERP</span><strong>67,842.12</strong></div>
- <div class="app-lock-mini-chart app-lock-mini-chart--line">
- <i style="height:34%"></i><i style="height:48%"></i><i style="height:42%"></i><i style="height:58%"></i><i style="height:51%"></i><i style="height:64%"></i><i style="height:72%"></i><i style="height:61%"></i><i style="height:78%"></i><i style="height:86%"></i>
+ <div class="app-lock-card-top"><span>NIFTY / RELIANCE</span><strong>Scanner View</strong></div>
+ <div class="app-lock-mini-chart app-lock-mini-chart--line chart-bars">
+ <i class="bar-h-34"></i><i class="bar-h-48"></i><i class="bar-h-42"></i><i class="bar-h-58"></i><i class="bar-h-51"></i><i class="bar-h-64"></i><i class="bar-h-72"></i><i class="bar-h-61"></i><i class="bar-h-78"></i><i class="bar-h-86"></i>
  </div>
  </div>
  <div class="app-lock-queue-card">
  <div class="app-lock-card-top"><span>Scanner Queue</span><strong>12</strong></div>
- <p><b>BTC Breakout</b><span>Score 92</span></p>
- <p><b>ETH Reversal</b><span>Score 87</span></p>
- <p><b>SOL Pullback</b><span>Score 84</span></p>
- <p><b>DOGE Volume Spike</b><span>Score 76</span></p>
+ <p><b>NIFTY Breakout</b><span>Score 92</span></p>
+ <p><b>BANKNIFTY Reversal</b><span>Score 87</span></p>
+ <p><b>RELIANCE Pullback</b><span>Score 84</span></p>
+ <p><b>TCS Volume Spike</b><span>Score 76</span></p>
  </div>
  <div class="app-lock-action-card">
  <span>Next Action</span>
- <strong>Review long breakout</strong>
- <small>Entry 67,720 | Target 68,450 | Stop 66,980</small>
+ <strong>Review best setup</strong>
+ <small>Open the chart, confirm the pattern, then save the strategy.</small>
  <em>Confidence 87%</em>
  </div>
  <div class="app-lock-risk-card">
- <span>Live Risk Gate</span>
- <strong>Trading Allowed</strong>
- <small>Daily loss guard and kill switch are clear.</small>
- </div>
- <div class="app-lock-journal-card">
- <span>Journal Timeline</span>
- <p>10:32 BTC breakout triggered</p>
- <p>10:15 ETH reversal signaled</p>
- <p>09:47 Daily loss guard updated</p>
+ <span>API Ready</span>
+ <strong>Market-data connection</strong>
+ <small>Keep your API key and market-data status in one place.</small>
  </div>
  </div>
  </section>
 
  <section class="app-lock-card" aria-label="Login form">
  <div class="app-lock-head">
- <img src="icons/icon128.png" alt="" aria-hidden="true">
+ <img src="icons/fwd-bharat-marketdesk.svg" alt="" aria-hidden="true">
  <div class="app-lock-kicker">Secure access</div>
- <div class="app-lock-form-title" id="appLockFormTitle">Unlock Futures</div>
- <div class="app-lock-copy" id="appLockFormCopy">Use one password. Open the desk only when the setup, risk, and action are clear.</div>
+ <div class="app-lock-form-title" id="appLockFormTitle">Unlock Desk</div>
+ <div class="app-lock-copy" id="appLockFormCopy">Use one password. Open the desk only when scanner, strategy, chart, and API are ready.</div>
  </div>
 
  <form class="app-lock-section" id="appLockSetup" hidden>
@@ -641,7 +505,7 @@
  <input type="text" id="appLockLoginCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000">
  </label>
  <div class="app-lock-actions">
- <button class="app-lock-primary" type="submit">Unlock Futures</button>
+ <button class="app-lock-primary" type="submit">Unlock Desk</button>
  <button class="app-lock-secondary" id="appLockShowRecovery" type="button">Reset Password</button>
  </div>
  </form>
@@ -687,44 +551,33 @@
  <div class="app-lock-message" id="appLockMessage"></div>
  </section>
 
- <section class="app-lock-product-rail" id="appLockProductRail" aria-label="FWD TradeDesk Pro products">
- <button type="button" class="active"><strong>Command Center</strong><span>Decision-first cockpit</span></button>
+ <section class="app-lock-product-rail" id="appLockProductRail" aria-label="FWD Bharat MarketDesk products">
+ <button type="button" class="active"><strong>Command Center</strong><span>Scanner activity</span></button>
  <button type="button"><strong>Scanner</strong><span>Real-time opportunities</span></button>
- <button type="button"><strong>Options</strong><span>Strategy builder and chains</span></button>
+ <button type="button"><strong>Strategies</strong><span>Build and tune setups</span></button>
  <button type="button"><strong>Chart</strong><span>Clean professional charting</span></button>
- <button type="button"><strong>Risk</strong><span>Live protection layer</span></button>
- <button type="button"><strong>Journal</strong><span>Replay and lessons</span></button>
+ <button type="button"><strong>Settings &amp; API</strong><span>Market-data access and controls</span></button>
  </section>
 
  <section class="app-lock-feature-bands">
  <div class="app-lock-feature-band" id="appLockMarketIntelligence">
  <div>
  <div class="app-lock-band-icon">F</div>
- <h2>Markets that explain themselves</h2>
- <p>Scanner families separate tradeable movement from noise, so the trader sees why a coin deserves attention before opening a chart.</p>
+ <h2>Scanner families that explain themselves</h2>
+ <p>Scanner families separate tradeable NSE/BSE movement from noise before you open a chart.</p>
  </div>
  <div class="app-lock-band-grid">
  <span>Wizard Scanner</span><span>Stage Scanner</span><span>Darvas Scanner</span><span>Radar Scanner</span><span>Reversal Scanner</span><span>Pullback Scanner</span>
  </div>
  </div>
- <div class="app-lock-feature-band app-lock-feature-band--risk" id="appLockRiskControls">
+ <div class="app-lock-feature-band app-lock-feature-band--risk" id="appLockSettings">
  <div>
- <div class="app-lock-band-icon">R</div>
- <h2>Risk before excitement</h2>
- <p>The app is designed to slow bad clicks: kill switch, daily loss, paper-only state, and live-order permission stay visible before action.</p>
+ <div class="app-lock-band-icon">S</div>
+ <h2>Settings before action</h2>
+ <p>Keep the data connection, app lock, and scanner settings easy to reach so the desk stays clean and focused.</p>
  </div>
  <div class="app-lock-band-grid">
- <span>Kill Switch</span><span>Paper Only</span><span>Live Orders Gate</span><span>Daily Loss Guard</span><span>Funding Risk</span><span>Correlation Matrix</span>
- </div>
- </div>
- <div class="app-lock-feature-band app-lock-feature-band--reports" id="appLockReports">
- <div>
- <div class="app-lock-band-icon">J</div>
- <h2>Reports that improve the next trade</h2>
- <p>Journal, funding, and matrix views turn each decision into evidence instead of memory.</p>
- </div>
- <div class="app-lock-band-grid">
- <span>Trade Journal</span><span>Replay Notes</span><span>Funding Heatmap</span><span>Correlation Review</span><span>Release Diagnostics</span>
+ <span>App Lock</span><span>Market Data</span><span>API</span><span>Scanner Defaults</span><span>Chart Style</span><span>Data Health</span>
  </div>
  </div>
  </section>
@@ -733,21 +586,15 @@
 </div>
 
 <script src="desktop-shim.js"></script>
-<script src="scripts/shared/common.js"></script>
-<script src="scripts/shared/ui-events.js"></script>
-<script src="scripts/shared/options.js"></script>
-<script src="scripts/shared/strategy-registry.js"></script>
-<script src="scripts/shared/action-brain.js"></script>
-<script src="scripts/popup/00-core.js"></script>
-<script src="scripts/popup/01-shell.js"></script>
-<script src="scripts/popup/02-scanner-analytics.js"></script>
-<script src="scripts/popup/04-research-risk.js"></script>
-<script src="scripts/popup/05-settings-webhooks-helpers.js"></script>
-<script src="scripts/popup/06-pane-templates.js"></script>
-<script src="app-lock.js"></script>
-<script src="popup.js"></script>
+<script src="scripts/shared/common.js?v=20260529-breadth"></script>
+<script src="scripts/shared/ui-events.js?v=20260529-breadth"></script>
+<script src="scripts/shared/strategy-registry.js?v=20260529-breadth"></script>
+<script src="scripts/shared/action-brain.js?v=20260529-breadth"></script>
+<script src="scripts/popup/00-core.js?v=20260529-breadth"></script>
+<script src="scripts/popup/01-shell.js?v=20260529-breadth"></script>
+<script src="scripts/popup/02-scanner-analytics.js?v=20260529-breadth"></script>
+<script src="scripts/popup/06-pane-templates.js?v=20260529-breadth"></script>
+<script src="app-lock.js?v=20260529-breadth"></script>
+<script src="popup.js?v=20260529-breadth"></script>
 </body>
 </html>
-
-
-

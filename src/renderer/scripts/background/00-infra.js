@@ -18,10 +18,8 @@
 'use strict';
 
 // -- API Configuration ------------------------------------------
-const API_INDIA = 'https://api.india.delta.exchange/v2';
-const API_GLOBAL = 'https://api.delta.exchange/v2';
-let BASE = API_INDIA;
-let detectedRegion = 'india'; // Determines funding rate parsing
+const BASE = 'https://api.dhan.co/v2';
+let detectedRegion = 'dhan';
 
 let _detectAPIPromise = null;
 let _detectAPILastOk = 0;
@@ -30,31 +28,9 @@ async function detectAPI(forceRefresh = false) {
  if (!forceRefresh && BASE && (Date.now() - _detectAPILastOk) < DETECT_API_TTL_MS) return;
  if (_detectAPIPromise) return _detectAPIPromise;
  _detectAPIPromise = (async () => {
- try {
- const r = await fetch(`${API_INDIA}/tickers?contract_types=perpetual_futures`, { signal: AbortSignal.timeout(8000) });
- if (r.ok) {
- const d = await r.json();
- const list = d.result ?? d.data ?? [];
- if (list.length > 20) {
- BASE = API_INDIA; detectedRegion = 'india';
+ detectedRegion = 'dhan';
  _detectAPILastOk = Date.now();
- dlog(`API: India (${list.length} tickers)`); return;
- }
- }
- } catch (_) {}
-
- try {
- const r = await fetch(`${API_GLOBAL}/tickers?contract_types=perpetual_futures`, { signal: AbortSignal.timeout(8000) });
- if (r.ok) {
- const d = await r.json();
- const list = d.result ?? d.data ?? [];
- BASE = API_GLOBAL; detectedRegion = 'global';
- _detectAPILastOk = Date.now();
- dlog(`API: Global (${list.length} tickers)`); return;
- }
- } catch (_) {}
-
- dlog('API: Detection failed, defaulting to India');
+ dlog('API: NSE/BSE market data');
  })();
  try { await _detectAPIPromise; } finally { _detectAPIPromise = null; }
 }
@@ -167,9 +143,10 @@ function recordApiLatency(url = '', response = null, startedAt = 0, error = null
  const durationMs = performanceNow() - Number(startedAt || performanceNow());
  const api = performanceMetrics.api;
  const status = Number(response?.status || 0);
- api.total += 1;
- if (response?.ok) api.ok += 1;
- if (error || (status >= 400)) api.failed += 1;
+ const units = Math.max(1, Number(response?.requestUnits || response?.apiCalls || 1));
+ api.total += units;
+ if (response?.ok) api.ok += units;
+ if (error || (status >= 400)) api.failed += units;
  api.lastMs = +durationMs.toFixed(1);
  api.lastStatus = status;
  api.maxMs = Math.max(Number(api.maxMs || 0), api.lastMs);
@@ -185,6 +162,20 @@ function recordApiLatency(url = '', response = null, startedAt = 0, error = null
  error: error ? String(error?.message || error).slice(0, 120) : '',
  }]);
  schedulePerformanceMetricsPersist();
+}
+
+function recordDhanNativeApiMetric(action = '', response = null, startedAt = 0, error = null) {
+ const status = Number(response?.status || (response?.ok ? 200 : 0));
+ const ok = !!response?.ok && !error && status < 400;
+ const requestUnits = Math.max(1, Number(response?.apiCalls || response?.batches || (Array.isArray(response?.chunks) ? response.chunks.length : 0) || 1));
+ const quotaResponse = {
+  ok,
+  status,
+  requestUnits,
+ };
+ if (ok) v17RecordApiQuotaResponse(RL, `dhan://${action || 'native'}`, quotaResponse);
+ else v17RecordApiQuotaError(RL, `dhan://${action || 'native'}`, error || response?.error || `Market API failed${status ? ` (${status})` : ''}`);
+ recordApiLatency(`dhan://${action || 'native'}`, quotaResponse, startedAt, error || (!ok ? response?.error : null));
 }
 
 function recordWebSocketMetric(event = '', detail = {}) {
@@ -242,6 +233,7 @@ function schedulePerformanceMetricsPersist() {
 }
 
 globalThis.fwdRecordPerformanceMetric = recordTimedMetric;
+globalThis.fwdRecordDhanNativeApiMetric = recordDhanNativeApiMetric;
 globalThis.fwdRecordWebSocketMetric = recordWebSocketMetric;
 globalThis.fwdSampleNativeRuntimeStats = sampleNativeRuntimeStats;
 
@@ -348,7 +340,8 @@ function v17UpdateApiQuotaSeverity(quota = V17_API_QUOTA_STATE) {
 function v17RecordApiQuotaResponse(bucket = RL, url = '', response = null) {
  const quota = bucket.quota || V17_API_QUOTA_STATE;
  const status = Number(response?.status || 0);
- quota.totalRequests += 1;
+ const units = Math.max(1, Number(response?.requestUnits || response?.apiCalls || 1));
+ quota.totalRequests += units;
  quota.lastRequestAt = Date.now();
  quota.lastStatus = status;
  quota.lastUrl = String(url || '');
@@ -374,7 +367,8 @@ function v17RecordApiQuotaResponse(bucket = RL, url = '', response = null) {
 
 function v17RecordApiQuotaError(bucket = RL, url = '', error = null) {
  const quota = bucket.quota || V17_API_QUOTA_STATE;
- quota.totalRequests += 1;
+ const units = Math.max(1, Number(error?.requestUnits || error?.apiCalls || 1));
+ quota.totalRequests += units;
  quota.lastRequestAt = Date.now();
  quota.lastUrl = String(url || '');
  quota.lastError = String(error?.message || error || '').trim();
@@ -452,7 +446,7 @@ const SYMBOL_REFRESH_TTL_MS = 15000;
 const V17_CANDLE_CACHE_DB_NAME = 'FWDTradeDeskCandleCacheV1';
 const V17_CANDLE_CACHE_DB_VERSION = 1;
 const V17_CANDLE_CACHE_STORE = 'candles';
-const V17_NATIVE_CANDLE_RESOLUTIONS = new Set(['1d', '15m']);
+const V17_NATIVE_CANDLE_RESOLUTIONS = new Set(['15m', '4h', '1d', '1w']);
 const { sanitizeAutoScanInterval, sanitizeAlertTone } = globalThis.FWDTradeDeskShared;
 const FUNDING_INTERVAL_SEC = 8 * 60 * 60;
 const WEBHOOK_FAILURE_THRESHOLD = 3;
@@ -705,6 +699,7 @@ async function v17MigrateIndexedDbCandlesToNative() {
  return true;
 }
 globalThis.v17GetApiQuotaState = v17GetApiQuotaState;
+globalThis.buildPerformanceMetricsSnapshot = buildPerformanceMetricsSnapshot;
 globalThis.v17GetPersistentCandleCacheStats = v17GetPersistentCandleCacheStats;
 globalThis.v17ClearPersistentCandleCache = v17ClearPersistentCandleCache;
 v17MigrateIndexedDbCandlesToNative().catch(error => dlog(`IndexedDB candle migration error: ${error?.message || error}`));
@@ -1272,8 +1267,6 @@ const AUTO_TRADE_MONITOR_ALARM_NAME = 'autoTradeMonitor';
 const AUTO_TRADE_MONITOR_INTERVAL_MINUTES = 1;
 const DCA_BOT_MONITOR_ALARM_NAME = 'dcaBotMonitor';
 const DCA_BOT_MONITOR_INTERVAL_MINUTES = 1;
-const OPTIONS_STRADDLE_MONITOR_ALARM = 'optionsStraddleMonitor';
-const OPTIONS_STRADDLE_MONITOR_INTERVAL_MINUTES = 1;
 
 function syncCustomAlertPollingAlarm(done = () => {}) {
  chrome.storage.local.get(['customAlerts'], data => {
@@ -1315,34 +1308,15 @@ function syncDcaBotMonitorAlarm(done = () => {}) {
  const cfg = typeof sanitize === 'function'
  ? sanitize(data?.dcaBotSettings || {})
  : (data?.dcaBotSettings || {});
- const hasOpenCycle = Number(data?.dcaBotState?.orderCount || 0) > 0
- && Number(data?.dcaBotState?.updatedAt || 0) > Date.now() - (7 * 24 * 60 * 60 * 1000);
- const shouldRun = !!cfg.enabled || hasOpenCycle;
+ const status = String(data?.dcaBotState?.status || '').toLowerCase();
+ const hasActiveCycle = Number(data?.dcaBotState?.activeOrderCount || 0) > 0
+ || ['placed', 'pending', 'live', 'monitoring_disabled'].includes(status);
+ const shouldRun = !!cfg.enabled || hasActiveCycle;
  chrome.alarms.clear(DCA_BOT_MONITOR_ALARM_NAME, () => {
  if (shouldRun) {
  chrome.alarms.create(DCA_BOT_MONITOR_ALARM_NAME, { periodInMinutes: DCA_BOT_MONITOR_INTERVAL_MINUTES });
  }
  done({ enabled: shouldRun, interval: DCA_BOT_MONITOR_INTERVAL_MINUTES });
- });
- });
-}
-
-function syncOptionsStraddleMonitorAlarm(done = () => {}) {
- chrome.storage.local.get(['optionsAutoTradeSettings', 'optionsStraddleLog'], data => {
- const cfg = (typeof sanitizeOptionsAutoTradeSettings === 'function' ? sanitizeOptionsAutoTradeSettings : globalThis.FWDTradeDeskOptions?.sanitizeOptionsAutoTradeSettings)?.(data?.optionsAutoTradeSettings || {}) || {};
- const activeEntries = Array.isArray(data?.optionsStraddleLog)
- ? data.optionsStraddleLog.filter(entry => {
- const status = String(entry?.status || '').toLowerCase();
- return ['active', 'partial_stop'].includes(status)
- && Number(entry?.ts || 0) > Date.now() - (3 * 24 * 60 * 60 * 1000);
- })
- : [];
- const shouldRun = activeEntries.length > 0;
- chrome.alarms.clear(OPTIONS_STRADDLE_MONITOR_ALARM, () => {
- if (shouldRun) {
- chrome.alarms.create(OPTIONS_STRADDLE_MONITOR_ALARM, { periodInMinutes: OPTIONS_STRADDLE_MONITOR_INTERVAL_MINUTES });
- }
- done({ enabled: shouldRun, interval: OPTIONS_STRADDLE_MONITOR_INTERVAL_MINUTES });
  });
  });
 }

@@ -41,10 +41,10 @@
  const copy = $('appLockFormCopy');
  const content = {
  setup: ['Set up secure access', 'Create a local password before opening private trading data and order controls.'],
- login: ['Unlock Futures', 'Use one password. Open the desk only when the setup, risk, and action are clear.'],
+ login: ['Unlock Desk', 'Use one password. Open the desk only when the setup, risk, and action are clear.'],
  recovery: ['Reset access', 'Enter your recovery code and create a new password for this device.'],
  unlocked: ['Security details', 'Save these details now. They are shown only after setup or reset.'],
- }[mode] || ['Unlock Futures', 'Use one password. Open the desk only when the setup, risk, and action are clear.'];
+ }[mode] || ['Unlock Desk', 'Use one password. Open the desk only when the setup, risk, and action are clear.'];
  if (title) title.textContent = content[0];
  if (copy) copy.textContent = content[1];
  }
@@ -60,8 +60,9 @@
  const button = $('btnAppLogout');
  if (button) {
  button.hidden = !state.configured || !state.unlocked;
+ if (button.parentElement) button.parentElement.hidden = button.hidden;
  button.textContent = 'Logout';
- button.title = 'Lock FWD TradeDesk Pro';
+ button.title = 'Lock FWD Bharat MarketDesk';
  }
  if (!native?.sendNativeMessage) {
  showOverlay(false);

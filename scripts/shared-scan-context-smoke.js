@@ -56,8 +56,8 @@ const checks = [
    && runtime.includes('markScanStoppedWithPartialFallback'),
  },
  {
-  name: 'scan deadline allows large Delta universes to finish',
-  pass: runtime.includes('45 * 60 * 1000')
+  name: 'scan deadline prevents stale long-running scans',
+  pass: runtime.includes('50 * 60 * 1000')
    && runtime.includes('runScanWithDeadline()')
    && !runtime.includes('runScan().finally'),
  },

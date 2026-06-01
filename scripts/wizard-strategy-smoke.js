@@ -75,6 +75,7 @@ function makeCandles(count, start = 100, dailyStep = 0.9) {
 
 const uptrend = makeCandles(260);
 const indicators = wizard.wizardCalculateIndicators(uptrend);
+const fiftyTwoWeek = wizard.wizardFiftyTwoWeekContext(uptrend);
 const rsItems = [
  { symbol: 'LOW', weightedReturn: 1 },
  { symbol: 'MID', weightedReturn: 5 },
@@ -106,6 +107,7 @@ assert('registry exposes current and wizard strategies', strategies.getStrategy(
 assert('wizard strategy is scanner only', strategies.getStrategy('wizard').mode === 'scanner_only' && strategies.getStrategy('wizard').canLiveTrade === false);
 assert('RS percentile ranks high symbol at 100', ranks.get('HIGH') === 100 && ranks.get('LOW') === 0);
 assert('trend template passes strong uptrend', trend.pass === true);
+assert('52-week context detects high proximity', fiftyTwoWeek.ready === true && fiftyTwoWeek.nearHigh === true && fiftyTwoWeek.high > fiftyTwoWeek.low);
 assert('liquidity filter passes liquid market', liquidity.pass === true);
 assert('risk rejects nothing under 8 percent', risk.pass === true && risk.riskPercent <= 8);
 assert('wizard score maps strong setup above A threshold', score >= 85 && wizard.wizardLabel(score) === 'A+ Setup');

@@ -32,6 +32,60 @@ function formatRuntimeHealthAge(ts = 0) {
  return `${Math.round(ageMs / 3600000)}h ago`;
 }
 
+function settingsEscapeHtml(value = '') {
+ return String(value ?? '').replace(/[&<>"']/g, ch => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+ "'": '&#39;',
+ }[ch]));
+}
+
+function settingsValue(id, fallback = '') {
+ const el = document.getElementById(id);
+ return el ? el.value : fallback;
+}
+
+function settingsChecked(id, fallback = false) {
+ const el = document.getElementById(id);
+ return el ? !!el.checked : !!fallback;
+}
+
+function settingsFormatDcaMoney(value = 0) {
+ const amount = Number(value || 0);
+ return `Rs ${Number.isFinite(amount) ? amount.toFixed(2) : '0.00'}`;
+}
+
+function renderDcaCycleList(listEl, dcaLog = []) {
+ if (!listEl) return;
+ const items = (Array.isArray(dcaLog) ? dcaLog : []).slice(0, 8);
+ if (!items.length) {
+  listEl.textContent = 'No DCA cycle orders saved yet.';
+  return;
+ }
+ listEl.innerHTML = items.map((entry, index) => {
+  const status = String(entry?.status || 'saved');
+  const symbol = String(entry?.symbol || '');
+  const side = String(entry?.positionSide || entry?.side || '').toUpperCase();
+  const orderNo = Number(entry?.orderNumber || 0);
+  const price = Number(entry?.price || entry?.entry || 0);
+  const pnl = Number(entry?.closePnl || 0);
+  const note = String(entry?.error || entry?.closeReason || entry?.reason || '');
+  const size = settingsFormatDcaMoney(entry?.actualNotionalUSD || entry?.orderSizeUSD || entry?.requestedSizeUSD || 0);
+  const priceText = price > 0 ? price.toLocaleString(undefined, { maximumFractionDigits: 8 }) : 'n/a';
+  const pnlText = entry?.closePnl !== undefined ? `P&L ${settingsFormatDcaMoney(pnl)}` : size;
+  return `
+   <div class="dca-cycle-row">
+    <div><small>Order</small><strong>${orderNo || index + 1}</strong></div>
+    <div><small>Market</small><strong>${settingsEscapeHtml(symbol)} ${settingsEscapeHtml(side)}</strong></div>
+    <div><small>Price</small><strong>${settingsEscapeHtml(priceText)}</strong></div>
+    <div><span class="dca-cycle-status">${settingsEscapeHtml(status)}</span></div>
+    <div><small>${settingsEscapeHtml(pnlText)}</small><span>${settingsEscapeHtml(note).slice(0, 120)}</span></div>
+   </div>`;
+ }).join('');
+}
+
 function refreshRuntimeHealthStatus() {
  chrome.runtime.sendMessage({ action: 'getRuntimeHealth' }, response => {
  const quota = response?.quota || null;
@@ -76,7 +130,7 @@ const SETTINGS_STRATEGY_PRESETS = Object.freeze({
  },
  trend_follow: {
  label: 'Trend Follow',
- strategy: { minScore: 20, alertScore: 72, maxCoins: 450, tf1: '1d', tf2: '1h' },
+ strategy: { minScore: 20, alertScore: 72, maxCoins: 450, tf1: '1d', tf2: '4h' },
  auto: { minScore: 72, paperTrackingEnabled: true, entryTriggerMode: 'balanced', entryTriggerRequired: true, riskQualityRequired: true, setupPerformanceMinSample: 35 },
  risk: { atrStopMultiplier: 1.8, targetRR: 2.4 },
  chart: { defaultPreset: 'key', showOrders: true, showVwap: true },
@@ -127,13 +181,6 @@ function applySettingsStrategyPreset(presetId = '') {
  setSettingsInputValue('sTF2', preset.strategy.tf2);
  setSettingsInputValue('sAutoScan', preset.autoScan);
  setSettingsInputValue('sAutoInterval', preset.autoScanInterval);
- setSettingsInputValue('sAutoTradeEnabled', preset.liveAutoTrade);
- setSettingsInputValue('sAutoTradeMinScore', preset.auto.minScore);
- setSettingsInputValue('sAutoTradePaperTracking', preset.auto.paperTrackingEnabled);
- setSettingsInputValue('sAutoTradeEntryTriggerMode', preset.auto.entryTriggerMode || 'balanced');
- setSettingsInputValue('sAutoTradeEntryTriggerRequired', preset.auto.entryTriggerRequired);
- setSettingsInputValue('sAutoTradeSetupPerformanceMinSample', preset.auto.setupPerformanceMinSample);
- setSettingsInputValue('sAutoTradeRiskQualityRequired', preset.auto.riskQualityRequired);
  setSettingsInputValue('sRiskTemplateAtrStopMultiplier', preset.risk.atrStopMultiplier);
  setSettingsInputValue('sRiskTemplateTargetRR', preset.risk.targetRR);
  setSettingsInputValue('sChartDefaultPreset', preset.chart.defaultPreset);
@@ -173,11 +220,10 @@ function loadStrategy() {
  document.getElementById('sMaxCoins').value = s.maxCoins ?? 500;
  document.getElementById('sMinVol').value = s.minVolume ?? 0;
  document.getElementById('sFundingMinVol').value = s.fundingMinVolume ?? 100000;
- document.getElementById('sReportDisplayCurrency').value = normalizeReportDisplayCurrency(s.reportDisplayCurrency || 'USD');
  const reportDisplayUsdInrRate = normalizeReportDisplayUsdInrRate(s.reportDisplayUsdInrRate || DEFAULT_REPORT_DISPLAY_USD_INR_RATE);
  const reportDisplayUsdInrRateInput = document.getElementById('sReportDisplayUsdInrRate');
  if (reportDisplayUsdInrRateInput) reportDisplayUsdInrRateInput.value = String(reportDisplayUsdInrRate);
- setReportDisplayCurrency(s.reportDisplayCurrency || 'USD');
+ setReportDisplayCurrency('INR');
  setReportDisplayUsdInrRate(reportDisplayUsdInrRate);
  const marketIndexSettings = settingsSanitizeMarketIndexSettings(s.marketIndexSettings || {});
  document.getElementById('sMarketIndexMaxConstituents').value = marketIndexSettings.maxConstituents;
@@ -190,101 +236,8 @@ function loadStrategy() {
  document.getElementById('sLiveOrderPreviewChart').checked = s.liveOrderPreviewChart !== false;
  globalThis.v16LiveOrderPreviewChartEnabled = s.liveOrderPreviewChart !== false;
  globalThis.v16SyncLiveAccountSyncButtons?.();
- // Auto-Trade settings
- const ats = settingsSanitizeAutoTradeSettings(d.autoTradeSettings || {});
- document.getElementById('sAutoTradeMinScore').value = ats.minScore;
- document.getElementById('sAutoTradeUSD').value = ats.autoSizeUSD;
- document.getElementById('sAutoTradeMinLiquidityUSD').value = ats.minLiquidityUSD;
- document.getElementById('sAutoTradeProbationMinLiquidityUSD').value = ats.probationMinLiquidityUSD;
- document.getElementById('sAutoTradeValidatedMaxSpreadPct').value = ats.validatedMaxSpreadPct;
- document.getElementById('sAutoTradeProbationMaxSpreadPct').value = ats.probationMaxSpreadPct;
- document.getElementById('sAutoTradeProbationSizePct').value = ats.probationSizePct;
- document.getElementById('sAutoTradeMaxPerScan').value = ats.maxPerScan;
- document.getElementById('sAutoTradeMaxPerDay').value = ats.maxPerDay;
- document.getElementById('sAutoTradeMaxConcurrent').value = ats.maxConcurrent;
- document.getElementById('sAutoTradeMaxAdverseFundingRate').value = ats.maxAdverseFundingRatePct;
- document.getElementById('sAutoTradeFundingExitMinutes').value = ats.fundingCloseMinutesBeforeSettlement;
- document.getElementById('sAutoTradeFundingMinHoldHours').value = ats.fundingMinHoldHours;
- document.getElementById('sAutoTradeFundingExitOnlyProfit').checked = ats.fundingCloseOnlyInProfit;
- document.getElementById('sAutoTradeDailyLoss').value = ats.dailyLossLimitUSD;
- document.getElementById('sAutoTradeEntryMode').value = ats.entryMode;
- document.getElementById('sAutoTradeReverseSignals').checked = ats.reverseSignals;
- document.getElementById('sAutoTradeCooldown').value = ats.cooldownSec;
- document.getElementById('sAutoTradePaperTracking').checked = ats.paperTrackingEnabled;
- document.getElementById('sAutoTradeEntryTriggerMode').value = ats.entryTriggerMode;
- document.getElementById('sAutoTradeEntryTriggerRequired').checked = ats.entryTriggerRequired;
- document.getElementById('sAutoTradeSetupPerformanceMinSample').value = ats.setupPerformanceMinSample;
- document.getElementById('sAutoTradeRiskQualityRequired').checked = ats.riskQualityRequired;
- document.getElementById('sAutoTradeRiskMinRewardRisk').value = ats.riskQualityMinRewardRisk;
- document.getElementById('sAutoTradeRiskMaxStopDistancePct').value = ats.riskQualityMaxStopDistancePct;
- document.getElementById('sAutoTradeRiskMaxEntryDistancePct').value = ats.riskQualityMaxEntryDistancePct;
- document.getElementById('sAutoTradeNotifyBrowser').checked = ats.notifyBrowser;
- document.getElementById('sAutoTradeNotifyTelegram').checked = ats.notifyTelegram;
- document.getElementById('sAutoTradeEnabled').checked = d.autoTrade ?? false;
- const dca = settingsSanitizeDcaBotSettings(d.dcaBotSettings || {});
- document.getElementById('sDcaBotEnabled').checked = dca.enabled;
- document.getElementById('sDcaBotSymbol').value = dca.symbol;
- document.getElementById('sDcaBotSide').value = dca.side;
- document.getElementById('sDcaBotOrderSizeUSD').value = dca.orderSizeUSD;
- document.getElementById('sDcaBotMaxOrders').value = dca.maxOrders;
- document.getElementById('sDcaBotMaxDailyUSD').value = dca.maxDailyUSD;
- document.getElementById('sDcaBotIntervalMinutes').value = dca.intervalMinutes;
- document.getElementById('sDcaBotPriceStepPct').value = dca.priceStepPct;
- document.getElementById('sDcaBotTakeProfitPct').value = dca.takeProfitPct;
- document.getElementById('sDcaBotStopLossPct').value = dca.stopLossPct;
- document.getElementById('sDcaBotEntryMode').value = dca.entryMode;
- document.getElementById('sDcaBotNotifyBrowser').checked = dca.notifyBrowser;
- document.getElementById('sDcaBotNotifyTelegram').checked = dca.notifyTelegram;
- const dcaState = d.dcaBotState || {};
- const dcaLog = Array.isArray(d.dcaBotLog) ? d.dcaBotLog : [];
- const dcaStatus = document.getElementById('sDcaBotStatus');
- if (dcaStatus) {
- const status = String(dcaState.status || (dca.enabled ? 'ready' : 'off'));
- const reason = String(dcaState.reason || '').trim();
- const count = Number(dcaState.orderCount || 0);
- const spent = Number(dcaState.dailySpentUSD || 0);
- dcaStatus.textContent = dca.enabled
- ? `${status} | ${count}/${dca.maxOrders} orders | $${spent.toFixed(2)} / $${Number(dca.maxDailyUSD || 0).toFixed(2)} today${reason ? ` | ${reason}` : ''}`
- : `Off | ${dcaLog.length} saved DCA log item${dcaLog.length === 1 ? '' : 's'}`;
- }
  refreshRuntimeHealthStatus();
- const oats = settingsSanitizeOptionsAutoTradeSettings(d.optionsAutoTradeSettings || {});
- document.getElementById('sOptionsAutoTradeEnabled').checked = oats.enabled;
- document.getElementById('sOptionsAutoTradeUnderlyings').value = oats.underlyings.join(', ');
- document.getElementById('sOptionsAutoTradeMinScore').value = oats.minTradeQuality;
- document.getElementById('sOptionsAutoTradeMinDte').value = oats.minDte;
- document.getElementById('sOptionsAutoTradeMaxDte').value = oats.maxDte;
- document.getElementById('sOptionsAutoTradeTargetDelta').value = oats.targetDelta;
- document.getElementById('sOptionsAutoTradeDeltaTolerance').value = oats.deltaTolerance;
- document.getElementById('sOptionsAutoTradeMinOi').value = oats.minOiContracts;
- document.getElementById('sOptionsAutoTradeMaxSpread').value = oats.maxBidAskSpreadPct;
- document.getElementById('sOptionsAutoTradeMinPremiumScore').value = oats.minPremiumScore;
- document.getElementById('sOptionsAutoTradeMaxPerDay').value = oats.maxStrategiesPerDay;
- document.getElementById('sOptionsAutoTradeMaxConcurrent').value = oats.maxConcurrentStrategies;
- document.getElementById('sOptionsAutoTradeMaxRisk').value = oats.maxRiskUSD;
- document.getElementById('sOptionsAutoTradeEntryMode').value = oats.entryMode;
- document.getElementById('sOptionsAutoTradeAllowUndefinedRisk').checked = oats.allowUndefinedRisk;
- document.getElementById('sOptionsAutoTradeNotifyBrowser').checked = oats.notifyBrowser;
- document.getElementById('sOptionsAutoTradeNotifyTelegram').checked = oats.notifyTelegram;
- document.getElementById('sStraddleEnabled').checked = oats.straddleEnabled;
- document.getElementById('sStraddleLegStopLossPct').value = oats.legStopLossPct;
- document.getElementById('sStraddleReentryThresholdPct').value = oats.reentryThresholdPct;
- document.getElementById('sStraddleMaxReentries').value = oats.maxReentries;
- document.getElementById('sStraddleUniversalProfitTarget').value = oats.universalProfitTarget;
- document.getElementById('sStraddleUniversalLossLimit').value = oats.universalLossLimit;
- document.getElementById('sStraddleCloseMinutesBeforeExpiry').value = oats.closeMinutesBeforeExpiry;
- document.getElementById('sStraddleExpiryPreference').value = oats.straddleExpiryPreference;
- document.getElementById('sStraddleReentryEnabled').checked = oats.reentryEnabled;
- document.getElementById('sNativeStraddlePreferred').checked = oats.nativeStraddlePreferred;
- document.getElementById('sStraddleMinPremiumPerContractUSD').value = oats.minPremiumPerContractUSD;
- document.getElementById('sStraddleMinThetaMarginRatioPct').value = oats.minThetaMarginRatioPct;
- document.getElementById('sStraddleSameDayMinScore').value = oats.sameDayMinScore;
- document.getElementById('sStraddleSameDayMaxSpreadPct').value = oats.sameDayMaxSpreadPct;
- document.getElementById('sStraddlePremiumCapturePct').value = oats.premiumCapturePct;
- document.getElementById('sStraddleEntryOrderMaxAgeMinutes').value = oats.entryOrderMaxAgeMinutes;
- document.getElementById('sAutoSizeEnabled').checked = oats.autoSizeEnabled;
- document.getElementById('sTargetProfitUSD').value = oats.targetProfitUSD;
- globalThis.__fwdTradeDeskOptionsAutoSettings = oats;
+ globalThis.__fwdTradeDeskOptionsAutoSettings = settingsSanitizeOptionsAutoTradeSettings({ enabled: false, straddleEnabled: false, nativeStraddlePreferred: false });
  document.getElementById('sKeyPivotLength').value = keyLevelSettings.pivotLength;
  document.getElementById('sKeyPivotMemory').value = keyLevelSettings.pivotMemory;
  document.getElementById('sKeyLevelCount').value = keyLevelSettings.numberOfLevels;
@@ -351,38 +304,40 @@ FWDTradeDeskUi.delegate('click', '[data-settings-profile-preset]', (_e, presetBu
 
 // Delegation: Save Settings
 document.addEventListener('click', async (e) => {
- if (e.target?.id !== 'btnSave' && !e.target?.closest('#btnSave')) return;
- const fundingMinVolInput = document.getElementById('sFundingMinVol').value;
+ const isMainSave = e.target?.id === 'btnSave' || e.target?.closest('#btnSave');
+ const isDcaSave = e.target?.id === 'btnSaveDcaBotSettings' || e.target?.closest('#btnSaveDcaBotSettings');
+ if (!isMainSave && !isDcaSave) return;
+ const fundingMinVolInput = settingsValue('sFundingMinVol', '100000');
  const fundingMinVol = Number(fundingMinVolInput);
  if (!Number.isFinite(fundingMinVol) || fundingMinVol < 0) {
  alert('Funding Min Volume must be a valid number (>= 0).');
  return;
  }
 
- const autoScanInterval = sanitizeAutoScanInterval(document.getElementById('sAutoInterval').value);
- const autoScan = document.getElementById('sAutoScan').checked;
- const liveAccountSync = document.getElementById('sLiveAccountSync').checked;
- const liveOrderPreviewChart = document.getElementById('sLiveOrderPreviewChart').checked;
- const marketDataMode = settingsSanitizeMarketDataMode(document.getElementById('sMarketDataMode').value);
- const reportDisplayCurrency = normalizeReportDisplayCurrency(document.getElementById('sReportDisplayCurrency')?.value || 'USD');
- const reportDisplayUsdInrRate = normalizeReportDisplayUsdInrRate(document.getElementById('sReportDisplayUsdInrRate')?.value || DEFAULT_REPORT_DISPLAY_USD_INR_RATE);
+ const autoScanInterval = sanitizeAutoScanInterval(settingsValue('sAutoInterval', '15'));
+ const autoScan = settingsChecked('sAutoScan', false);
+ const liveAccountSync = settingsChecked('sLiveAccountSync', true);
+ const liveOrderPreviewChart = settingsChecked('sLiveOrderPreviewChart', true);
+ const marketDataMode = settingsSanitizeMarketDataMode(settingsValue('sMarketDataMode', 'auto'));
+ const reportDisplayCurrency = 'INR';
+ const reportDisplayUsdInrRate = DEFAULT_REPORT_DISPLAY_USD_INR_RATE;
  const keyLevelSettings = settingsSanitizeKeyLevelSettings({
- pivotLength: document.getElementById('sKeyPivotLength').value,
- pivotMemory: document.getElementById('sKeyPivotMemory').value,
- numberOfLevels: document.getElementById('sKeyLevelCount').value,
- displayStrengthAs: document.getElementById('sKeyStrengthDisplay').value,
- showPivotCircles: document.getElementById('sKeyShowPivotCircles').checked,
- showLevelGlow: document.getElementById('sKeyShowLevelGlow').checked,
- thickness: document.getElementById('sKeyThickness').value,
+ pivotLength: settingsValue('sKeyPivotLength', '5'),
+ pivotMemory: settingsValue('sKeyPivotMemory', '120'),
+ numberOfLevels: settingsValue('sKeyLevelCount', '6'),
+ displayStrengthAs: settingsValue('sKeyStrengthDisplay', 'touches'),
+ showPivotCircles: settingsChecked('sKeyShowPivotCircles', true),
+ showLevelGlow: settingsChecked('sKeyShowLevelGlow', true),
+ thickness: settingsValue('sKeyThickness', '2'),
  });
  const chartDefaults = settingsSanitizeChartDefaults({
- defaultPreset: document.getElementById('sChartDefaultPreset').value,
- showOrders: document.getElementById('sChartShowOrders').checked,
- showVwap: document.getElementById('sChartShowVwap').checked,
+ defaultPreset: settingsValue('sChartDefaultPreset', 'clean'),
+ showOrders: settingsChecked('sChartShowOrders', true),
+ showVwap: settingsChecked('sChartShowVwap', true),
  });
- const chartCacheEnabled = settingsSanitizeChartCacheEnabled(document.getElementById('sChartCacheEnabled').checked);
+ const chartCacheEnabled = settingsSanitizeChartCacheEnabled(settingsChecked('sChartCacheEnabled', true));
  let riskTemplateBySymbol = {};
- const riskTemplateBySymbolRaw = String(document.getElementById('sRiskTemplateBySymbol').value || '').trim();
+ const riskTemplateBySymbolRaw = String(settingsValue('sRiskTemplateBySymbol', '') || '').trim();
  if (riskTemplateBySymbolRaw) {
  try {
  riskTemplateBySymbol = JSON.parse(riskTemplateBySymbolRaw);
@@ -400,28 +355,28 @@ document.addEventListener('click', async (e) => {
  }
  const riskTemplates = settingsSanitizeRiskTemplates({
  default: {
- atrStopMultiplier: document.getElementById('sRiskTemplateAtrStopMultiplier').value,
- targetRR: document.getElementById('sRiskTemplateTargetRR').value,
+ atrStopMultiplier: settingsValue('sRiskTemplateAtrStopMultiplier', '1.5'),
+ targetRR: settingsValue('sRiskTemplateTargetRR', '2'),
  },
  bySymbol: riskTemplateBySymbol,
  });
- const alertTone = sanitizeAlertTone(document.getElementById('sAlertTone').value);
+ const alertTone = sanitizeAlertTone(settingsValue('sAlertTone', 'soft'));
  const telegram = {
- enabled: document.getElementById('tgEnabled').checked,
- botToken: document.getElementById('tgBotToken').value.trim(),
- chatId: document.getElementById('tgChatId').value.trim(),
- minScore: sanitizeTelegramMinScore(document.getElementById('tgMinScore').value, 85),
- hourlySummaryEnabled: document.getElementById('tgHourlySummary').checked,
+ enabled: settingsChecked('tgEnabled', false),
+ botToken: settingsValue('tgBotToken', '').trim(),
+ chatId: settingsValue('tgChatId', '').trim(),
+ minScore: sanitizeTelegramMinScore(settingsValue('tgMinScore', '85'), 85),
+ hourlySummaryEnabled: settingsChecked('tgHourlySummary', false),
  };
  const storedSettings = await storeGet(['externalBackup', 'optionsAutoTradeSettings', 'strategy']);
  const existingExternal = sanitizeExternalBackupConfig(storedSettings.externalBackup || {});
  const existingOptionsAutoTradeSettings = settingsSanitizeOptionsAutoTradeSettings(storedSettings.optionsAutoTradeSettings || {});
  const existingMarketIndexSettings = settingsSanitizeMarketIndexSettings(storedSettings.strategy?.marketIndexSettings || {});
  const externalBackup = {
- enabled: document.getElementById('sExtBackupEnabled').checked,
- autoBackup: document.getElementById('sExtBackupAuto').checked,
- autoArchive: document.getElementById('sExtArchiveEnabled').checked,
- keepAlerts: sanitizeKeepAlerts(document.getElementById('sKeepAlerts').value),
+ enabled: settingsChecked('sExtBackupEnabled', false),
+ autoBackup: settingsChecked('sExtBackupAuto', false),
+ autoArchive: settingsChecked('sExtArchiveEnabled', false),
+ keepAlerts: sanitizeKeepAlerts(settingsValue('sKeepAlerts', KEEP_ALERTS_DEFAULT)),
  folderName: document.getElementById('sBackupPath')?.dataset?.folderName || '',
  totalArchived: existingExternal.totalArchived || 0,
  lastArchiveAt: existingExternal.lastArchiveAt || 0,
@@ -437,24 +392,24 @@ document.addEventListener('click', async (e) => {
  return;
  }
  const strat = {
- ema1: +document.getElementById('sE1').value,
- ema2: +document.getElementById('sE2').value,
- ema3: +document.getElementById('sE3').value,
- obvPeriod: +document.getElementById('sOBV').value,
- tf1: document.getElementById('sTF1').value,
- tf2: document.getElementById('sTF2').value,
- minScore: +document.getElementById('sMinScore').value,
- alertScore: +document.getElementById('sAlertScore').value,
- maxCoins: +document.getElementById('sMaxCoins').value,
- minVolume: +document.getElementById('sMinVol').value,
+ ema1: +settingsValue('sE1', '9'),
+ ema2: +settingsValue('sE2', '30'),
+ ema3: +settingsValue('sE3', '100'),
+ obvPeriod: +settingsValue('sOBV', '50'),
+ tf1: settingsValue('sTF1', '1d'),
+ tf2: settingsValue('sTF2', '15m'),
+ minScore: +settingsValue('sMinScore', '15'),
+ alertScore: +settingsValue('sAlertScore', '65'),
+ maxCoins: +settingsValue('sMaxCoins', '500'),
+ minVolume: +settingsValue('sMinVol', '0'),
  fundingMinVolume: Math.round(fundingMinVol),
  reportDisplayCurrency,
  reportDisplayUsdInrRate,
  marketIndexSettings: settingsSanitizeMarketIndexSettings({
- maxConstituents: document.getElementById('sMarketIndexMaxConstituents').value,
- rebalanceDays: document.getElementById('sMarketIndexRebalanceDays').value,
+ maxConstituents: settingsValue('sMarketIndexMaxConstituents', '50'),
+ rebalanceDays: settingsValue('sMarketIndexRebalanceDays', '1'),
  rebuildNonce: existingMarketIndexSettings.rebuildNonce,
- excludedSymbols: document.getElementById('sMarketIndexExcludedSymbols').value,
+ excludedSymbols: settingsValue('sMarketIndexExcludedSymbols', ''),
  }),
  liveAccountSync,
  liveOrderPreviewChart,
@@ -463,122 +418,27 @@ document.addEventListener('click', async (e) => {
  chartDefaults,
  riskTemplates,
  chartCacheEnabled,
- notify: document.getElementById('sNotify').checked,
- soundAlert: document.getElementById('sSound').checked,
+ notify: settingsChecked('sNotify', true),
+ soundAlert: settingsChecked('sSound', true),
  alertTone,
  };
  const autoTradeSettings = settingsSanitizeAutoTradeSettings({
- minScore: document.getElementById('sAutoTradeMinScore').value,
- autoSizeUSD: document.getElementById('sAutoTradeUSD').value,
- minLiquidityUSD: document.getElementById('sAutoTradeMinLiquidityUSD').value,
- probationMinLiquidityUSD: document.getElementById('sAutoTradeProbationMinLiquidityUSD').value,
- validatedMaxSpreadPct: document.getElementById('sAutoTradeValidatedMaxSpreadPct').value,
- probationMaxSpreadPct: document.getElementById('sAutoTradeProbationMaxSpreadPct').value,
- probationSizePct: document.getElementById('sAutoTradeProbationSizePct').value,
- maxPerScan: document.getElementById('sAutoTradeMaxPerScan').value,
- maxPerDay: document.getElementById('sAutoTradeMaxPerDay').value,
- maxConcurrent: document.getElementById('sAutoTradeMaxConcurrent').value,
- maxAdverseFundingRatePct: document.getElementById('sAutoTradeMaxAdverseFundingRate').value,
- fundingCloseMinutesBeforeSettlement: document.getElementById('sAutoTradeFundingExitMinutes').value,
- fundingMinHoldHours: document.getElementById('sAutoTradeFundingMinHoldHours').value,
- fundingCloseOnlyInProfit: document.getElementById('sAutoTradeFundingExitOnlyProfit').checked,
- dailyLossLimitUSD: document.getElementById('sAutoTradeDailyLoss').value,
- entryMode: document.getElementById('sAutoTradeEntryMode').value,
- reverseSignals: document.getElementById('sAutoTradeReverseSignals').checked,
- cooldownSec: document.getElementById('sAutoTradeCooldown').value,
- paperTrackingEnabled: document.getElementById('sAutoTradePaperTracking').checked,
- entryTriggerMode: document.getElementById('sAutoTradeEntryTriggerMode').value,
- entryTriggerRequired: document.getElementById('sAutoTradeEntryTriggerRequired').checked,
- setupPerformanceMinSample: document.getElementById('sAutoTradeSetupPerformanceMinSample').value,
- riskQualityRequired: document.getElementById('sAutoTradeRiskQualityRequired').checked,
- riskQualityMinRewardRisk: document.getElementById('sAutoTradeRiskMinRewardRisk').value,
- riskQualityMaxStopDistancePct: document.getElementById('sAutoTradeRiskMaxStopDistancePct').value,
- riskQualityMaxEntryDistancePct: document.getElementById('sAutoTradeRiskMaxEntryDistancePct').value,
- notifyBrowser: document.getElementById('sAutoTradeNotifyBrowser').checked,
- notifyTelegram: document.getElementById('sAutoTradeNotifyTelegram').checked,
+ maxAdverseFundingRatePct: '0.05',
+ entryMode: 'manual',
+ paperTrackingEnabled: false,
  });
 
- const dcaBotSettings = settingsSanitizeDcaBotSettings({
- enabled: document.getElementById('sDcaBotEnabled').checked,
- symbol: document.getElementById('sDcaBotSymbol').value,
- side: document.getElementById('sDcaBotSide').value,
- orderSizeUSD: document.getElementById('sDcaBotOrderSizeUSD').value,
- maxOrders: document.getElementById('sDcaBotMaxOrders').value,
- maxDailyUSD: document.getElementById('sDcaBotMaxDailyUSD').value,
- intervalMinutes: document.getElementById('sDcaBotIntervalMinutes').value,
- priceStepPct: document.getElementById('sDcaBotPriceStepPct').value,
- takeProfitPct: document.getElementById('sDcaBotTakeProfitPct').value,
- stopLossPct: document.getElementById('sDcaBotStopLossPct').value,
- entryMode: document.getElementById('sDcaBotEntryMode').value,
- notifyBrowser: document.getElementById('sDcaBotNotifyBrowser').checked,
- notifyTelegram: document.getElementById('sDcaBotNotifyTelegram').checked,
- });
+ const dcaBotSettings = settingsSanitizeDcaBotSettings({ enabled: false });
 
  const optionsAutoTradeSettings = settingsSanitizeOptionsAutoTradeSettings({
  ...existingOptionsAutoTradeSettings,
- enabled: document.getElementById('sOptionsAutoTradeEnabled').checked,
- underlyings: document.getElementById('sOptionsAutoTradeUnderlyings').value,
- minTradeQuality: document.getElementById('sOptionsAutoTradeMinScore').value,
- minDte: document.getElementById('sOptionsAutoTradeMinDte').value,
- maxDte: document.getElementById('sOptionsAutoTradeMaxDte').value,
- targetDelta: document.getElementById('sOptionsAutoTradeTargetDelta').value,
- deltaTolerance: document.getElementById('sOptionsAutoTradeDeltaTolerance').value,
- minOiContracts: document.getElementById('sOptionsAutoTradeMinOi').value,
- maxBidAskSpreadPct: document.getElementById('sOptionsAutoTradeMaxSpread').value,
- minPremiumScore: document.getElementById('sOptionsAutoTradeMinPremiumScore').value,
- maxStrategiesPerDay: document.getElementById('sOptionsAutoTradeMaxPerDay').value,
- maxConcurrentStrategies: document.getElementById('sOptionsAutoTradeMaxConcurrent').value,
- maxRiskUSD: document.getElementById('sOptionsAutoTradeMaxRisk').value,
- entryMode: document.getElementById('sOptionsAutoTradeEntryMode').value,
- allowUndefinedRisk: document.getElementById('sOptionsAutoTradeAllowUndefinedRisk').checked,
- notifyBrowser: document.getElementById('sOptionsAutoTradeNotifyBrowser').checked,
- notifyTelegram: document.getElementById('sOptionsAutoTradeNotifyTelegram').checked,
- straddleEnabled: document.getElementById('sStraddleEnabled').checked,
- legStopLossPct: document.getElementById('sStraddleLegStopLossPct').value,
- reentryThresholdPct: document.getElementById('sStraddleReentryThresholdPct').value,
- maxReentries: document.getElementById('sStraddleMaxReentries').value,
- universalProfitTarget: document.getElementById('sStraddleUniversalProfitTarget').value,
- universalLossLimit: document.getElementById('sStraddleUniversalLossLimit').value,
- closeMinutesBeforeExpiry: document.getElementById('sStraddleCloseMinutesBeforeExpiry').value,
- straddleExpiryPreference: document.getElementById('sStraddleExpiryPreference').value,
- reentryEnabled: document.getElementById('sStraddleReentryEnabled').checked,
- nativeStraddlePreferred: document.getElementById('sNativeStraddlePreferred').checked,
- minPremiumPerContractUSD: document.getElementById('sStraddleMinPremiumPerContractUSD').value,
- minThetaMarginRatioPct: document.getElementById('sStraddleMinThetaMarginRatioPct').value,
- sameDayMinScore: document.getElementById('sStraddleSameDayMinScore').value,
- sameDayMaxSpreadPct: document.getElementById('sStraddleSameDayMaxSpreadPct').value,
- premiumCapturePct: document.getElementById('sStraddlePremiumCapturePct').value,
- entryOrderMaxAgeMinutes: document.getElementById('sStraddleEntryOrderMaxAgeMinutes').value,
- autoSizeEnabled: document.getElementById('sAutoSizeEnabled').checked,
- targetProfitUSD: document.getElementById('sTargetProfitUSD').value,
+ enabled: false,
+ straddleEnabled: false,
+ nativeStraddlePreferred: false,
  });
 
- const currentStates = await storeGet(['autoTrade', 'dcaBotSettings']);
- const currentAutoTradeState = !!currentStates.autoTrade;
- const requestedAutoTradeState = !!document.getElementById('sAutoTradeEnabled').checked;
- if (requestedAutoTradeState && !currentAutoTradeState) {
- const okToEnable = confirm(
- 'AUTO TRADE will place REAL orders on Delta Exchange automatically when signals qualify.\n\n' +
- 'Confirm only if the active profile, max order size, daily loss limit, and bracket protection are configured.\n\n' +
- 'Enable futures auto-trade from Settings?'
- );
- if (!okToEnable) {
- document.getElementById('sAutoTradeEnabled').checked = false;
- }
- }
- const finalAutoTradeState = !!document.getElementById('sAutoTradeEnabled').checked;
- const currentDcaEnabled = !!settingsSanitizeDcaBotSettings(currentStates.dcaBotSettings || {}).enabled;
- if (dcaBotSettings.enabled && !currentDcaEnabled) {
- const okToEnableDca = confirm(
- 'DCA BOT will place REAL Delta futures orders on a repeated time/price schedule.\n\n' +
- 'Confirm only if symbol, direction, per-order size, max daily spend, and bracket protection percentages are correct.\n\n' +
- 'Enable DCA bot from Settings?'
- );
- if (!okToEnableDca) {
+ const finalAutoTradeState = false;
  dcaBotSettings.enabled = false;
- document.getElementById('sDcaBotEnabled').checked = false;
- }
- }
 
  await Promise.all([
  storeSet({
@@ -599,7 +459,7 @@ document.addEventListener('click', async (e) => {
  void chrome.runtime?.lastError;
  loadAutoScanState();
  });
- chrome.runtime.sendMessage({ action: 'toggleAutoTrade', enable: finalAutoTradeState }, () => {
+ chrome.runtime.sendMessage({ action: 'toggleAutoTrade', enable: false }, () => {
  void chrome.runtime?.lastError;
  if (typeof loadAutoTradeState === 'function') loadAutoTradeState();
  });
@@ -610,6 +470,7 @@ document.addEventListener('click', async (e) => {
  showSystemToast('Settings saved', 'Auto-scan ' + (autoScan ? autoScanInterval + 'm' : 'off') + ' | Mode ' + marketDataMode, 'success', 3000);
  refreshRuntimeHealthStatus();
  const ok = document.getElementById('saveOK');
+ const dcaOk = document.getElementById('dcaBotSaveOK');
  setReportDisplayCurrency(reportDisplayCurrency);
  setReportDisplayUsdInrRate(reportDisplayUsdInrRate);
  globalThis.v16LiveAccountSyncEnabled = liveAccountSync;
@@ -621,6 +482,7 @@ document.addEventListener('click', async (e) => {
  if (activeWorkspaceTab === 'funding') renderFundingHeatmap?.();
  try { chrome.runtime.sendMessage({ action: 'delta:marketDataModeChanged', mode: marketDataMode }, () => void chrome.runtime?.lastError); } catch (_) {}
  if (ok) { ok.textContent = 'Saved!'; setTimeout(() => { ok.textContent = ''; }, 2500); }
+ if (dcaOk) { dcaOk.textContent = dcaBotSettings.enabled ? 'DCA bot settings saved. Monitor alarm synced.' : 'DCA bot saved as off.'; setTimeout(() => { dcaOk.textContent = ''; }, 3500); }
 
 });
 
@@ -802,21 +664,6 @@ document.addEventListener('click', async (e) => {
  await importFullAppBackup();
 });
 
-document.addEventListener('click', async (e) => {
- if (e.target?.id !== 'btnCandleHistoryStart' && !e.target?.closest('#btnCandleHistoryStart')) return;
- await startCandleHistoryBackfill();
-});
-
-document.addEventListener('click', async (e) => {
- if (e.target?.id !== 'btnCandleHistoryPause' && !e.target?.closest('#btnCandleHistoryPause')) return;
- await pauseCandleHistoryBackfill();
-});
-
-document.addEventListener('click', async (e) => {
- if (e.target?.id !== 'btnCandleHistoryRefresh' && !e.target?.closest('#btnCandleHistoryRefresh')) return;
- await refreshCandleHistoryStatus();
-});
-
 // Delegation: Archive Now
 document.addEventListener('click', async (e) => {
  if (e.target?.id !== 'btnArchiveNow' && !e.target?.closest('#btnArchiveNow')) return;
@@ -849,7 +696,7 @@ document.addEventListener('click', (e) => {
  const url = URL.createObjectURL(blob);
  const a = document.createElement('a');
  a.href = url;
- a.download = `fwd-tradedesk-pro-debug-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.txt`;
+ a.download = `fwd-bharat-marketdesk-debug-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.txt`;
  document.body.appendChild(a);
  a.click();
  document.body.removeChild(a);
@@ -882,6 +729,28 @@ document.addEventListener('click', async (e) => {
 });
 
 function renderDebug() {
+ chrome.storage.local.get(['candleFetchStats', 'lastScan'], stored => {
+ const stats = stored?.candleFetchStats || {};
+ const hits = Number(stats.cacheHits || 0) + Number(stats.fallbackCacheHits || 0);
+ const fetches = Number(stats.apiFetches || 0);
+ const hitsEl = document.getElementById('debugCandleHits');
+ const fetchesEl = document.getElementById('debugCandleFetches');
+ if (hitsEl) hitsEl.textContent = String(hits);
+ if (fetchesEl) fetchesEl.textContent = String(fetches);
+ chrome.runtime.sendMessage({ action: 'getRuntimeHealth' }, response => {
+  const cache = response?.candleCache || {};
+  const entriesEl = document.getElementById('debugCandleEntries');
+  const latestEl = document.getElementById('debugCandleLatest');
+  const header = document.querySelector('#debugCandleHealth .debug-cache-head span');
+  if (entriesEl) entriesEl.textContent = cache?.supported ? String(Number(cache.entries || 0)) : '--';
+  if (latestEl) latestEl.textContent = cache?.latestUpdatedAt ? formatRuntimeHealthAge(cache.latestUpdatedAt) : 'Never';
+  if (header) {
+   header.textContent = cache?.supported
+    ? `${stored?.lastScan ? `Last scan ${stored.lastScan}` : 'No scan yet'} | persistent local history enabled`
+    : 'Persistent local history unavailable';
+  }
+ });
+ });
  chrome.runtime.sendMessage({ action: 'getDebug' }, logs => {
  const debugOutput = document.getElementById('debugOutput');
  if (!logs?.length) { debugOutput.textContent = 'No logs yet. Run a scan first.'; return; }
@@ -1277,39 +1146,9 @@ document.addEventListener('click', (e) => {
 
 
 // ==================================================================
-// SOUND ALERT
-// ==================================================================
-let audioCtx = null;
-function playAlert(tone = 'classic') {
- try {
- if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
- const t = sanitizeAlertTone(tone);
- const profiles = {
- classic: [[880, 0.05], [1100, 0.15], [880, 0.3], [1320, 0.45]],
- beacon: [[660, 0.02], [820, 0.12], [980, 0.24], [1240, 0.38]],
- pulse: [[520, 0.02], [520, 0.14], [760, 0.26], [760, 0.38]],
- chime: [[740, 0.02], [988, 0.18], [1480, 0.36]],
- siren: [[580, 0.02], [700, 0.14], [580, 0.26], [700, 0.38], [860, 0.5]],
- };
- const notes = profiles[t] || profiles.classic;
- notes.forEach(([freq, when]) => {
- const o = audioCtx.createOscillator();
- const g = audioCtx.createGain();
- o.connect(g); g.connect(audioCtx.destination);
- o.frequency.value = freq; o.type = t === 'siren' ? 'sawtooth' : t === 'pulse' ? 'square' : 'sine';
- g.gain.setValueAtTime(0.28, audioCtx.currentTime + when);
- g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + when + 0.22);
- o.start(audioCtx.currentTime + when);
- o.stop(audioCtx.currentTime + when + 0.24);
- });
- } catch (_) {}
-}
-
-
-// ==================================================================
 // HELPERS
 // ==================================================================
-function fmtPrice(p) {
+function fmtSettingsPreviewPrice(p) {
  if (!p || !isFinite(p)) return '-';
  if (p >= 1000) return p.toLocaleString(undefined, { maximumFractionDigits: 1 });
  if (p >= 1) return p.toFixed(4);
@@ -1319,7 +1158,7 @@ function fmtPrice(p) {
  return p.toPrecision(6);
 }
 
-function fmtLarge(n) {
+function fmtSettingsPreviewLarge(n) {
  if (!n) return '-';
  if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';

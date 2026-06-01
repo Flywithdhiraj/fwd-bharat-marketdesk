@@ -20,6 +20,10 @@ const requiredChartTokens = [
   'amountLabel',
   'openV16OpenOrderEditor',
   'openV16ProtectionOrderPreview',
+  'Limited candle history',
+  'The chart can still render, but indicators need more history.',
+  'MAX_15M_HISTORY_DAYS = 90',
+  "timeframe === '15m' ? MAX_15M_HISTORY_CANDLES : MAX_RENDER_CANDLES",
 ];
 
 const requiredV16Tokens = [

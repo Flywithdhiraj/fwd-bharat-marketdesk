@@ -17,8 +17,17 @@ function _raf(key, fn) {
  _rafIds.set(key, requestAnimationFrame(() => { _rafIds.delete(key); fn(); }));
 }
 
+function isScannerUiActive(data = {}) {
+ const statusText = String(data.scanStatus || '').trim();
+ const progress = Number.isFinite(+data.scanProgress) ? Math.max(0, Math.min(100, +data.scanProgress)) : 0;
+ const failedStatus = /stopped|failed|rate limit|too many|unavailable|error/i.test(statusText);
+ const completedStatus = /^ok done|^ready\b|complete/i.test(statusText) || progress >= 100;
+ const heartbeatFresh = Number.isFinite(+data.scanHeartbeat) && (Date.now() - Number(data.scanHeartbeat)) < 20000;
+ return !!data.scanActive && heartbeatFresh && /loading|scanning/i.test(statusText) && !failedStatus && !completedStatus;
+}
+
 async function renderScanner(preloaded = null) {
-const d = preloaded ?? await storeGet(['scanResults', 'watchlist', 'manualWatchlist', 'autoWatchlist', 'decisionShortlist', 'alerts', 'analyticsPositions', 'scanStatus', 'scanActive', 'lastScan', 'lastScanTs', 'strategy', 'marketIndex', 'sectorBreadth', 'strategyResults.native_straddle', 'strategyStatus.native_straddle']);
+  const d = preloaded ?? await storeGet(['scanResults', 'watchlist', 'manualWatchlist', 'autoWatchlist', 'decisionShortlist', 'alerts', 'analyticsPositions', 'scanStatus', 'scanActive', 'scanProgress', 'scanHeartbeat', 'lastScan', 'lastScanTs', 'strategy', 'marketIndex', 'sectorBreadth', 'scannerUniverseMeta', 'candleFetchStats']);
  const list = d.scanResults || [];
  const liveAlerts = getLiveAlertSnapshot(d.alerts, list);
  currentWatchlist = d.manualWatchlist || d.watchlist || [];
@@ -29,13 +38,12 @@ const d = preloaded ?? await storeGet(['scanResults', 'watchlist', 'manualWatchl
  renderScannerFeedStatus(d);
  renderSectorBar(list, d.sectorBreadth || null);
  renderScannerInsightsRail(list);
- renderNativeStraddleScannerRail(d['strategyResults.native_straddle'] || [], d['strategyStatus.native_straddle'] || {});
  renderScannerSpotlightV2(list, liveAlerts, currentWatchlist, d.decisionShortlist || []);
  renderTradeTape(liveAlerts, list);
 
 
  if (!list.length) {
- if (d.scanActive || /loading|scanning/i.test(String(d.scanStatus || ''))) {
+ if (isScannerUiActive(d)) {
  cont.innerHTML = buildSkeletonMarkup(6, 'cards');
  strip.style.display = 'none';
  return;
@@ -43,7 +51,7 @@ const d = preloaded ?? await storeGet(['scanResults', 'watchlist', 'manualWatchl
 
  cont.innerHTML = `<div class="empty"><div class="ei">SCAN</div><div class="eh">No signals yet</div>
 
- <div class="es">Click <b>SCAN NOW</b> to scan all perpetual coins<br/>EMA+OBV+RSI+MACD+VWAP+VP &middot; MTF &middot; Sparklines</div></div>`;
+ <div class="es">Click <b>SCAN NOW</b> to scan liquid NSE/BSE symbols<br/>EMA+OBV+RSI+MACD+VWAP+VP &middot; MTF &middot; Sparklines</div></div>`;
 
  strip.style.display = 'none';
 
@@ -76,7 +84,7 @@ const d = preloaded ?? await storeGet(['scanResults', 'watchlist', 'manualWatchl
 function buildNativeStraddleScannerCard(row = {}) {
  const raw = row.raw || {};
  const tone = row.signal === 'BUY' ? 'long' : row.signal === 'SELL' ? 'short' : 'watch';
- const premium = raw.premiumPerContract ? `$${Number(raw.premiumPerContract || 0).toFixed(2)}` : `$${Number(row.entry || 0).toFixed(2)}`;
+ const premium = raw.premiumPerContract ? `Rs ${Number(raw.premiumPerContract || 0).toFixed(2)}` : `Rs ${Number(row.entry || 0).toFixed(2)}`;
  const expiry = Number(raw.daysToExpiry || 0) < 1
  ? `${Math.max(0, Number(raw.daysToExpiry || 0) * 24).toFixed(1)}h`
  : `${Number(raw.daysToExpiry || 0).toFixed(1)}d`;
@@ -93,7 +101,7 @@ function renderNativeStraddleScannerRail(rows = [], status = {}) {
  if (!wrap) return;
  const list = Array.isArray(rows) ? rows.slice(0, 4) : [];
  const active = !!status?.active;
- const statusText = status?.status || 'Run Native Straddle scan for BTC/ETH MV contracts.';
+ const statusText = status?.status || 'Run strategy scan for market symbols.';
  wrap.innerHTML = `<section class="native-straddle-strip">
  <div class="native-straddle-strip-head">
  <div><span>Native Straddle Scanner</span><strong>${active ? 'Scanning...' : list.length ? `${list.length} idea${list.length === 1 ? '' : 's'}` : 'Ready'}</strong><small>${esc(statusText)}</small></div>
@@ -102,7 +110,7 @@ function renderNativeStraddleScannerRail(rows = [], status = {}) {
  <button type="button" class="bsm" id="btnNativeStraddleLab">Strategy Lab</button>
  </div>
  </div>
- <div class="native-straddle-strip-list">${list.length ? list.map(buildNativeStraddleScannerCard).join('') : '<div class="native-straddle-empty">No Native Straddle result yet. Scan uses 24h cache only and opens charts in 15m.</div>'}</div>
+ <div class="native-straddle-strip-list">${list.length ? list.map(buildNativeStraddleScannerCard).join('') : '<div class="native-straddle-empty">No Native Straddle result yet. Scan fetches fresh MV quotes and opens charts in 15m.</div>'}</div>
  </section>`;
  wrap.querySelector('#btnNativeStraddleScan')?.addEventListener('click', () => {
  chrome.runtime.sendMessage({ action: 'native-straddle:startScan', force: true }, () => {
@@ -127,8 +135,18 @@ function renderNativeStraddleScannerRail(rows = [], status = {}) {
 function renderScannerFeedStatus(data = {}) {
  const wrap = document.getElementById('scannerFeedStatus');
  if (!wrap) return;
- const mode = (globalThis.getMarketDataModeLabel || (value => value))(data?.strategy?.marketDataMode || globalThis.deltaMarketDataMode || 'auto');
- const scanActive = !!data?.scanActive || /loading|scanning/i.test(String(data?.scanStatus || ''));
+ const mode = (globalThis.getMarketDataModeLabel || (value => value))(data?.strategy?.marketDataMode || globalThis.dhanMarketDataMode || 'auto');
+  const universeMeta = data?.scannerUniverseMeta || {};
+  const universeLabel = universeMeta.label || (globalThis.getScannerUniverseLabel ? globalThis.getScannerUniverseLabel(data?.strategy?.scanUniverse) : data?.strategy?.scanUniverse) || 'F&O Stocks';
+  const scanMode = String(universeMeta.scanMode || data?.strategy?.scanMode || 'standard');
+  const quoteReturned = Number(universeMeta.returned || universeMeta.count || 0);
+  const quoteTotal = Number(universeMeta.count || universeMeta.total || universeMeta.requested || quoteReturned || 0);
+  const requested = Number(universeMeta.requested || data?.strategy?.maxCoins || quoteTotal || 0);
+  const deepLimit = Number(universeMeta.deepScanLimit || requested || 0);
+  const scanned = Number(universeMeta.scanned || 0);
+  const signals = Number(Array.isArray(data?.scanResults) ? data.scanResults.length : universeMeta.signals || 0);
+  const skippedNoHistory = Number(universeMeta.skippedNoHistory || data?.scanProgress?.noHistory || 0);
+  const scanActive = isScannerUiActive(data);
  const updated = (globalThis.formatUiAge || (() => 'Not yet'))(data?.lastScanTs || 0);
  const marketIndex = data?.marketIndex || {};
  // Cache for regime-aware card dimming in renderCards
@@ -139,8 +157,14 @@ function renderScannerFeedStatus(data = {}) {
  ? globalThis.FWDTradeDeskShared.formatThresholdSummary(marketIndex?.thresholds || {})
  : 'Execute >= 65 | Setup >= 60 | Watch >= 45');
  const autoWatchlist = Array.isArray(data?.autoWatchlist) ? data.autoWatchlist : [];
- wrap.innerHTML = (globalThis.buildMarketDataStatusPills || (() => ''))([
- { label: 'Mode', value: mode, tone: String(data?.strategy?.marketDataMode || globalThis.deltaMarketDataMode || 'auto').toLowerCase() === 'polling' ? 'warn' : 'ok' },
+  wrap.innerHTML = (globalThis.buildMarketDataStatusPills || (() => ''))([
+  { label: 'Universe', value: universeLabel, tone: String(data?.strategy?.scanUniverse || '').toLowerCase() === 'all_nse' ? 'warn' : 'ok' },
+  { label: 'Quotes', value: quoteReturned || quoteTotal ? `${quoteReturned || 0}/${quoteTotal || '?'}` : 'Waiting', tone: quoteReturned ? 'ok' : 'warn' },
+  { label: 'Type', value: scanMode === 'penny_awakening' ? 'Penny Awakening' : 'Standard', tone: scanMode === 'penny_awakening' ? 'warn' : 'ok' },
+  { label: 'Deep Scan', value: scanned || deepLimit ? `${scanned || 0}/${deepLimit || '?'}` : 'Default', tone: scanActive ? 'warn' : scanned ? 'ok' : 'warn' },
+  { label: 'Skipped', value: skippedNoHistory ? `${skippedNoHistory} no history` : '0 no history', tone: skippedNoHistory ? 'warn' : 'ok' },
+  { label: 'Signals', value: `${signals} found`, tone: signals ? 'ok' : (scanActive ? 'warn' : 'fail') },
+  { label: 'Mode', value: mode, tone: String(data?.strategy?.marketDataMode || globalThis.dhanMarketDataMode || 'auto').toLowerCase() === 'polling' ? 'warn' : 'ok' },
  { label: 'Regime', value: String(marketIndex?.regime || 'UNKNOWN').replace(/_/g, ' '), tone: String(marketIndex?.regime || '').toLowerCase().includes('high') ? 'fail' : String(marketIndex?.regime || '').toLowerCase().includes('trend') ? 'ok' : 'warn' },
  { label: 'Direction', value: String(marketIndex?.condition || (scanActive ? 'Scanning' : 'Idle')).toUpperCase(), tone: String(marketIndex?.condition || '').toLowerCase() === 'neutral' ? 'warn' : 'ok' },
  { label: 'Leadership', value: leadership?.label || 'Mixed Leadership', tone: leadership?.tone === 'bad' ? 'fail' : leadership?.tone === 'good' ? 'ok' : 'warn' },
@@ -347,7 +371,7 @@ function buildScannerInsightCard(config = {}) {
 
  <div class="scanner-insight-copy">${config.copy || 'No active setup is strong enough yet.'}</div>
 
- <div class="scanner-insight-coins-label">Coins</div>
+ <div class="scanner-insight-stocks-label">Symbols</div>
 
  <div class="scanner-insight-symbols">${symbolsMarkup}</div>
 
@@ -452,7 +476,7 @@ function renderScannerInsightsRail(list) {
  : 'Sector breadth is not creating a major warning right now.',
  copy: breadthRisk
  ? esc(breadthRisk.tradeQuality?.summary || 'Breadth or leadership is working against this setup.')
- : 'Breadth risk will light up when sectors stop confirming or BTC leadership turns hostile.',
+ : 'Breadth risk will light up when sectors stop confirming or index leadership turns hostile.',
  symbols: breadthRiskCandidates.map(signal => signal.symbol),
  }),
 
@@ -833,7 +857,6 @@ async function renderCards(list, cont, watchlist) {
  if (!_fp('renderCards', _cards_fp)) return;
  const desktopMarketsScanner = typeof isDesktopMode !== 'undefined' && isDesktopMode
  && typeof workspaceGroup !== 'undefined' && workspaceGroup === 'markets';
- const sessionFilter = desktopMarketsScanner ? '' : scannerSessionFilter;
  const usePresetFilter = !desktopMarketsScanner && !!scannerPreset;
  const watchSet = new Set(wl);
 
@@ -845,7 +868,6 @@ async function renderCards(list, cont, watchlist) {
  if (mtf === 'confirmed' && !r.mtfConfirmed) return false;
  if (mtf === 'partial' && r.mtfConfirmed) return false;
  if (sector && normalizeSectorLabel(r.sector || getSector(r.symbol)) !== sector) return false;
- if (sessionFilter && String(r.session || '').toLowerCase() !== sessionFilter) return false;
  if (usePresetFilter && !matchesScannerPreset(r)) return false;
  if (setupFilter) {
  const sfLabel = String(r.setupFamilyLabel || '').trim();
@@ -943,9 +965,7 @@ async function renderCards(list, cont, watchlist) {
 
  if (btn.dataset.v16CardAction === 'risk') {
 
- seedRiskCalculatorFromSignal(match);
-
- setActiveWorkspaceTab('riskcalc', true, true);
+ openChartForSymbolCommand(match?.symbol || '', match);
 
  return;
 
@@ -955,7 +975,7 @@ async function renderCards(list, cont, watchlist) {
 
  const result = await ensureSignalPosition(match);
 
- setActiveWorkspaceTab('analytics', true, true);
+ setActiveWorkspaceTab('chart', true, true);
 
  if (result?.ok) await renderAnalytics();
 
@@ -1064,7 +1084,7 @@ function resolveScannerAssetInfo(r = {}) {
  if (r.assetClass) {
  return {
  assetClass: r.assetClass,
- assetLabel: r.assetLabel || (String(r.assetClass).startsWith('tokenized_') ? 'Tokenized RWA' : 'Crypto'),
+ assetLabel: r.assetLabel || (String(r.assetClass).startsWith('tokenized_') ? 'Tokenized RWA' : 'NSE/BSE'),
  assetBadge: r.assetBadge || '',
  sector: r.sector || '',
  info: r.assetInfo || '',
@@ -1080,6 +1100,11 @@ function isRwaScannerAsset(assetInfo = {}) {
  const cls = String(assetInfo?.assetClass || '').toLowerCase();
  const badge = String(assetInfo?.assetBadge || '').toLowerCase();
  return cls.startsWith('tokenized_') || badge.includes('rwa');
+}
+
+function scannerInr(value, digits = null) {
+ const text = digits == null ? fmtPrice(value) : Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+ return `Rs ${text}`;
 }
 
 function buildCard(r, isPinned, isChoppyRegime = false) {
@@ -1109,8 +1134,8 @@ function buildCard(r, isPinned, isChoppyRegime = false) {
 
  const assetInfo = resolveScannerAssetInfo(r);
  const isRwa = isRwaScannerAsset(assetInfo);
- const assetLabel = String(assetInfo.assetLabel || (isRwa ? 'RWA' : 'Crypto')).trim();
- const assetBadge = String(assetInfo.assetBadge || (isRwa ? 'RWA' : 'Crypto')).trim();
+ const assetLabel = String(assetInfo.assetLabel || (isRwa ? 'RWA' : 'NSE/BSE')).trim();
+ const assetBadge = String(assetInfo.assetBadge || (isRwa ? 'RWA' : 'NSE/BSE')).trim();
  const assetSubline = isRwa && (assetInfo.underlyingSymbol || assetInfo.underlyingName)
  ? `${assetInfo.underlyingSymbol || 'RWA'}${assetInfo.underlyingName && assetInfo.underlyingName !== assetInfo.underlyingSymbol ? ` | ${assetInfo.underlyingName}` : ''}`
  : '';
@@ -1181,7 +1206,7 @@ function buildCard(r, isPinned, isChoppyRegime = false) {
 
  // Session badge (v14)
 
- const sessionHTML = r.session ? `<span class="card-session">${safeSessionLabel}</span>` : '';
+ const sessionHTML = '';
 
 
 
@@ -1317,8 +1342,8 @@ function buildCard(r, isPinned, isChoppyRegime = false) {
  ? `<div class="card-product-name">${esc(productDescription)}</div>`
  : '';
  const assetRibbon = isRwa
- ? `<div class="scanner-asset-ribbon" title="${esc(assetInfo.info || 'RWA instrument separated from crypto flow.')}"><span>RWA</span><strong>${esc(assetLabel)}</strong>${assetSubline ? `<em>${esc(assetSubline)}</em>` : ''}</div>`
- : `<div class="scanner-asset-ribbon crypto"><span>CRYPTO</span><strong>Crypto derivative</strong></div>`;
+ ? `<div class="scanner-asset-ribbon" title="${esc(assetInfo.info || 'RWA instrument separated from nse_bse flow.')}"><span>RWA</span><strong>${esc(assetLabel)}</strong>${assetSubline ? `<em>${esc(assetSubline)}</em>` : ''}</div>`
+ : `<div class="scanner-asset-ribbon nse_bse"><span>F&amp;O</span><strong>NSE equity</strong></div>`;
  const trustNote = `Bias ${dirLabel.replace(/^[^\s]+\s/, '')} | ${sec} sector | ${r.mtfConfirmed ? 'confirmed' : 'developing'}${trackedPnl.hasAny ? ` | ${trackedPnl.totalPnl < 0 ? 'tracked drawdown' : 'tracked in profit'}` : ''}`;
  const actionTier = scannerActionTier(r, isChoppyRegime);
  const whyLine = scannerWhyLine(r, isChoppyRegime);
@@ -1346,7 +1371,7 @@ function buildCard(r, isPinned, isChoppyRegime = false) {
 
  return `
 
- <div class="card v16-signal-card scanner-tier-${actionTier} ${r.direction?.includes('short') ? 'short-card' : 'long-card'} ${sc >= 80 ? 'fire' : ''} ${isPinned ? 'pinned' : ''} ${regimeDim ? 'regime-dimmed' : ''} ${isRwa ? 'rwa-signal-card' : 'crypto-signal-card'}" data-sym="${safeSymbol}" data-asset-class="${esc(assetInfo.assetClass || 'crypto_derivative')}">
+ <div class="card v16-signal-card scanner-tier-${actionTier} ${r.direction?.includes('short') ? 'short-card' : 'long-card'} ${sc >= 80 ? 'fire' : ''} ${isPinned ? 'pinned' : ''} ${regimeDim ? 'regime-dimmed' : ''} ${isRwa ? 'rwa-signal-card' : 'nse_bse-signal-card'}" data-sym="${safeSymbol}" data-asset-class="${esc(assetInfo.assetClass || 'nse_bse_derivative')}">
  <button class="star-btn ${isPinned ? 'starred' : ''}" data-sym="${r.symbol}" title="${isPinned ? 'Unpin' : 'Pin'}">${isPinned ? '&#9733;' : '&#9734;'}</button>
 
  <div class="card-top">
@@ -1367,7 +1392,7 @@ function buildCard(r, isPinned, isChoppyRegime = false) {
 
  <div class="card-row">
 
- <div class="card-stat"><div class="cl">Price</div><div class="cv">$${fmtPrice(r.price)}</div></div>
+ <div class="card-stat"><div class="cl">Price</div><div class="cv">${scannerInr(r.price)}</div></div>
 
  <div class="card-stat"><div class="cl">24h</div><div class="cv ${ch >= 0 ? 'up' : 'dn'}">${ch >= 0 ? '+' : ''}${ch.toFixed(2)}%</div></div>
 
@@ -1520,25 +1545,6 @@ document.querySelectorAll('#scannerPresets .preset-btn').forEach(btn => {
 
 });
 
-document.querySelectorAll('#scannerSessions .preset-btn').forEach(btn => {
-
- btn.addEventListener('click', async () => {
-
- scannerSessionFilter = btn.dataset.session || '';
-
- document.querySelectorAll('#scannerSessions .preset-btn').forEach(b => b.classList.toggle('active', b === btn));
-
- chrome.storage.local.set({ scannerSessionFilter });
-
- const d = await storeGet(['scanResults', 'manualWatchlist', 'watchlist', 'sectorBreadth']);
-
- renderCards(d.scanResults || [], document.getElementById('cardList'), d.manualWatchlist || d.watchlist || []);
- renderSectorBar(d.scanResults || [], d.sectorBreadth || null);
-
- });
-
-});
-
 
 // Scanner view cycle
 document.addEventListener('click', async (e) => {
@@ -1570,7 +1576,7 @@ document.addEventListener('change', async (e) => {
 
 async function toggleWatchlist(sym, opts = {}) {
 
- const d = await storeGet(['watchlist', 'scanResults', 'scanStatus', 'scanActive']);
+ const d = await storeGet(['watchlist', 'scanResults', 'scanStatus', 'scanActive', 'scanProgress', 'scanHeartbeat']);
 
  const wl = d.watchlist || [];
 
@@ -1616,12 +1622,12 @@ async function renderWatchlist() {
 
 
  if (!wl.length) {
- if (d.scanActive || /loading|scanning/i.test(String(d.scanStatus || ''))) {
+ if (isScannerUiActive(d)) {
  cont.innerHTML = buildSkeletonMarkup(3, 'cards');
  return;
  }
 
- cont.innerHTML = `<div class="empty"><div class="ei">&#9733;</div><div class="eh">No coins pinned yet</div>
+ cont.innerHTML = `<div class="empty"><div class="ei">&#9733;</div><div class="eh">No symbols pinned yet</div>
 
  <div class="es">Go to Scanner &rarr; click &#9734; on any card to add it here</div></div>`;
 
@@ -1671,7 +1677,7 @@ function bindWatchlistCard(el, signal) {
  lastWatchlistClickedSymbol = signal.symbol;
 
  await renderWatchlist();
- await refreshWatchlistCoin(signal.symbol);
+ await refreshWatchlistStock(signal.symbol);
 
  });
 
@@ -1704,7 +1710,7 @@ function bindV16WatchlistCardActions(el, signal) {
 
  lastWatchlistClickedSymbol = signal.symbol;
 
- const latest = await refreshWatchlistCoin(signal.symbol) || signal;
+ const latest = await refreshWatchlistStock(signal.symbol) || signal;
 
  if (btn.dataset.v16CardAction === 'chart') {
 
@@ -1724,9 +1730,7 @@ function bindV16WatchlistCardActions(el, signal) {
 
  if (btn.dataset.v16CardAction === 'risk') {
 
- seedRiskCalculatorFromSignal(latest);
-
- setActiveWorkspaceTab('riskcalc', true, true);
+ openChartForSymbolCommand(latest?.symbol || '', latest);
 
  return;
 
@@ -1736,7 +1740,7 @@ function bindV16WatchlistCardActions(el, signal) {
 
  const result = await ensureSignalPosition(latest);
 
- setActiveWorkspaceTab('analytics', true, true);
+ setActiveWorkspaceTab('chart', true, true);
 
  if (result?.ok) await renderAnalytics();
 
@@ -1748,7 +1752,7 @@ function bindV16WatchlistCardActions(el, signal) {
 
 }
 
-async function refreshWatchlistCoin(symbol) {
+async function refreshWatchlistStock(symbol) {
  const sym = String(symbol || '').toUpperCase().trim();
 
  if (!sym) return null;
@@ -1852,7 +1856,7 @@ document.addEventListener('click', async (e) => {
  const wl = [...(d.autoWatchlist || []), ...(d.manualWatchlist || d.watchlist || [])];
  const target = lastWatchlistClickedSymbol || wl[0];
  if (!target) return;
- await refreshWatchlistCoin(target);
+ await refreshWatchlistStock(target);
 });
 
 function buildDecisionWatchCard(signal, opts = {}) {
@@ -1965,7 +1969,7 @@ async function toggleWatchlist(sym, opts = {}) {
 }
 
 async function renderWatchlist(preloaded = null) {
- const d = preloaded ?? await storeGet(['manualWatchlist', 'watchlist', 'autoWatchlist', 'decisionShortlist', 'scanResults', 'scanStatus', 'scanActive']);
+ const d = preloaded ?? await storeGet(['manualWatchlist', 'watchlist', 'autoWatchlist', 'decisionShortlist', 'scanResults', 'scanStatus', 'scanActive', 'scanProgress', 'scanHeartbeat']);
  const manual = Array.isArray(d.manualWatchlist) ? d.manualWatchlist : Array.isArray(d.watchlist) ? d.watchlist : [];
  const autoWatchlist = Array.isArray(d.autoWatchlist) ? d.autoWatchlist : [];
  const shortlist = Array.isArray(d.decisionShortlist) ? d.decisionShortlist : [];
@@ -1977,7 +1981,7 @@ async function renderWatchlist(preloaded = null) {
  if (!cont) return;
 
  if (!manual.length && !autoWatchlist.length) {
- if (d.scanActive || /loading|scanning/i.test(String(d.scanStatus || ''))) {
+ if (isScannerUiActive(d)) {
  cont.innerHTML = buildSkeletonMarkup(3, 'cards');
  return;
  }
@@ -2039,7 +2043,7 @@ async function renderWatchlist(preloaded = null) {
  bindWatchlistCard(el, signal);
  });
  if (expandedSymbol && !watchRefreshInFlight.has(expandedSymbol)) {
- setTimeout(() => refreshWatchlistCoin(expandedSymbol), 0);
+ setTimeout(() => refreshWatchlistStock(expandedSymbol), 0);
  }
  });
 }
@@ -2539,7 +2543,7 @@ function renderAnalyticsLiveReview(bundle = {}, model = null) {
  <div class="live-journal-meta">${esc(String(trade.side || '').toUpperCase())} | ${trade.holdMinutes}m | ${typeof v16FormatTs === 'function' ? esc(v16FormatTs(trade.closedAt)) : esc(new Date(trade.closedAt).toLocaleString())}</div>
  <div class="live-journal-meta">${trade.review?.notes ? esc(trade.review.notes) : 'Pending post-trade notes'}</div>
  </button>`).join('')
- : `<div class="empty"><div class="ei">JRNL</div><div class="eh">No journal trades yet</div><div class="es">Closed positions detected from Delta fills in the ${windowLabel} will appear here.</div></div>`;
+ : `<div class="empty"><div class="ei">JRNL</div><div class="eh">No journal trades yet</div><div class="es">Closed positions detected from market activity in the ${windowLabel} will appear here.</div></div>`;
  const feedHtml = feed.length
  ? feed.slice(0, 20).map(item => `
  <div class="live-fill-row ${usingOrders ? 'is-order-row' : ''}">
@@ -2552,7 +2556,7 @@ function renderAnalyticsLiveReview(bundle = {}, model = null) {
  <small>${usingOrders ? 'Order history fallback' : `Fee -$${Math.abs(Number(item.commission || 0)).toFixed(4)}`}</small>
  </div>
  </div>`).join('')
- : `<div class="empty"><div class="ei">History</div><div class="eh">No trade activity loaded</div><div class="es">Delta returned no fills or order history in the ${windowLabel} for this profile.</div></div>`;
+ : `<div class="empty"><div class="ei">History</div><div class="eh">No trade activity loaded</div><div class="es">No fills or order history were returned in the ${windowLabel}.</div></div>`;
  const diagnosticsCopy = (rawFills.length || rawOrders.length || diagnostics?.fills?.strategy || diagnostics?.orderHistory?.strategy || fillAttemptError || orderAttemptError)
  ? `<div class="manage-review-diagnostic">History sync: parsed ${normalizedFills.length} fills / ${normalizedOrders.length} orders | raw ${rawFills.length} fills / ${rawOrders.length} orders${diagnostics?.fills?.strategy ? ` | fills ${esc(diagnostics.fills.strategy)}` : ''}${diagnostics?.orderHistory?.strategy ? ` | orders ${esc(diagnostics.orderHistory.strategy)}` : ''}${fillAttemptError ? ` | fill error ${esc(fillAttemptError)}` : ''}${orderAttemptError ? ` | order error ${esc(orderAttemptError)}` : ''}</div>`
  : '';
@@ -3273,7 +3277,7 @@ async function addAnalyticsPosition() {
 
  if (!symbol) {
 
- if (metaEl) metaEl.textContent = 'Enter a valid symbol (e.g. BTCUSD).';
+ if (metaEl) metaEl.textContent = 'Enter a valid NSE/BSE symbol (e.g. RELIANCE or NIFTY).';
 
  return;
 

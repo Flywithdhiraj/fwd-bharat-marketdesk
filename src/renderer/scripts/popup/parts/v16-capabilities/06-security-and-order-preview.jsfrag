@@ -98,8 +98,8 @@ async function v16BuildSystemHealthModel({ metrics = null, snapshot = null } = {
  return {
  items: [
  { label: 'Engine', value: store?.autoTrade ? 'On' : 'Off', detail: store?.autoTrade ? 'Scanner can evaluate live entries.' : 'Auto-trade master toggle is off.', tone: store?.autoTrade ? 'good' : 'bad' },
- { label: 'Profile', value: profileValue, detail: profileDetail, tone: profileTone },
- { label: 'Kill Switch', value: killSwitch.enabled ? 'On' : 'Off', detail: killSwitch.enabled ? 'New live orders are blocked.' : 'No kill-switch block is active.', tone: killSwitch.enabled ? 'bad' : 'good' },
+ { label: 'Workspace', value: profileValue, detail: profileDetail, tone: profileTone },
+ { label: 'Orders', value: 'Manual Only', detail: 'Order placement is disabled in this app.', tone: 'good' },
  { label: 'Slots', value: `${slotSummary.used}/${slotSummary.maxConcurrent}`, detail: `${slotSummary.live} live | ${slotSummary.queued} queued | ${slotSummary.reserved || 0} reserved`, tone: slotSummary.available > 0 ? 'good' : 'warn' },
  { label: 'Daily Loss', value: dailyLossLimit > 0 ? `$${v16FmtNumber(dailyLoss, 2)} / $${v16FmtNumber(dailyLossLimit, 2)}` : `$${v16FmtNumber(dailyLoss, 2)} / Not set`, detail: dailyLossDetail, tone: dailyLossLimit > 0 && dailyLoss >= dailyLossLimit ? 'bad' : 'info' },
  { label: 'Funding Feed', value: hasFundingFeed ? (fundingFresh ? 'Live' : 'Stale') : 'Missing', detail: hasFundingFeed ? (fundingFresh ? 'Funding data refreshed recently.' : 'Funding data exists but looks stale.') : 'No funding rate feed is available right now.', tone: hasFundingFeed ? (fundingFresh ? 'good' : 'warn') : 'bad' },
@@ -377,7 +377,7 @@ async function v16RenderAutoTradeDecisionAudit(metrics = {}) {
  tone: statusMeta.tone === 'bad' ? 'warn' : 'info',
  })}
  <div class="live-order-audit-grid">
- <div class="live-order-audit-metric"><span>Configured Profile</span><strong>${v16Esc(configuredProfileLabel)}</strong><small>${v16Esc(configuredProfileCapability)} | ${configuredProfileHasSecret ? 'credentials ready' : 'credentials missing'}</small></div>
+ <div class="live-order-audit-metric"><span>Workspace</span><strong>${v16Esc(configuredProfileLabel)}</strong><small>${v16Esc(configuredProfileCapability)} | ${configuredProfileHasSecret ? 'credentials ready' : 'credentials missing'}</small></div>
  <div class="live-order-audit-metric live-order-audit-metric--blocker"><span>Exact Blocker ${v16BuildInlineHelpHtml('Exact blocker', 'This is the one state that is currently stopping the engine from placing a fresh entry.')}</span><strong>${v16Esc(statusMeta.label)}</strong><small>${v16Esc(effectiveReason || 'No explicit block reason was recorded.')}</small></div>
  <div class="live-order-audit-metric live-order-audit-metric--capacity"><span>Next Engine Pass ${v16BuildInlineHelpHtml('Next engine pass', 'This tells you what the next scan can still do if the current blocker clears before the engine checks again.')}</span><strong>${currentCapacity}</strong><small>${v16Esc(nextPassSummary)}</small></div>
  <div class="live-order-audit-metric"><span>Slots Now</span><strong>${slotSummary.used}/${slotSummary.maxConcurrent}</strong><small>${slotSummary.live} live | ${slotSummary.queued} queued | ${slotSummary.reserved || 0} reserved</small></div>
@@ -400,7 +400,7 @@ async function v16RenderAutoTradeDecisionAudit(metrics = {}) {
  </div>
  <div class="live-order-audit-item-reasons">${v16Esc(note)}</div>
  </div>`).join('')}</div>` : ''}
- ${status === 'blocked_kill_switch' ? `<div class="live-order-audit-best"><span>Kill Switch</span><strong>${killSwitchState?.enabled ? 'Armed' : 'Cleared'}</strong><small>${killSwitchState?.enabled ? 'Turn it off in Settings before the engine can place new orders.' : 'The kill switch looks cleared now. Run another scan to refresh the audit state.'}</small></div>` : ''}
+ ${status === 'blocked_kill_switch' ? `<div class="live-order-audit-best"><span>Orders</span><strong>Manual Only</strong><small>Order placement is disabled in this app.</small></div>` : ''}
  ${dailyLossLimit > 0 ? `<div class="live-order-audit-best"><span>Loss Guard</span><strong>$${v16FmtNumber(dailyLossUsed, 2)} / $${v16FmtNumber(dailyLossLimit, 2)}</strong><small>${dailyLossUsed >= dailyLossLimit ? 'The loss guard is actively blocking fresh entries.' : 'The loss guard has not reached its block threshold.'}</small></div>` : ''}
  ${lossTrades.length ? `<div class="live-order-audit-best"><span>Trades Counted Toward Daily Loss</span><strong>${lossTrades.length}</strong><small>These recent losing closes are contributing to the current daily loss guard.</small></div>` : ''}
  ${lossTrades.length ? `<div class="live-order-audit-list">${lossTrades.map(entry => `
@@ -636,7 +636,7 @@ function v16BuildNotificationCenterEntries(metrics = {}) {
  sourceScannerId: 'current',
  sourceScannerName: 'Current Live',
  sourceType: 'scanner',
- what: `${String(alert.direction || '').toUpperCase()} score ${Number(alert.score || 0)} | entry $${v16FmtPrice(Number(alert.entry || alert.price || 0))}`,
+ what: `${String(alert.direction || '').toUpperCase()} score ${Number(alert.score || 0)} | entry Rs ${v16FmtPrice(Number(alert.entry || alert.price || 0))}`,
  why: Array.isArray(alert.reasons) && alert.reasons.length ? alert.reasons.slice(0, 2).join(' | ') : 'Signal entered the alert stack.',
  next: 'The engine will re-check live filters and auto-trade rules on the next decision pass.',
  action: 'Open the signal popup to inspect live decision status and funding forecast.',

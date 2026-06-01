@@ -38,7 +38,224 @@ function buildDecisionState(results = [], marketIndex = null, manualWatchlist = 
 }
 
 const CLOSED_CANDLE_FETCH_OPTIONS = Object.freeze({ closedOnly: true });
-const SCAN_CANDLE_FETCH_OPTIONS = Object.freeze({ closedOnly: true, timeoutMs: 30000 });
+const SCAN_CANDLE_PACE_MS = 1800;
+const SCAN_CANDLE_FETCH_OPTIONS = Object.freeze({ closedOnly: true, timeoutMs: 20000, paceMs: SCAN_CANDLE_PACE_MS });
+const SCAN_CONTEXT_DAILY_CANDLES = 260;
+const SCANNER_ALLOWED_TIMEFRAMES = new Set(['15m', '4h', '1d', '1w']);
+const SCANNER_UNIVERSE_DEFAULT = 'fno_stocks';
+const SCANNER_UNIVERSE_LIMITS = Object.freeze({
+ fno_stocks: 600,
+ nifty500: 700,
+ midcap150: 250,
+ smallcap250: 400,
+ all_nse: 3500,
+});
+const SCANNER_UNIVERSE_LABELS = Object.freeze({
+ fno_stocks: 'F&O Stocks',
+ nifty500: 'Nifty 500',
+ midcap150: 'Midcap 150',
+ smallcap250: 'Smallcap 250',
+ all_nse: 'All NSE Equity',
+});
+const SCANNER_MODE_DEFAULT = 'standard';
+const SCANNER_MODES = new Set(['standard', 'penny_awakening']);
+const ALL_NSE_BREADTH_DEEP_SCAN_LIMIT = 3500;
+const PENNY_AWAKENING_DEEP_SCAN_LIMIT = 350;
+const PENNY_AWAKENING_PRICE_MAX = 200;
+const PENNY_AWAKENING_PRICE_MIN = 1;
+const PENNY_AWAKENING_MIN_TURNOVER = 100000;
+
+function sanitizeScanMode(value = '') {
+ const raw = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+ return SCANNER_MODES.has(raw) ? raw : SCANNER_MODE_DEFAULT;
+}
+
+function sanitizeScanTimeframe(value = '', fallback = '15m') {
+ const raw = String(value || '').trim().toLowerCase();
+ if (SCANNER_ALLOWED_TIMEFRAMES.has(raw)) return raw;
+ if (raw === '1h' || raw === '60' || raw === '60m' || raw === '240') return '4h';
+ if (raw === '1wk' || raw === 'w' || raw === 'week' || raw === 'weekly') return '1w';
+ if (raw === 'd' || raw === 'day' || raw === 'daily') return '1d';
+ if (raw === '5m' || raw === '3m' || raw === '1m' || raw === '15') return '15m';
+ return SCANNER_ALLOWED_TIMEFRAMES.has(fallback) ? fallback : '15m';
+}
+
+function sanitizeScanUniverseId(value = '') {
+ if (typeof globalThis.normalizeDhanScannerUniverse === 'function') return globalThis.normalizeDhanScannerUniverse(value);
+ const raw = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+ if (['nifty500', 'nifty_500'].includes(raw)) return 'nifty500';
+ if (['midcap150', 'midcap_150', 'midcap'].includes(raw)) return 'midcap150';
+ if (['smallcap250', 'smallcap_250', 'smallcap'].includes(raw)) return 'smallcap250';
+ if (['all_nse', 'all', 'nse'].includes(raw)) return 'all_nse';
+ return 'fno_stocks';
+}
+
+function resolveScanLimitForUniverse(universe = SCANNER_UNIVERSE_DEFAULT, configuredLimit = 0) {
+ const safeUniverse = sanitizeScanUniverseId(universe);
+ const cap = SCANNER_UNIVERSE_LIMITS[safeUniverse] || SCANNER_UNIVERSE_LIMITS.fno_stocks;
+ const requested = Number(configuredLimit || 0);
+ const fallback = safeUniverse === 'all_nse' ? 3000 : safeUniverse === 'nifty500' ? 500 : safeUniverse === 'midcap150' ? 150 : safeUniverse === 'smallcap250' ? 250 : 250;
+ if (safeUniverse === 'all_nse') return Math.min(cap, Math.max(fallback, requested > 10 ? requested : fallback));
+ return Math.min(cap, Math.max(20, requested > 10 ? requested : fallback));
+}
+
+function resolveDeepScanLimitForStrategy(strategy = {}, quoteLimit = 0) {
+ const universe = sanitizeScanUniverseId(strategy.scanUniverse || SCANNER_UNIVERSE_DEFAULT);
+ const mode = sanitizeScanMode(strategy.scanMode || SCANNER_MODE_DEFAULT);
+ const requested = Math.max(20, Number(quoteLimit || strategy.maxCoins || 250) || 250);
+ if (mode === 'penny_awakening' && universe !== 'all_nse') return Math.min(requested, PENNY_AWAKENING_DEEP_SCAN_LIMIT);
+ if (universe === 'all_nse') return Math.min(requested, ALL_NSE_BREADTH_DEEP_SCAN_LIMIT);
+ return requested;
+}
+
+function getScanUniverseStatusLabel(universe = SCANNER_UNIVERSE_DEFAULT) {
+ return SCANNER_UNIVERSE_LABELS[sanitizeScanUniverseId(universe)] || String(universe || 'market universe');
+}
+
+function describeScanCandidateInstrument(candidate = {}) {
+ const instrument = candidate?.dhanInstrument || candidate?.instrument || {};
+ const exchangeSegment = String(candidate.exchangeSegment || instrument.exchangeSegment || '').trim().toUpperCase();
+ const securityId = String(candidate.securityId || instrument.securityId || '').trim();
+ const type = String(candidate.contractType || instrument.instrument || '').trim().toUpperCase();
+ return [exchangeSegment, securityId ? `sid ${securityId}` : '', type].filter(Boolean).join(' / ') || 'instrument unknown';
+}
+
+function scanFormatInr(value, decimals = 4) {
+ const num = Number(value || 0);
+ if (!Number.isFinite(num) || !(num > 0)) return 'Rs -';
+ return `Rs ${num.toLocaleString('en-IN', {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: Math.max(0, Number(decimals || 0)),
+ })}`;
+}
+
+function averageVolumeFromCandles(candles = [], period = 20) {
+ const rows = (Array.isArray(candles) ? candles : []).filter(row => Number(row?.volume || 0) > 0);
+ if (!rows.length) return 0;
+ const sample = rows.slice(-Math.max(1, Number(period || 20)));
+ return sample.reduce((sum, row) => sum + Number(row.volume || 0), 0) / sample.length;
+}
+
+function scorePennyAwakeningQuote(candidate = {}) {
+ const ticker = candidate.ticker || {};
+ const price = Number(ticker.price || 0);
+ const changePct = Number(ticker.change24h || 0);
+ const volume = Number(ticker.volume24h || 0);
+ const turnover = Number(ticker.inrTurnover24h || ticker.turnover24h || ticker.usdVol24h || 0);
+ if (!(price >= PENNY_AWAKENING_PRICE_MIN && price <= PENNY_AWAKENING_PRICE_MAX) || !(volume > 0)) return 0;
+ let score = 20;
+ score += Math.min(25, Math.max(0, changePct) * 2.5);
+ score += Math.min(25, Math.log10(Math.max(10, turnover)) * 3);
+ if (turnover >= PENNY_AWAKENING_MIN_TURNOVER) score += 10;
+ if (price <= 50) score += 8;
+ if (price <= 20) score += 7;
+ return Math.round(Math.max(0, Math.min(100, score)));
+}
+
+function buildPennyAwakeningInsight(symbol = '', dailyCandles = [], intradayCandles = [], ticker = {}) {
+ const daily = Array.isArray(dailyCandles) ? dailyCandles : [];
+ const intraday = Array.isArray(intradayCandles) ? intradayCandles : [];
+ const latestDaily = daily[daily.length - 1] || {};
+ const price = Number(ticker.price || latestDaily.close || 0);
+ const volume = Number(ticker.volume24h || latestDaily.volume || 0);
+ const turnover = Number(ticker.inrTurnover24h || ticker.turnover24h || ticker.usdVol24h || (price * volume) || 0);
+ if (!(price >= PENNY_AWAKENING_PRICE_MIN && price <= PENNY_AWAKENING_PRICE_MAX)) return null;
+ const priorDaily = daily.length > 1 ? daily.slice(0, -1) : daily;
+ const avg20Volume = averageVolumeFromCandles(priorDaily, 20);
+ const avg50Volume = averageVolumeFromCandles(priorDaily, 50);
+ const relativeVolume20 = avg20Volume > 0 ? volume / avg20Volume : 0;
+ const closes = daily.map(row => Number(row.close || 0)).filter(value => value > 0);
+ const highs = priorDaily.map(row => Number(row.high || 0)).filter(value => value > 0);
+ const high20 = highs.length ? Math.max(...highs.slice(-20)) : 0;
+ const high50 = highs.length ? Math.max(...highs.slice(-50)) : 0;
+ const sma10 = typeof sma === 'function' ? sma(closes, 10) : 0;
+ const dayHigh = Number(ticker.dayHigh || latestDaily.high || 0);
+ const dayLow = Number(ticker.dayLow || latestDaily.low || 0);
+ const dayRange = Math.max(0, dayHigh - dayLow);
+ const closePosition = dayRange > 0 ? ((price - dayLow) / dayRange) * 100 : 50;
+ const intradayVolume = intraday.reduce((sum, row) => sum + Number(row.volume || 0), 0);
+ let score = scorePennyAwakeningQuote({ ticker });
+ if (relativeVolume20 >= 3) score += 12;
+ if (relativeVolume20 >= 5) score += 12;
+ if (relativeVolume20 >= 8) score += 10;
+ if (high20 > 0 && price > high20) score += 12;
+ if (high50 > 0 && price > high50) score += 8;
+ if (sma10 > 0 && price > sma10) score += 5;
+ if (closePosition >= 75) score += 8;
+ if (turnover >= PENNY_AWAKENING_MIN_TURNOVER * 5) score += 6;
+ const reasons = [];
+ if (relativeVolume20 > 0) reasons.push(`Volume ${relativeVolume20.toFixed(1)}x 20D avg`);
+ if (high20 > 0 && price > high20) reasons.push('Above 20D high');
+ if (high50 > 0 && price > high50) reasons.push('Above 50D high');
+ if (closePosition >= 75) reasons.push('Near day high');
+ if (turnover > 0) reasons.push(`Turnover ${scanFormatInr(turnover, 0)}`);
+ if (intradayVolume > 0) reasons.push('Intraday activity present');
+ return {
+  symbol: String(symbol || '').trim().toUpperCase(),
+  score: Math.round(Math.max(0, Math.min(100, score))),
+  relativeVolume20,
+  avg20Volume,
+  avg50Volume,
+  high20,
+  high50,
+  closePosition,
+  turnover,
+  reasons,
+  active: score >= 55 || relativeVolume20 >= 3 || (high20 > 0 && price > high20),
+ };
+}
+
+function buildPennyAwakeningResult(symbol = '', dailyCandles = [], intradayCandles = [], ticker = {}, base = {}) {
+ const insight = buildPennyAwakeningInsight(symbol, dailyCandles, intradayCandles, ticker);
+ if (!insight || !insight.active) return null;
+ const price = Number(ticker.price || dailyCandles?.[dailyCandles.length - 1]?.close || 0);
+ const direction = Number(ticker.change24h || 0) >= 0 ? 'long' : 'watch';
+ const atrValue = typeof atr === 'function' ? atr(dailyCandles, 14) : 0;
+ const stopBuffer = Math.max(price * 0.05, atrValue || 0);
+ return {
+  ...base,
+  symbol: insight.symbol,
+  score: insight.score,
+  rawScore: insight.score,
+  direction,
+  price,
+  entry: price,
+  sl: price > 0 ? pricePrecision(Math.max(0.01, price - stopBuffer)) : 0,
+  tp1: price > 0 ? pricePrecision(price * 1.08) : 0,
+  tp2: price > 0 ? pricePrecision(price * 1.16) : 0,
+  rr: 1.6,
+  change24h: Number(ticker.change24h || 0),
+  volume24h: Number(ticker.volume24h || 0),
+  turnover24h: insight.turnover,
+  sector: base.sector || getSector(symbol),
+  mtfConfirmed: insight.score >= 70,
+  spike: true,
+  setupLabel: 'Penny Awakening',
+  scannerMode: 'penny_awakening',
+  pennyAwakening: insight,
+  reasons: [`Penny Awakening: ${insight.reasons.slice(0, 4).join(' | ') || 'unusual activity'}`],
+  ts: Date.now(),
+ };
+}
+
+function rankScanCandidates(candidates = [], strategy = {}, watchlist = new Set()) {
+ const mode = sanitizeScanMode(strategy.scanMode || SCANNER_MODE_DEFAULT);
+ return (Array.isArray(candidates) ? candidates : []).sort((a, b) => {
+  const aPin = watchlist.has(a.symbol) ? 1 : 0;
+  const bPin = watchlist.has(b.symbol) ? 1 : 0;
+  if (aPin !== bPin) return bPin - aPin;
+  const aPenny = scorePennyAwakeningQuote(a);
+  const bPenny = scorePennyAwakeningQuote(b);
+  if (mode === 'penny_awakening' && aPenny !== bPenny) return bPenny - aPenny;
+  const aMove = Math.abs(Number(a.ticker?.change24h || 0));
+  const bMove = Math.abs(Number(b.ticker?.change24h || 0));
+  const aVolume = Number(a.ticker?.usdVol24h || 0);
+  const bVolume = Number(b.ticker?.usdVol24h || 0);
+  const aBlend = aVolume + (aPenny * 10000000) + (aMove * 1000000);
+  const bBlend = bVolume + (bPenny * 10000000) + (bMove * 1000000);
+  return bBlend - aBlend;
+ });
+}
 const SCAN_PARTIAL_CHECKPOINT_EVERY = 20;
 const MARKET_INDEX_HISTORY_LIMIT = 5000;
 const MARKET_INDEX_HISTORY_SCHEMA_VERSION = 2;
@@ -48,6 +265,14 @@ const MARKET_INDEX_CHANGE_TARGET_TOLERANCE_MS = 90 * 60 * 1000;
 const MARKET_INDEX_REBALANCE_DEFAULT_DAYS = 7;
 const MARKET_INDEX_RETENTION_MULTIPLIER = 1.5;
 const MARKET_INDEX_CORE_LOCK_RATIO = 0.7;
+const DHAN_SCAN_INDEX_TAPE_DEFINITIONS = Object.freeze([
+ { symbol: 'NIFTY', label: 'Nifty 50', shortLabel: 'N50', aliases: ['NIFTY', 'NIFTY 50'] },
+ { symbol: 'BANKNIFTY', label: 'Bank Nifty', shortLabel: 'BANK', aliases: ['BANKNIFTY', 'NIFTY BANK'] },
+ { symbol: 'FINNIFTY', label: 'Fin Nifty', shortLabel: 'FIN', aliases: ['FINNIFTY', 'NIFTY FINANCIAL SERVICES'] },
+ { symbol: 'INDIA VIX', label: 'India VIX', shortLabel: 'VIX', aliases: ['INDIA VIX', 'INDIAVIX'] },
+ { symbol: 'MIDCPNIFTY', label: 'Midcap Nifty', shortLabel: 'MID', aliases: ['MIDCPNIFTY', 'NIFTY MID SELECT'] },
+ { symbol: 'NIFTYIT', label: 'Nifty IT', shortLabel: 'IT', aliases: ['NIFTYIT', 'NIFTY IT'] },
+]);
 const MARKET_INDEX_EXCLUDED_BASES = new Set([
  'USDT', 'USDC', 'BUSD', 'DAI', 'FDUSD', 'TUSD', 'USDP', 'PYUSD', 'GUSD',
  'PAXG', 'XAUT', 'XAN', 'SLVON',
@@ -75,10 +300,10 @@ function getIndexBaseSymbol(symbol = '') {
 
 function isIndexEligibleSymbol(symbol = '', ticker = {}) {
  const normalized = normalizeIndexSymbol(symbol);
- if (!normalized || (!normalized.endsWith('USD') && !normalized.endsWith('USDT'))) return false;
+ if (!normalized) return false;
  const base = getIndexBaseSymbol(normalized);
  if (!base || MARKET_INDEX_EXCLUDED_BASES.has(base) || /DOM$/.test(base)) return false;
- return Number(ticker?.usdVol24h || 0) > 0 && Number(ticker?.price || 0) > 0;
+ return Number(ticker?.usdVol24h || ticker?.volume || ticker?.turnover || 0) > 0 && Number(ticker?.price || ticker?.ltp || 0) > 0;
 }
 
 function isManuallyExcludedIndexSymbol(symbol = '', excludedSymbols = new Set()) {
@@ -90,6 +315,49 @@ function isManuallyExcludedIndexSymbol(symbol = '', excludedSymbols = new Set())
 function buildBenchmarkEligibleUniverse(tickerMap = {}) {
  return Object.entries(tickerMap)
  .filter(([sym, t]) => isIndexEligibleSymbol(sym, t));
+}
+
+function normalizeDhanIndexTapeKey(value = '') {
+ return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
+}
+
+function resolveDhanIndexTicker(tickerMap = {}, definition = {}) {
+ const direct = tickerMap[definition.symbol];
+ if (direct) return { symbol: definition.symbol, ticker: direct };
+ const entries = Object.entries(tickerMap || {});
+ const aliases = new Set((definition.aliases || [definition.symbol]).map(normalizeDhanIndexTapeKey));
+ const matched = entries.find(([symbol]) => aliases.has(normalizeDhanIndexTapeKey(symbol)));
+ return matched ? { symbol: matched[0], ticker: matched[1] } : null;
+}
+
+function buildDhanIndexQuoteTape(tickerMap = {}) {
+ return DHAN_SCAN_INDEX_TAPE_DEFINITIONS.map(definition => {
+  const resolved = resolveDhanIndexTicker(tickerMap, definition);
+  const ticker = resolved?.ticker || null;
+  const price = Number(ticker?.price || 0);
+  if (!(price > 0)) return null;
+  const prevClose = Number(ticker?.prevClose || 0);
+  const storedPointChange = Number(ticker?.pointChange ?? ticker?.netChange ?? 0);
+  const pointChange = Number.isFinite(storedPointChange) && Math.abs(storedPointChange) > 0.0001
+  ? storedPointChange
+  : (prevClose > 0 ? price - prevClose : 0);
+  const changeBasis = prevClose > 0 ? prevClose : (price - pointChange > 0 ? price - pointChange : 0);
+  const changePct = Number(ticker?.change24h || (changeBasis > 0 ? (pointChange / changeBasis) * 100 : 0));
+  return {
+   symbol: definition.symbol,
+   sourceSymbol: resolved.symbol,
+   label: definition.label,
+   shortLabel: definition.shortLabel,
+   price: roundIndexNumber(price, 2),
+   changePct: roundIndexNumber(changePct),
+   pointChange: roundIndexNumber(pointChange, 2),
+   prevClose: roundIndexNumber(prevClose, 2),
+   dayHigh: roundIndexNumber(Number(ticker?.dayHigh || 0), 2),
+   dayLow: roundIndexNumber(Number(ticker?.dayLow || 0), 2),
+   securityId: ticker?.securityId || ticker?.productId || '',
+   exchangeSegment: ticker?.exchangeSegment || 'IDX_I',
+  };
+ }).filter(Boolean);
 }
 
 function resolveBenchmarkCondition(value = 0) {
@@ -169,7 +437,7 @@ function calcInternalBenchmarkSuite(tickerMap = {}, prevMarketIndex = null) {
  const cf = buildBenchmarkSnapshot('CF', 'CF-style', 'Free-float proxy', cfConstituents, {
  selectionLabel: '95% liquidity coverage with retention buffer',
  coveragePct: +cfSelected.reduce((sum, item) => sum + (item.vol / totalUniverseVol) * 100, 0).toFixed(1),
- notes: 'Internal benchmark inspired by CF-style broad-cap and free-float weighting, using Delta liquidity and open-interest proxy data.',
+ notes: 'Internal benchmark using NSE/BSE liquidity and breadth proxy data.',
  });
 
  const spRanked = universe.filter(item => item.vol >= 500000);
@@ -200,7 +468,7 @@ function calcInternalBenchmarkSuite(tickerMap = {}, prevMarketIndex = null) {
  const sp = buildBenchmarkSnapshot('SP', 'S&P-style', 'Top 10 equal weight', spConstituents, {
  selectionLabel: 'Top 10 with retention buffer',
  coveragePct: +spSelected.reduce((sum, item) => sum + (item.vol / totalUniverseVol) * 100, 0).toFixed(1),
- notes: 'Internal benchmark inspired by S&P-style top-index construction, using buffered top-10 selection and equal weights on the Delta universe.',
+ notes: 'Internal benchmark using buffered top selection and equal weights on the selected universe.',
  });
 
  return { cf, sp };
@@ -397,7 +665,89 @@ function applyMarketIndexWindowChange(marketIndex = null, history = [], now = Da
  };
 }
 
-function buildFwdSentimentTape(constituents = [], prevOIData = {}) {
+function clampFundingCrowdingValue(value = 0, min = 0, max = 100) {
+ const numeric = Number(value);
+ if (!Number.isFinite(numeric)) return min;
+ return Math.max(min, Math.min(max, numeric));
+}
+
+function buildFundingCrowdingIndex(rows = [], prevOIData = {}, previousSentiment = {}) {
+ const total = Math.max(1, rows.length);
+ const fundingRows = rows.map(item => {
+ const fundingRate = Number(item.fundingRate || 0);
+ const absRate = Math.abs(fundingRate);
+ const volume = Math.max(0, Number(item.vol || 0));
+ const weight = clampFundingCrowdingValue(Math.sqrt(Math.max(volume, 1_000_000) / 1_000_000), 1, 12);
+ const prevOi = Number(prevOIData?.[item.sym] || 0);
+ const oi = Number(item.oi || 0);
+ const oiChangePct = prevOi > 0 && oi > 0 ? ((oi - prevOi) / prevOi) * 100 : 0;
+ const oiFactor = oiChangePct > 0
+ ? 1 + clampFundingCrowdingValue(oiChangePct / 40, 0, 0.35)
+ : 1 - clampFundingCrowdingValue(Math.abs(oiChangePct) / 50, 0, 0.20);
+ const magnitudeScore = clampFundingCrowdingValue((absRate / 0.12) * 100, 0, 100);
+ const score = clampFundingCrowdingValue(magnitudeScore * oiFactor, 0, 100);
+ return {
+ sym: item.sym,
+ fundingRate,
+ absRate,
+ direction: fundingRate > 0 ? 'longs_crowded' : fundingRate < 0 ? 'shorts_crowded' : 'flat',
+ weight,
+ score,
+ weightedScore: score * weight,
+ oiChangePct,
+ volume,
+ };
+ });
+ const totalWeight = fundingRows.reduce((sum, item) => sum + item.weight, 0) || total;
+ const fundingStressPct = fundingRows.filter(item => item.absRate >= 0.05).length / total * 100;
+ const extremeFundingPct = fundingRows.filter(item => item.absRate >= 0.10).length / total * 100;
+ const longPressure = fundingRows.filter(item => item.fundingRate > 0).reduce((sum, item) => sum + item.weightedScore, 0) / totalWeight;
+ const shortPressure = fundingRows.filter(item => item.fundingRate < 0).reduce((sum, item) => sum + item.weightedScore, 0) / totalWeight;
+ const rawPressure = fundingRows.reduce((sum, item) => sum + item.weightedScore, 0) / totalWeight;
+ const oiConfirmationPct = fundingRows.filter(item => item.absRate >= 0.03 && item.oiChangePct >= 5).length / total * 100;
+ const fundingCrowdingIndex = clampFundingCrowdingValue((rawPressure * 0.72) + (fundingStressPct * 0.16) + (extremeFundingPct * 0.08) + (oiConfirmationPct * 0.04), 0, 100);
+ const biasDelta = longPressure - shortPressure;
+ const bias = Math.abs(biasDelta) < 4
+ ? 'balanced'
+ : biasDelta > 0
+ ? 'longs_crowded'
+ : 'shorts_crowded';
+ const previousIndex = Number(previousSentiment?.fundingCrowdingIndex);
+ const shock = Number.isFinite(previousIndex) ? fundingCrowdingIndex - previousIndex : 0;
+ const topContributors = fundingRows
+ .filter(item => item.score >= 15 || item.absRate >= 0.03)
+ .sort((a, b) => b.weightedScore - a.weightedScore)
+ .slice(0, 5)
+ .map(item => ({
+ sym: item.sym,
+ fundingRate: roundIndexNumber(item.fundingRate, 4),
+ score: roundIndexNumber(item.score, 1),
+ oiChangePct: roundIndexNumber(item.oiChangePct, 1),
+ direction: item.direction,
+ }));
+ return {
+ fundingStressPct: roundIndexNumber(fundingStressPct, 1),
+ fundingCrowdingIndex: roundIndexNumber(fundingCrowdingIndex, 1),
+ fundingLongPressure: roundIndexNumber(longPressure, 1),
+ fundingShortPressure: roundIndexNumber(shortPressure, 1),
+ fundingCrowdingBias: bias,
+ fundingCrowdingShock: roundIndexNumber(shock, 1),
+ fundingOiConfirmationPct: roundIndexNumber(oiConfirmationPct, 1),
+ extremeFundingPct: roundIndexNumber(extremeFundingPct, 1),
+ topFundingCrowding: topContributors,
+ };
+}
+
+function fundingCrowdingLabel(value = 0) {
+ const score = Number(value || 0);
+ if (score >= 75) return 'Extreme';
+ if (score >= 60) return 'Squeeze risk';
+ if (score >= 40) return 'Crowded';
+ if (score >= 20) return 'Watch';
+ return 'Calm';
+}
+
+function buildFwdSentimentTape(constituents = [], prevOIData = {}, previousSentiment = {}) {
  const rows = (Array.isArray(constituents) ? constituents : []).filter(item => Number(item?.price || 0) > 0);
  if (!rows.length) {
  return {
@@ -410,6 +760,14 @@ function buildFwdSentimentTape(constituents = [], prevOIData = {}) {
  breadthPct: 50,
  advancingVolumePct: 50,
  fundingStressPct: 0,
+ fundingCrowdingIndex: 0,
+ fundingCrowdingBias: 'balanced',
+ fundingCrowdingShock: 0,
+ fundingLongPressure: 0,
+ fundingShortPressure: 0,
+ fundingOiConfirmationPct: 0,
+ extremeFundingPct: 0,
+ topFundingCrowding: [],
  oiExpansionPct: 0,
  drivers: ['No eligible live constituents yet'],
  };
@@ -423,7 +781,7 @@ function buildFwdSentimentTape(constituents = [], prevOIData = {}) {
  const advancingVolumePct = advancingRows.reduce((sum, item) => sum + Number(item.vol || 0), 0) / totalVolume * 100;
  const btc = rows.find(item => /^(BTC|XBT)/.test(String(item.sym || '')));
  const eth = rows.find(item => /^ETH/.test(String(item.sym || '')));
- const fundingStressPct = rows.filter(item => Math.abs(Number(item.fundingRate || 0)) >= 0.05).length / total * 100;
+ const fundingCrowding = buildFundingCrowdingIndex(rows, prevOIData, previousSentiment);
  const oiExpansionRows = rows.filter(item => {
  const prev = Number(prevOIData?.[item.sym] || 0);
  const oi = Number(item.oi || 0);
@@ -441,7 +799,7 @@ function buildFwdSentimentTape(constituents = [], prevOIData = {}) {
  + ((advancingVolumePct - 50) * 0.35)
  + leadershipBonus
  + (oiExpansionPct * 0.12)
- - (fundingStressPct * 0.2)
+ - (fundingCrowding.fundingCrowdingIndex * 0.22)
  ));
  const condition = resolveBenchmarkCondition(value);
  const label = score >= 35 ? 'Risk On'
@@ -452,8 +810,8 @@ function buildFwdSentimentTape(constituents = [], prevOIData = {}) {
  const drivers = [
  `${advancingRows.length}/${total} constituents advancing`,
  `${roundIndexNumber(advancingVolumePct, 1)}% of basket volume in advancing names`,
- btc || eth ? `BTC ${roundIndexNumber(Number(btc?.change || 0))}% / ETH ${roundIndexNumber(Number(eth?.change || 0))}% leadership` : 'BTC/ETH leadership unavailable',
- fundingStressPct > 0 ? `${roundIndexNumber(fundingStressPct, 1)}% funding stress` : 'Funding stress contained',
+ btc || eth ? `Large-cap proxy ${roundIndexNumber(Number(btc?.change || 0))}% / ${roundIndexNumber(Number(eth?.change || 0))}%` : 'Large-cap leadership proxy unavailable',
+ `${fundingCrowdingLabel(fundingCrowding.fundingCrowdingIndex)} activity crowding ${roundIndexNumber(fundingCrowding.fundingCrowdingIndex, 1)}/100`,
  oiExpansionPct > 0 ? `${roundIndexNumber(oiExpansionPct, 1)}% OI expansion` : 'No broad OI expansion',
  ].slice(0, 5);
  return {
@@ -465,7 +823,7 @@ function buildFwdSentimentTape(constituents = [], prevOIData = {}) {
  declining: decliningRows.length,
  breadthPct: roundIndexNumber(breadthPct, 1),
  advancingVolumePct: roundIndexNumber(advancingVolumePct, 1),
- fundingStressPct: roundIndexNumber(fundingStressPct, 1),
+ ...fundingCrowding,
  oiExpansionPct: roundIndexNumber(oiExpansionPct, 1),
  btcChange: roundIndexNumber(Number(btc?.change || 0)),
  ethChange: roundIndexNumber(Number(eth?.change || 0)),
@@ -474,105 +832,95 @@ function buildFwdSentimentTape(constituents = [], prevOIData = {}) {
 }
 
 function calcMarketIndex(tickerMap, prevMarketIndex = null, marketIndexSettings = {}, prevOIData = {}) {
- const indexSettings = scanSanitizeMarketIndexSettings(marketIndexSettings || {});
- const excludedSymbols = new Set((indexSettings.excludedSymbols || []).map(symbol => String(symbol || '').toUpperCase()));
- const allTickers = buildBenchmarkEligibleUniverse(tickerMap);
- const eligibleTickers = allTickers.filter(([sym]) => !isManuallyExcludedIndexSymbol(sym, excludedSymbols));
- dlog(`FWD-100: ${eligibleTickers.length} eligible from ${Object.keys(tickerMap).length} (excluded ${excludedSymbols.size})`);
- const configuredMaxConstituents = Math.max(1, Number(indexSettings.maxConstituents || 100));
- const settingsHash = buildMarketIndexSettingsHash(indexSettings);
+ const indexTape = buildDhanIndexQuoteTape(tickerMap);
+ const niftyQuote = indexTape.find(item => item.symbol === 'NIFTY') || null;
+ const nifty = tickerMap.NIFTY || tickerMap['NIFTY 50'] || null;
+ const fnoRows = Object.entries(tickerMap || {})
+ .filter(([sym, ticker]) => !indexTape.some(item => item.sourceSymbol === sym || item.symbol === sym) && isIndexEligibleSymbol(sym, ticker))
+ .map(([sym, ticker], index) => ({
+  sym,
+  rank: index + 1,
+  units: 1,
+  weight: 0,
+  price: Number(ticker?.price || 0),
+  lastPrice: Number(ticker?.price || 0),
+  vol: Number(ticker?.usdVol24h || ticker?.volume24h || 0),
+  change: Number(ticker?.change24h || 0),
+  fundingRate: 0,
+  oi: Number(ticker?.oi || 0),
+  stale: false,
+ }))
+ .filter(row => row.price > 0)
+ .sort((a, b) => b.vol - a.vol);
+ if (!niftyQuote?.price && !nifty?.price && !fnoRows.length) { dlog('Index tape: unavailable'); return null; }
+ const composite = Number(niftyQuote?.price || nifty?.price || prevMarketIndex?.composite || MARKET_INDEX_BASE_VALUE);
+ const previousComposite = Number(prevMarketIndex?.composite || composite);
+ const indexChangePct = Number(niftyQuote?.changePct ?? nifty?.change24h ?? (previousComposite > 0 ? ((composite - previousComposite) / previousComposite) * 100 : 0));
+ const selected = fnoRows.slice(0, 250);
+ const totalVol = selected.reduce((sum, item) => sum + Number(item.vol || 0), 0);
+ const equalWeight = selected.length ? 100 / selected.length : 0;
+ const liveConstituents = selected.map((item, index) => ({ ...item, rank: index + 1, weight: equalWeight }));
+ const sentiment = buildFwdSentimentTape(liveConstituents, prevOIData, prevMarketIndex?.sentiment || {});
  const now = Date.now();
- const prevState = prevMarketIndex?.indexState || null;
- const prevRebuildNonce = Number(prevState?.rebuildNonce || 0);
- const rebuildNonce = Number(indexSettings.rebuildNonce || 0);
- const rebalanceMs = Math.max(1, Number(indexSettings.rebalanceDays || MARKET_INDEX_REBALANCE_DEFAULT_DAYS)) * 24 * 60 * 60 * 1000;
- const settingsChanged = !!prevState?.settingsHash && prevState.settingsHash !== settingsHash;
- const manualRebuild = rebuildNonce > prevRebuildNonce;
- const scheduledRebalance = !prevState?.lastRebalancedAt || (now - Number(prevState.lastRebalancedAt || 0)) >= rebalanceMs;
- const selected = selectMarketIndexConstituents(eligibleTickers, prevState, configuredMaxConstituents);
- if (!selected.length) { dlog('FWD-100: null'); return null; }
- const reason = !prevState ? 'initial'
- : manualRebuild ? 'manual'
- : settingsChanged ? 'settings'
- : scheduledRebalance ? 'weekly'
- : 'carry';
- const shouldRebalance = reason !== 'carry';
- const previousComposite = Number(prevState?.lastComposite || prevMarketIndex?.composite || MARKET_INDEX_BASE_VALUE);
- const oldStateCalc = prevState ? calculateMarketIndexCompositeFromState(prevState, tickerMap) : null;
- const currentCompositeBeforeRebalance = oldStateCalc?.composite || previousComposite || MARKET_INDEX_BASE_VALUE;
- const state = shouldRebalance
- ? buildRebalancedMarketIndexState(selected, currentCompositeBeforeRebalance, now, { settingsHash, reason, rebuildNonce })
- : prevState;
- const calculated = calculateMarketIndexCompositeFromState(state, tickerMap);
- const indexChangePct = previousComposite > 0
- ? ((calculated.composite - previousComposite) / previousComposite) * 100
- : 0;
  const updatedState = {
- ...state,
- composite: calculated.composite,
- lastComposite: calculated.composite,
- lastPrices: calculated.liveConstituents.reduce((acc, item) => {
- acc[item.sym] = item.price;
- return acc;
- }, {}),
- constituents: calculated.liveConstituents.map(item => ({
- sym: item.sym,
- rank: item.rank,
- units: item.units,
- weight: item.weight,
- price: item.price,
- lastPrice: item.price,
- vol: item.vol,
- })),
- settingsHash,
- rebuildNonce,
+  baseValue: composite,
+  divisor: 1,
+  composite,
+  lastComposite: composite,
+  lastPrices: { NIFTY: composite },
+  constituents: [{ sym: 'NIFTY', rank: 1, units: 1, weight: 100, price: composite, lastPrice: composite, vol: Number(nifty?.usdVol24h || 0) }],
+  settingsHash: 'NIFTY50',
+  lastRebalancedAt: now,
+  lastRebalanceReason: 'dhan_benchmark',
+  rebuildNonce: 0,
  };
- const sentiment = buildFwdSentimentTape(calculated.liveConstituents, prevOIData);
- const totalVol = calculated.totalVolumeUSD;
- const benchmarks = calcInternalBenchmarkSuite(tickerMap, prevMarketIndex);
- dlog(`FWD-100: index ${calculated.composite} (${roundIndexNumber(indexChangePct)}%) | sentiment ${sentiment.value}% ${sentiment.condition} | ${reason}`);
+ const breadthConstituents = liveConstituents.map(item => ({
+  sym: item.sym,
+  change: roundIndexNumber(item.change),
+  weight: roundIndexNumber(item.weight),
+  vol: roundIndexNumber((item.vol || 0) / 1e6, 1),
+  price: item.price || 0,
+  fundingRate: item.fundingRate || 0,
+  oi: item.oi || 0,
+  units: item.units,
+  stale: item.stale,
+ }));
+ dlog(`Indices: NIFTY ${roundIndexNumber(composite)} (${roundIndexNumber(indexChangePct)}%) | BANK ${roundIndexNumber(indexTape.find(item => item.symbol === 'BANKNIFTY')?.changePct || 0)}% | IT ${roundIndexNumber(indexTape.find(item => item.symbol === 'NIFTYIT')?.changePct || 0)}% | F&O breadth ${sentiment.breadthPct}% ${sentiment.condition}`);
  return {
- value: sentiment.value,
- condition: sentiment.condition,
- composite: calculated.composite,
- indexValue: calculated.composite,
- indexChangePct: roundIndexNumber(indexChangePct),
- indexChangePoints: roundIndexNumber(calculated.composite - previousComposite),
- previousComposite: roundIndexNumber(previousComposite),
- scanChangePct: roundIndexNumber(indexChangePct),
- scanChangePoints: roundIndexNumber(calculated.composite - previousComposite),
- scanPreviousComposite: roundIndexNumber(previousComposite),
- indexChangeBasis: 'since_previous_scan',
+  value: sentiment.value,
+  condition: sentiment.condition,
+  composite,
+  indexValue: composite,
+  indexChangePct: roundIndexNumber(indexChangePct),
+  indexChangePoints: roundIndexNumber(composite - previousComposite),
+  previousComposite: roundIndexNumber(previousComposite),
+  scanChangePct: roundIndexNumber(indexChangePct),
+  scanChangePoints: roundIndexNumber(composite - previousComposite),
+  scanPreviousComposite: roundIndexNumber(previousComposite),
+  indexChangeBasis: 'since_previous_scan',
  indexChangeWindowLabel: 'scan',
  indexChangeWindowMs: 0,
  indexChangeBaselineTs: 0,
  indexChangeBaselineComposite: 0,
- sentiment,
- totalVolumeUSD: totalVol, ts: Date.now(),
- method: 'Cumulative equal-weight index',
- selectionLabel: calculated.liveConstituents.length < configuredMaxConstituents
- ? `Top ${calculated.liveConstituents.length} liquid coins (max ${configuredMaxConstituents})`
- : `Top ${calculated.liveConstituents.length} liquid coins`,
- configuredMaxConstituents,
- excludedSymbols: Array.from(excludedSymbols),
- indexState: updatedState,
- rebalanced: shouldRebalance,
- rebalanceReason: reason,
- lastRebalancedAt: updatedState.lastRebalancedAt,
- nextRebalanceAt: Number(updatedState.lastRebalancedAt || now) + rebalanceMs,
- missingConstituents: calculated.missing,
- benchmarks,
- topCoins: calculated.liveConstituents.map(item => ({
- sym: item.sym,
- change: roundIndexNumber(item.change),
- weight: roundIndexNumber(item.weight),
- vol: roundIndexNumber((item.vol || 0) / 1e6, 1),
- price: item.price || 0,
- fundingRate: item.fundingRate || 0,
- oi: item.oi || 0,
- units: item.units,
- stale: item.stale,
- })),
+  sentiment,
+  totalVolumeUSD: totalVol, ts: Date.now(),
+  method: 'FWD Index benchmark',
+  selectionLabel: `FWD Index tape with ${liveConstituents.length} F&O stock breadth rows`,
+  configuredMaxConstituents: liveConstituents.length,
+  excludedSymbols: [],
+  indexState: updatedState,
+  rebalanced: false,
+  rebalanceReason: 'dhan_benchmark',
+  lastRebalancedAt: updatedState.lastRebalancedAt,
+  nextRebalanceAt: Number(updatedState.lastRebalancedAt || now) + (24 * 60 * 60 * 1000),
+  missingConstituents: (niftyQuote?.price || nifty?.price) ? [] : ['NIFTY'],
+  benchmarks: Object.fromEntries(indexTape.map(item => [item.symbol, item])),
+  indexTape,
+  benchmarkSymbol: 'NIFTY',
+  benchmarkLabel: 'Nifty 50',
+  fnoConstituents: breadthConstituents,
+  topStocks: breadthConstituents,
+  topCoins: breadthConstituents,
  };
 }
 
@@ -581,7 +929,7 @@ function calcMarketIndex(tickerMap, prevMarketIndex = null, marketIndexSettings 
 // Returns one of: TRENDING, HIGH_VOL, LOW_VOL, CHOPPY, UNKNOWN.
 
 // -- Liquidation Risk --------------------------------------------
-// Note: Delta public channels do not expose a dedicated market-wide
+// Note: Dhan data channels do not expose a dedicated market-wide
 // liquidation stream. This is an inference proxy using crowded funding
 // + rising OI to approximate liquidation-cluster risk.
 function liquidationRisk(ticker, prevOI) {
@@ -604,7 +952,7 @@ function liquidationRisk(ticker, prevOI) {
 function resultsToCSV(results) {
  const headers = [
  'Symbol','Sector','Score','Direction','MTF','Price','Change24h%',
- 'Volume24h_USD','OI','FundingRate%','Entry','SL','TP1','TP2','RR',
+  'Turnover24h_INR','OI','ActivityBias','Entry','SL','TP1','TP2','RR',
  'RSI','VWAP','MarketStructure','Session','Reasons','Timestamp',
  ];
  const rows = results.map(r => [
@@ -625,10 +973,12 @@ function resultsToCSV(results) {
 // ================================================================
 function defaultStrategy() {
  return {
- ema1: 9, ema2: 30, ema3: 100, obvPeriod: 50,
- tf1: '1d', tf2: '15m',
- minScore: 15, alertScore: 65, maxCoins: 500, minVolume: 0,
- fundingMinVolume: FUNDING_MIN_VOLUME_DEFAULT,
+  ema1: 9, ema2: 30, ema3: 100, obvPeriod: 50,
+  tf1: '1d', tf2: '15m',
+  minScore: 15, alertScore: 65, maxCoins: 500, minVolume: 0,
+  scanUniverse: SCANNER_UNIVERSE_DEFAULT,
+  scanMode: SCANNER_MODE_DEFAULT,
+  fundingMinVolume: FUNDING_MIN_VOLUME_DEFAULT,
  notify: true, soundAlert: true,
  autoScan: false, autoScanInterval: AUTO_SCAN_INTERVAL_DEFAULT,
  // Sound customization - NEW v14
@@ -731,6 +1081,30 @@ async function markScanStopped(status = 'Ready - Click SCAN NOW', progress = 0) 
  });
 }
 
+function isScanStopRequested() {
+ return globalThis.scanAbortRequested === true;
+}
+
+async function throwIfScanStopRequested() {
+ if (!isScanStopRequested()) return;
+ await markScanStopped('Scan stopped by user', 0);
+ throw new Error('Scan stopped by user');
+}
+
+async function setScanLiveFeedPaused(paused = true) {
+ if (typeof globalThis.dhanNative !== 'function') return null;
+ const action = paused ? 'live_feed_pause' : 'live_feed_resume';
+ try {
+  const response = await globalThis.dhanNative(action, { reason: 'scanner' });
+  if (response?.ok && paused) dlog(`Live feed paused for scan (${response.instrumentCount || 0} subscription(s) preserved)`);
+  if (response?.ok && !paused) dlog(`Live feed resumed after scan (${response.instrumentCount || 0} subscription(s))`);
+  return response;
+ } catch (error) {
+  dlog(`Live feed ${paused ? 'pause' : 'resume'} skipped: ${error?.message || error}`);
+  return null;
+ }
+}
+
 async function savePartialScanCheckpoint(scanContext, details = {}) {
  if (!scanContext) return null;
  const candleSymbols = scanContext.candles instanceof Map ? scanContext.candles.size : 0;
@@ -771,53 +1145,134 @@ async function savePartialScanCheckpoint(scanContext, details = {}) {
 // RUN SCAN - v14
 // ================================================================
 async function runScan() {
- const scanStartedAt = performanceNow();
+  globalThis.scanAbortRequested = false;
+  globalThis.dhanCandleFetchStats = { cacheHits: 0, fallbackCacheHits: 0, apiFetches: 0, apiRows: 0, startedAt: Date.now() };
+  const scanStartedAt = performanceNow();
+  let liveFeedPausedForScan = false;
  const scanContext = globalThis.FWDTradeDeskScanContext?.create?.({ startedAt: Date.now() }) || null;
  dlog('=== v14 SCAN START ===');
  await chrome.storage.local.set({
  alerts: [],
  scanActive: true,
  scanHeartbeat: Date.now(),
- scanStatus: 'Loading tickers...',
+ scanStatus: 'Preparing scanner...',
  scanProgress: 2,
  });
  await detectAPI(true);
  dlog(`API: ${BASE} (${detectedRegion})`);
+ const pauseResponse = await setScanLiveFeedPaused(true);
+ liveFeedPausedForScan = !!pauseResponse?.ok;
 
  const storeData = await new Promise(r => chrome.storage.local.get(['strategy', 'watchlist', 'manualWatchlist', 'signalHistoryStore', 'marketIndex', 'autoTradeSettings'], r));
  const strat = {
- ...defaultStrategy(),
- ...(storeData.strategy || {}),
- marketIndexSettings: scanSanitizeMarketIndexSettings(storeData.strategy?.marketIndexSettings || {}),
- };
- strat.alertTone = sanitizeAlertTone(strat.alertTone);
- const manualWatchlist = mergeWatchlists(storeData.manualWatchlist || storeData.watchlist || []);
- const watchlist = new Set(manualWatchlist);
- const telegramCfg = await getStoredTelegramConfig();
- dlog(`Telegram alerts: ${telegramCfg.enabled ? `enabled (score>=${telegramCfg.minScore})` : 'disabled (enable in HOOKS)'}`);
- let minScore = strat.minScore || 15;
- const maxCoins = strat.maxCoins || 500;
+  ...defaultStrategy(),
+  ...(storeData.strategy || {}),
+  marketIndexSettings: scanSanitizeMarketIndexSettings(storeData.strategy?.marketIndexSettings || {}),
+  };
+  strat.alertTone = sanitizeAlertTone(strat.alertTone);
+   strat.tf1 = sanitizeScanTimeframe(strat.tf1, '1d');
+   strat.tf2 = sanitizeScanTimeframe(strat.tf2, '15m');
+   strat.scanUniverse = sanitizeScanUniverseId(strat.scanUniverse || SCANNER_UNIVERSE_DEFAULT);
+   strat.scanMode = sanitizeScanMode(strat.scanMode || SCANNER_MODE_DEFAULT);
+   if (strat.scanUniverse === 'all_nse' && strat.scanMode === 'penny_awakening') {
+    strat.scanMode = 'standard';
+   }
+   const manualWatchlist = mergeWatchlists(storeData.manualWatchlist || storeData.watchlist || []);
+   const watchlist = new Set(manualWatchlist);
+  const telegramCfg = await getStoredTelegramConfig();
+  dlog(`Telegram alerts: ${telegramCfg.enabled ? `enabled (score>=${telegramCfg.minScore})` : 'disabled (enable in HOOKS)'}`);
+  let minScore = strat.minScore || 15;
+   const configuredMaxCoins = Number(strat.maxCoins || 0);
+   const maxCoins = resolveScanLimitForUniverse(strat.scanUniverse, configuredMaxCoins);
+   const deepScanLimit = resolveDeepScanLimitForStrategy(strat, maxCoins);
+   if (configuredMaxCoins <= 10) {
+    strat.maxCoins = maxCoins;
+   chrome.storage.local.set({ strategy: strat }).catch(() => {});
+   dlog(`Strategy max scan symbols raised to ${maxCoins} for ${strat.scanUniverse}`);
+  }
  const minVol = strat.minVolume || 0;
  const fundingMinVolume = sanitizeFundingMinVolume(strat.fundingMinVolume);
  strat.fundingMinVolume = fundingMinVolume;
  const fundingDecisionThresholdPct = Math.max(0, Number(storeData.autoTradeSettings?.maxAdverseFundingRatePct || 0.05));
 
- const tickerMap = await fetchAllTickers();
+  const universeLabelForStatus = getScanUniverseStatusLabel(strat.scanUniverse);
+  const universeRequest = { universe: strat.scanUniverse, limit: Math.max(maxCoins, 50), subscribeLiveFeed: false };
+  await chrome.storage.local.set({
+   scanStatus: `Preparing ${universeLabelForStatus} scan (${maxCoins} symbols)...`,
+   scanProgress: 3,
+   scanHeartbeat: Date.now(),
+   scanResults: [],
+   scannedStocks: 0,
+   totalStocks: maxCoins,
+   scannerUniverseMeta: {
+    universe: strat.scanUniverse,
+    label: universeLabelForStatus,
+     requested: maxCoins,
+     deepScanLimit,
+     scanMode: strat.scanMode,
+    scanned: 0,
+    count: 0,
+    returned: 0,
+    fetchedAt: Date.now(),
+   },
+  });
+  let tickerMap = {};
+  try {
+   tickerMap = await fetchAllTickers(universeRequest);
+  } catch (error) {
+   const message = String(error?.message || error || 'Market-data load failed.');
+   const rateLimited = error?.isRateLimit || Number(error?.status || 0) === 429 || /too many|rate.?limit|blocked/i.test(message);
+   const status = rateLimited
+    ? `Scan stopped - data rate limit while loading ${strat.scanUniverse}; wait 2-5 minutes or use F&O/Nifty 500`
+    : `Scan stopped - market-data load failed: ${message.slice(0, 120)}`;
+   await markScanStopped(status, 0);
+   dlog(status);
+   throw error;
+  }
+  await throwIfScanStopRequested();
+  if (!Object.keys(tickerMap || {}).length) {
+   const status = `Scan stopped - no quote rows for ${strat.scanUniverse}; try F&O/Nifty 500 or retry after API cooldown`;
+   await markScanStopped(status, 0);
+   dlog(status);
+   throw new Error(status);
+  }
+  const universeMeta = globalThis.dhanLastUniverseMeta || { universe: strat.scanUniverse, label: universeLabelForStatus, returned: Object.keys(tickerMap || {}).length };
+   universeMeta.requested = maxCoins;
+   universeMeta.deepScanLimit = deepScanLimit;
+   universeMeta.scanMode = strat.scanMode;
  if (scanContext) scanContext.tickerMap = tickerMap;
+ await throwIfScanStopRequested();
 
- await chrome.storage.local.set({ scanStatus: 'Loading products...', scanProgress: 4, scanHeartbeat: Date.now() });
+ await chrome.storage.local.set({
+  scanStatus: `Loaded ${Object.keys(tickerMap || {}).length} quotes for ${universeMeta.label || 'market'}; preparing scan...`,
+  scanProgress: 4,
+  scanHeartbeat: Date.now(),
+  scannerUniverseMeta: {
+   universe: universeMeta.universe || strat.scanUniverse,
+   label: universeMeta.label || strat.scanUniverse,
+    requested: maxCoins,
+    deepScanLimit,
+    scanMode: strat.scanMode,
+   count: Number(universeMeta.count || 0),
+   returned: Number(universeMeta.returned || Object.keys(tickerMap || {}).length || 0),
+   scanned: 0,
+   fetchedAt: universeMeta.fetchedAt || Date.now(),
+  },
+ });
  fetchDeltaRateLimitQuota()
  .then(quota => {
-  if (quota) {
-   chrome.storage.local.set({ deltaRateLimitQuota: quota }).catch(() => {});
-   dlog(`Delta quota: current=${quota.currentQuota} resetMs=${quota.remainingMs}`);
-  }
- })
- .catch(error => dlog(`Delta quota check failed: ${error?.message || error}`));
- let products = Object.keys(tickerMap).map(sym => {
+   if (quota) {
+    chrome.storage.local.set({ deltaRateLimitQuota: quota }).catch(() => {});
+    dlog(`Market API quota: current=${quota.currentQuota} resetMs=${quota.remainingMs}`);
+   }
+  })
+ .catch(error => dlog(`Market quota check failed: ${error?.message || error}`));
+  let products = Object.keys(tickerMap).map(sym => {
  const instrumentDescription = scanDescribeDeltaInstrument(sym);
- const assetInfo = scanClassifyDeltaInstrument(sym);
- return {
+  const assetInfo = scanClassifyDeltaInstrument(sym);
+  const ticker = tickerMap[sym] || {};
+  const dhanInstrument = ticker.dhanInstrument || null;
+  return {
  symbol: sym,
  name: instrumentDescription,
  description: instrumentDescription,
@@ -826,14 +1281,18 @@ async function runScan() {
  assetClass: assetInfo.assetClass,
  assetLabel: assetInfo.assetLabel,
  assetBadge: assetInfo.assetBadge,
- assetInfo: assetInfo.info,
- underlyingSymbol: assetInfo.underlyingSymbol,
- underlyingName: assetInfo.underlyingName,
- };
- });
- try {
- const apiProducts = await fetchProducts();
- if (apiProducts.length > 0) {
+  assetInfo: assetInfo.info,
+  underlyingSymbol: assetInfo.underlyingSymbol,
+  underlyingName: assetInfo.underlyingName,
+  securityId: ticker.securityId || dhanInstrument?.securityId || '',
+  exchangeSegment: ticker.exchangeSegment || dhanInstrument?.exchangeSegment || '',
+  contractType: ticker.contractType || dhanInstrument?.instrument || '',
+  dhanInstrument,
+  };
+  });
+  try {
+  const apiProducts = await fetchProducts(universeRequest);
+  if (apiProducts.length > 0) {
  const apiSet = new Set(apiProducts.map(p => p.symbol));
  products = [...apiProducts, ...products.filter(p => !apiSet.has(p.symbol))];
  const productIntervalMap = new Map(apiProducts.map(p => [p.symbol, Number(p.fundingIntervalSeconds || 0)]));
@@ -842,8 +1301,21 @@ async function runScan() {
  if (intervalSeconds > 0) ticker.fundingIntervalSeconds = intervalSeconds;
  });
  }
- } catch (e) { dlog(`Products err: ${e.message}`); }
- if (scanContext) scanContext.products = products;
+  } catch (e) { dlog(`Products err: ${e.message}`); }
+  if (scanContext) scanContext.products = products;
+  await chrome.storage.local.set({
+  scannerUniverseMeta: {
+   universe: universeMeta.universe || strat.scanUniverse,
+   label: universeMeta.label || strat.scanUniverse,
+   requested: maxCoins,
+   deepScanLimit,
+   scanMode: strat.scanMode,
+   count: Number(universeMeta.count || products.length || 0),
+   returned: Number(universeMeta.returned || Object.keys(tickerMap || {}).length || 0),
+   fetchedAt: universeMeta.fetchedAt || Date.now(),
+  },
+  scannerUniverseCatalog: universeMeta.catalog || null,
+  });
 
  // Previous OI
  const prevOIData = (await new Promise(r => chrome.storage.local.get('prevOI', r))).prevOI || {};
@@ -865,6 +1337,16 @@ async function runScan() {
  : (histData.marketIndexHistoryMigration || null);
  const indexHistory = hasLegacyHistory ? [] : storedHistory;
  marketIndex = applyMarketIndexWindowChange(marketIndex, indexHistory, Date.now());
+ const fnoConstituents = Array.isArray(marketIndex.fnoConstituents)
+ ? marketIndex.fnoConstituents
+ : (Array.isArray(marketIndex.topStocks) ? marketIndex.topStocks : (Array.isArray(marketIndex.topCoins) ? marketIndex.topCoins : []));
+ const indexTopCount = fnoConstituents.length;
+ const indexAdvancing = fnoConstituents.filter(stock => Number(stock?.change || 0) > 0).length;
+ const indexDeclining = fnoConstituents.filter(stock => Number(stock?.change || 0) < 0).length;
+ const indexBreadthPct = Number.isFinite(Number(marketIndex.sentiment?.breadthPct))
+ ? Number(marketIndex.sentiment.breadthPct)
+ : (indexTopCount > 0 ? (indexAdvancing / indexTopCount) * 100 : 50);
+ const indexAdvanceDeclineRatio = indexAdvancing / Math.max(1, indexDeclining);
  indexHistory.push({
  schemaVersion: MARKET_INDEX_HISTORY_SCHEMA_VERSION,
  composite: marketIndex.composite,
@@ -883,11 +1365,23 @@ async function runScan() {
  sentimentScore: marketIndex.sentiment?.score ?? 0,
  sentimentLabel: marketIndex.sentiment?.label || '',
  sentimentDrivers: marketIndex.sentiment?.drivers || [],
+ breadthPct: roundIndexNumber(indexBreadthPct, 1),
+ advancingVolumePct: roundIndexNumber(Number(marketIndex.sentiment?.advancingVolumePct ?? indexBreadthPct), 1),
+ fundingStressPct: roundIndexNumber(Number(marketIndex.sentiment?.fundingStressPct ?? 0), 1),
+ fundingCrowdingIndex: roundIndexNumber(Number(marketIndex.sentiment?.fundingCrowdingIndex ?? marketIndex.sentiment?.fundingStressPct ?? 0), 1),
+ fundingCrowdingBias: marketIndex.sentiment?.fundingCrowdingBias || 'balanced',
+ fundingCrowdingShock: roundIndexNumber(Number(marketIndex.sentiment?.fundingCrowdingShock ?? 0), 1),
+ fundingLongPressure: roundIndexNumber(Number(marketIndex.sentiment?.fundingLongPressure ?? 0), 1),
+ fundingShortPressure: roundIndexNumber(Number(marketIndex.sentiment?.fundingShortPressure ?? 0), 1),
+ fundingOiConfirmationPct: roundIndexNumber(Number(marketIndex.sentiment?.fundingOiConfirmationPct ?? 0), 1),
+ extremeFundingPct: roundIndexNumber(Number(marketIndex.sentiment?.extremeFundingPct ?? 0), 1),
+ topFundingCrowding: marketIndex.sentiment?.topFundingCrowding || [],
+ advanceDeclineRatio: roundIndexNumber(indexAdvanceDeclineRatio, 2),
  condition: marketIndex.condition,
  totalVolumeUSD: marketIndex.totalVolumeUSD,
- topCount: Array.isArray(marketIndex.topCoins) ? marketIndex.topCoins.length : 0,
- advancing: Array.isArray(marketIndex.topCoins) ? marketIndex.topCoins.filter(coin => Number(coin?.change || 0) > 0).length : 0,
- declining: Array.isArray(marketIndex.topCoins) ? marketIndex.topCoins.filter(coin => Number(coin?.change || 0) < 0).length : 0,
+ topCount: indexTopCount,
+ advancing: indexAdvancing,
+ declining: indexDeclining,
  rebalanced: !!marketIndex.rebalanced,
  rebalanceReason: marketIndex.rebalanceReason || '',
  ts: marketIndex.ts,
@@ -901,7 +1395,7 @@ async function runScan() {
  marketIndex.thresholds = globalThis.FWDTradeDeskShared.getRegimeThresholds(regime);
  marketIndex.thresholdSummary = formatThresholdSummary(marketIndex.thresholds);
  await chrome.storage.local.set({ marketIndex, marketIndexHistory: indexHistory, marketIndexHistoryMigration: migration });
- dlog(`FWD-100: index=${marketIndex.composite} move=${marketIndex.indexChangePct}% | sentiment=${marketIndex.value}% ${marketIndex.condition} | regime=${regime}`);
+ dlog(`NIFTY 50: index=${marketIndex.composite} move=${marketIndex.indexChangePct}% | breadth=${marketIndex.value}% ${marketIndex.condition} | regime=${regime}`);
 
  // Apply regime-aware thresholds to strategy
  const activeThresholds = marketIndex.thresholds;
@@ -913,7 +1407,8 @@ async function runScan() {
  minScore = strat.minScore;
  }
 
- // Funding heatmap
+ // Activity heatmap. Legacy storage keys are retained so existing panes and
+ // backups keep loading, but Dhan rows are treated as turnover/OI activity.
  const fundingRates = {}, fundingHeatmap = [];
  Object.entries(tickerMap).forEach(([sym, t]) => {
  fundingRates[sym] = t.fundingRate ?? 0;
@@ -927,44 +1422,43 @@ async function runScan() {
  });
  fundingHeatmap.sort((a, b) => Math.abs(b.fundingRate) - Math.abs(a.fundingRate));
 
- // Funding Arbitrage - NEW v14
+ // Activity opportunities. Legacy key retained for compatibility.
  const fundingArb = fundingArbitrage(tickerMap, fundingMinVolume);
 
  await chrome.storage.local.set({ fundingRates, fundingHeatmap, fundingArbitrage: fundingArb });
  if (scanContext) scanContext.fundingHeatmap = fundingHeatmap;
 
- // BTC reference
- await chrome.storage.local.set({ scanStatus: 'Loading BTC ref...', scanProgress: 6, scanHeartbeat: Date.now() });
- let btcRef = null;
- for (const s of ['BTCUSD', 'BTCUSDT', 'XBTUSD']) {
- btcRef = await fetchCandles(s, strat.tf1 || '1d', 100, CLOSED_CANDLE_FETCH_OPTIONS);
- if (scanContext && Array.isArray(btcRef) && btcRef.length) {
- globalThis.FWDTradeDeskScanContext?.recordCandles?.(scanContext, s, strat.tf1 || '1d', btcRef);
+ // NSE/BSE benchmark reference
+ await chrome.storage.local.set({ scanStatus: 'Loading Nifty 50 benchmark reference...', scanProgress: 6, scanHeartbeat: Date.now() });
+ let benchmarkRef = null;
+ let benchmarkSymbol = '';
+ for (const s of ['NIFTY', 'SENSEX', 'BANKNIFTY', 'FINNIFTY']) {
+ benchmarkRef = await fetchCandles(s, strat.tf1 || '1d', 100, CLOSED_CANDLE_FETCH_OPTIONS);
+ if (scanContext && Array.isArray(benchmarkRef) && benchmarkRef.length) {
+ globalThis.FWDTradeDeskScanContext?.recordCandles?.(scanContext, s, strat.tf1 || '1d', benchmarkRef);
  }
- if (btcRef?.length >= 20) break;
+ if (benchmarkRef?.length >= 20) {
+ benchmarkSymbol = s;
+ break;
  }
- const btcCloses = btcRef?.map(c => c.close) ?? null;
+ }
+ const benchmarkCloses = benchmarkRef?.map(c => c.close) ?? null;
 
- await chrome.storage.local.set({ totalCoins: products.length });
+ await chrome.storage.local.set({ totalCoins: products.length, totalStocks: products.length });
 
- // Filter & sort candidates (pinned coins always included)
+ // Filter & sort candidates (pinned symbols always included). All NSE breadth can load thousands
+ // of quotes, then this ranker promotes penny/relative-move candidates before candle fetches.
  let candidates = products
  .map(p => ({ ...p, ticker: tickerMap[p.symbol] || null }))
  .filter(p => p.ticker?.price &&
- (minVol <= 0 || p.ticker.usdVol24h >= minVol || watchlist.has(p.symbol)));
+  (minVol <= 0 || p.ticker.usdVol24h >= minVol || watchlist.has(p.symbol)));
 
- // Sort: pinned first, then by volume
- candidates.sort((a, b) => {
- const aPin = watchlist.has(a.symbol) ? 1 : 0;
- const bPin = watchlist.has(b.symbol) ? 1 : 0;
- if (aPin !== bPin) return bPin - aPin;
- return (b.ticker?.usdVol24h || 0) - (a.ticker?.usdVol24h || 0);
- });
- if (candidates.length > maxCoins) candidates = candidates.slice(0, maxCoins);
- dlog(`Candidates: ${candidates.length} (${watchlist.size} pinned)`);
- await chrome.storage.local.set({ scannedCoins: candidates.length });
+ candidates = rankScanCandidates(candidates, strat, watchlist);
+ if (candidates.length > deepScanLimit) candidates = candidates.slice(0, deepScanLimit);
+  dlog(`Candidates: ${candidates.length} deep (${watchlist.size} pinned, mode=${strat.scanMode}, universe=${universeMeta.label || strat.scanUniverse}, breadth=${maxCoins}, returned=${Object.keys(tickerMap || {}).length}, candle pace=${SCAN_CANDLE_PACE_MS}ms)`);
+ await chrome.storage.local.set({ scannedCoins: candidates.length, scannedStocks: candidates.length });
 
- // Scan each coin
+ // Scan each symbol
  const results = [];
  const alertsData = await new Promise(r => chrome.storage.local.get(['alertHistory'], r));
  let alerts = Array.isArray(alertsData.alertHistory) ? alertsData.alertHistory : [];
@@ -1007,35 +1501,78 @@ async function runScan() {
  });
  };
 
+ let noHistoryCount = 0;
  for (let i = 0; i < candidates.length; i++) {
+ await throwIfScanStopRequested();
  if (i > 0 && i % 20 === 0) {
  await wait(0);
  }
- const { symbol, ticker } = candidates[i];
+  const { symbol, ticker } = candidates[i];
+  const candleOptions = { ...SCAN_CANDLE_FETCH_OPTIONS, instrument: candidates[i].dhanInstrument || null };
  const pct = Math.round(8 + (i / candidates.length) * 88);
- if (i % 5 === 0 || i === candidates.length - 1) {
+ if (i % 1 === 0 || i === candidates.length - 1) {
  await chrome.storage.local.set({
- scanStatus: `Scanning ${symbol} (${i + 1}/${candidates.length})`,
+  scanStatus: `Scanning ${universeMeta.label || 'Market'}: ${symbol} (${i + 1}/${candidates.length}, loaded ${i + 1}, pending ${Math.max(0, candidates.length - i - 1)})`,
  scanProgress: pct,
  scanHeartbeat: Date.now(),
+ scannerUniverseMeta: {
+  universe: universeMeta.universe || strat.scanUniverse,
+   label: universeMeta.label || strat.scanUniverse,
+   requested: maxCoins,
+   deepScanLimit,
+   scanMode: strat.scanMode,
+   count: Number(universeMeta.count || products.length || 0),
+  returned: Number(universeMeta.returned || Object.keys(tickerMap || {}).length || 0),
+  scanned: i + 1,
+  pending: Math.max(0, candidates.length - i - 1),
+  fetchedAt: universeMeta.fetchedAt || Date.now(),
+ },
  });
  }
 
  try {
  await chrome.storage.local.set({ scanHeartbeat: Date.now() });
- const [dCandles, m2Candles] = await Promise.all([
- fetchCandles(symbol, strat.tf1 || '1d', 200, SCAN_CANDLE_FETCH_OPTIONS),
- fetchCandles(symbol, strat.tf2 || '15m', 200, SCAN_CANDLE_FETCH_OPTIONS),
- ]);
+  const dCandles = await fetchCandles(symbol, strat.tf1 || '1d', SCAN_CONTEXT_DAILY_CANDLES, candleOptions);
+ if (!Array.isArray(dCandles) || !dCandles.length) {
+  noHistoryCount++;
+  if (noHistoryCount <= 20 || noHistoryCount % 25 === 0) {
+    dlog(`Candle skipped ${symbol}: no historical data returned for ${strat.tf1 || '1d'} (${describeScanCandidateInstrument(candidates[i])}); skipped ${noHistoryCount}/${i + 1}.`);
+  }
+  continue;
+ }
+  const m2Candles = await fetchCandles(symbol, strat.tf2 || '15m', 50, candleOptions);
  if (scanContext) {
  globalThis.FWDTradeDeskScanContext?.recordCandles?.(scanContext, symbol, strat.tf1 || '1d', dCandles || []);
  globalThis.FWDTradeDeskScanContext?.recordCandles?.(scanContext, symbol, strat.tf2 || '15m', m2Candles || []);
  }
- if (!dCandles && !m2Candles) continue;
+ if (!m2Candles) noHistoryCount++;
 
- const result = analyseCoin(symbol, dCandles || [], m2Candles || [], ticker, strat, marketIndex);
- if (!result) continue;
- result.candlePolicy = 'closed_only';
+  let result = analyseCoin(symbol, dCandles || [], m2Candles || [], ticker, strat, marketIndex);
+  const pennyInsight = buildPennyAwakeningInsight(symbol, dCandles || [], m2Candles || [], ticker);
+  if (!result && strat.scanMode === 'penny_awakening') {
+   result = buildPennyAwakeningResult(symbol, dCandles || [], m2Candles || [], ticker, {
+    instrumentDescription: candidates[i].instrumentDescription || candidates[i].description || candidates[i].name || symbol,
+    assetClass: candidates[i].assetClass || 'indian_equity',
+    assetLabel: candidates[i].assetLabel || universeMeta.label || 'NSE Equity',
+    assetBadge: candidates[i].assetBadge || universeMeta.label || 'NSE',
+   });
+  }
+  if (!result) continue;
+  if (pennyInsight?.active) {
+   result.pennyAwakening = pennyInsight;
+   result.scannerMode = strat.scanMode;
+   if (strat.scanMode === 'penny_awakening') {
+    result.score = Math.max(Number(result.score || 0), Number(pennyInsight.score || 0));
+    result.rawScore = Math.max(Number(result.rawScore || 0), Number(pennyInsight.score || 0));
+    result.spike = true;
+    result.setupLabel = result.setupLabel || 'Penny Awakening';
+    result.reasons = Array.from(new Set([
+     ...(Array.isArray(result.reasons) ? result.reasons : []),
+     `Penny Awakening: ${pennyInsight.reasons.slice(0, 4).join(' | ') || 'unusual activity'}`,
+    ]));
+   }
+  }
+  result.candlePolicy = 'closed_only';
  result.historyQuality = {
  dailyBars: Array.isArray(dCandles) ? dCandles.length : 0,
  lowerBars: Array.isArray(m2Candles) ? m2Candles.length : 0,
@@ -1043,24 +1580,27 @@ async function runScan() {
  result.symbolMaturity = scanClassifySymbolMaturity(result, storeData.autoTradeSettings || {});
  result.instrumentDescription = candidates[i].instrumentDescription || candidates[i].description || candidates[i].name || result.instrumentDescription || result.name || result.symbol;
  result.name = result.instrumentDescription;
- result.assetClass = result.assetClass || candidates[i].assetClass || 'crypto_derivative';
- result.assetLabel = result.assetLabel || candidates[i].assetLabel || 'Crypto';
- result.assetBadge = result.assetBadge || candidates[i].assetBadge || 'Crypto';
+ result.assetClass = result.assetClass || candidates[i].assetClass || 'indian_equity';
+ result.assetLabel = result.assetLabel || candidates[i].assetLabel || universeMeta.label || 'NSE Equity';
+ result.assetBadge = result.assetBadge || candidates[i].assetBadge || universeMeta.label || 'NSE';
  result.assetInfo = result.assetInfo || candidates[i].assetInfo || '';
  result.underlyingSymbol = result.underlyingSymbol || candidates[i].underlyingSymbol || '';
  result.underlyingName = result.underlyingName || candidates[i].underlyingName || '';
 
- // Always include pinned coins regardless of minScore
+ // Always include pinned symbols regardless of minScore
  if (result.score < minScore && !watchlist.has(symbol)) continue;
 
- // BUG FIX #3: Mark pinned coins
+ // BUG FIX #3: Mark pinned symbols
  result.pinned = watchlist.has(symbol);
 
  results.push(result);
 
- // BTC correlation
- if (btcCloses && dCandles?.length >= 10)
- result.btcCorr = pearsonCorr(btcCloses, dCandles.map(c => c.close));
+ // Benchmark correlation
+ if (benchmarkCloses && dCandles?.length >= 10) {
+ result.btcCorr = pearsonCorr(benchmarkCloses, dCandles.map(c => c.close));
+ result.benchmarkCorr = result.btcCorr;
+ result.benchmarkSymbol = benchmarkSymbol || 'NIFTY';
+ }
 
  // Sentiment
  result.sentiment = calcSentiment(ticker, prevOIData[symbol]);
@@ -1094,6 +1634,12 @@ async function runScan() {
  await saveAlertsWithLimit(alerts);
 
  if (alertTier === 'execute' && strat.notify !== false) {
+ const alertReasons = Array.isArray(result.reasons) ? result.reasons.filter(Boolean) : [];
+ const desktopTitle = `${symbol} ${result.direction.toUpperCase()} - EXECUTE ${result.score}/100`;
+ const desktopMessage = [
+ ...alertReasons.slice(0, 2),
+ result.entry ? `Entry ${scanFormatInr(result.entry)}` : ''
+ ].filter(Boolean).join(' | ');
  if (typeof v16PushNotificationFeed === 'function') {
  v16PushNotificationFeed({
  tone: 'success',
@@ -1102,21 +1648,22 @@ async function runScan() {
  sourceScannerId: 'current',
  sourceScannerName: 'Current Live',
  sourceType: 'scanner',
- what: `${symbol} ${result.direction.toUpperCase()} score ${result.score}/100 | entry $${result.entry?.toFixed(4) || '-'}`,
+ what: `${symbol} ${result.direction.toUpperCase()} score ${result.score}/100 | entry ${scanFormatInr(result.entry)}`,
  why: result.reasons?.slice(0, 3).join(' | ') || 'Current scanner marked this as an execute alert.',
- next: 'Review the signal, funding, slot state, and protection preview before live action.',
- action: 'Open Scanner or Live Trading Analytics for the full decision state.',
+ next: 'Review the signal, breadth, slot state, and manual ticket preview before action.',
+ action: 'Open Scanner or the manual review ticket for the full decision state.',
  }).catch(() => null);
  }
  chrome.notifications.create(`alert_${symbol}_${Date.now()}`, {
  type: 'basic', iconUrl: 'icons/icon48.png',
- title: `[Current] ${tierLabel} ${result.score}/100 - ${symbol} ${result.direction.toUpperCase()}`,
- message: `${result.reasons.slice(0, 3).join(' | ')} | $${result.entry?.toFixed(4) || '-'}`,
+ title: desktopTitle,
+ message: desktopMessage || 'Current scanner marked this as an execute alert.',
  priority: 2,
  });
  }
  dlog(` ${tierLabel} ${symbol} score=${result.score}`);
  // Fire webhook for signal alerts - NEW v14
+ if (typeof fireWebhooks === 'function') {
  fireWebhooks('signal_alert', {
  symbol, direction: result.direction, score: result.score,
  tier: alertTier, tierLabel, price: result.entry,
@@ -1131,6 +1678,7 @@ async function runScan() {
  rr: result.rr,
  sector: result.sector, session: getMarketSession(),
  });
+ }
  if (Number(result.score || 0) >= telegramCfg.minScore) {
  enqueueTelegramSignal(result, tierLabel);
  } else {
@@ -1178,9 +1726,18 @@ async function runScan() {
  laggardSectors: intelligence.sectorBreadth.laggards,
  };
  }
- const decisionState = buildDecisionState(enrichedResults, marketIndex, manualWatchlist);
+  const decisionState = buildDecisionState(enrichedResults, marketIndex, manualWatchlist);
+  const candleFetchStats = {
+  cacheHits: Number(globalThis.dhanCandleFetchStats?.cacheHits || 0),
+  fallbackCacheHits: Number(globalThis.dhanCandleFetchStats?.fallbackCacheHits || 0),
+  apiFetches: Number(globalThis.dhanCandleFetchStats?.apiFetches || 0),
+  apiRows: Number(globalThis.dhanCandleFetchStats?.apiRows || 0),
+  noHistory: noHistoryCount,
+  deepScanLimit,
+  quoteBreadth: Object.keys(tickerMap || {}).length,
+  };
 
- // Sort: pinned first, then by trade quality / score
+  // Sort: pinned first, then by trade quality / score
  enrichedResults.sort((a, b) => {
  if (a.pinned && !b.pinned) return -1;
  if (!a.pinned && b.pinned) return 1;
@@ -1211,7 +1768,7 @@ async function runScan() {
  return bTs - aTs;
  });
  sorted.slice(200).forEach(k => delete intelligence.signalHistoryStore[k]);
- dlog(`[STORAGE] Trimmed signalHistoryStore: ${histKeys.length} -> 200`);
+ dlog(`[STORAGE] Compacted signal history cache: kept latest 200 of ${histKeys.length} symbols.`);
  }
  }
 
@@ -1230,11 +1787,27 @@ async function runScan() {
  scanPartialProgress: null,
  sectorSummary: intelligence.sectorSummary,
  sectorBreadth: intelligence.sectorBreadth,
- signalHistoryStore: intelligence.signalHistoryStore,
- marketIndex,
- scanStatus: `OK Done - ${enrichedResults.length} signals from ${candidates.length} coins`,
+  signalHistoryStore: intelligence.signalHistoryStore,
+  candleFetchStats,
+  marketIndex,
+ scanStatus: `OK Done - ${enrichedResults.length} signals from ${candidates.length} ${universeMeta.label || 'symbols'} (${noHistoryCount} skipped no-history)`,
  scanProgress: 100, lastScan: new Date().toLocaleTimeString(), lastScanTs: Date.now(),
  totalCoins: products.length, scannedCoins: candidates.length,
+ totalStocks: products.length, scannedStocks: candidates.length,
+ scannerUniverseMeta: {
+  universe: universeMeta.universe || strat.scanUniverse,
+  label: universeMeta.label || strat.scanUniverse,
+  requested: maxCoins,
+  deepScanLimit,
+  scanMode: strat.scanMode,
+  count: Number(universeMeta.count || products.length || 0),
+  returned: Number(universeMeta.returned || Object.keys(tickerMap || {}).length || 0),
+  scanned: candidates.length,
+  pending: 0,
+  skippedNoHistory: noHistoryCount,
+  candleFetchStats,
+  fetchedAt: universeMeta.fetchedAt || Date.now(),
+ },
  session,
  soundAlert: topTier !== null && scanSoundEnabled(strat),
  soundTier: scanSoundEnabled(strat) ? topTier : null, // NEW: 'execute' | 'setup' | 'watch' | null
@@ -1256,11 +1829,27 @@ async function runScan() {
  manualWatchlist,
  watchlist: decisionState.mergedWatchlist,
  scanPartialAvailable: false,
- scanPartialProgress: null,
- marketIndex,
- scanStatus: `OK Done - ${enrichedResults.length} signals (trimmed)`,
+  scanPartialProgress: null,
+  candleFetchStats,
+  marketIndex,
+ scanStatus: `OK Done - ${enrichedResults.length} signals (trimmed, ${noHistoryCount} skipped no-history)`,
  scanProgress: 100, lastScan: new Date().toLocaleTimeString(), lastScanTs: Date.now(),
  totalCoins: products.length, scannedCoins: candidates.length,
+ totalStocks: products.length, scannedStocks: candidates.length,
+ scannerUniverseMeta: {
+  universe: universeMeta.universe || strat.scanUniverse,
+  label: universeMeta.label || strat.scanUniverse,
+  requested: maxCoins,
+  deepScanLimit,
+  scanMode: strat.scanMode,
+  count: Number(universeMeta.count || products.length || 0),
+  returned: Number(universeMeta.returned || Object.keys(tickerMap || {}).length || 0),
+  scanned: candidates.length,
+  pending: 0,
+  skippedNoHistory: noHistoryCount,
+  candleFetchStats,
+  fetchedAt: universeMeta.fetchedAt || Date.now(),
+ },
  session,
  scanActive: false,
  scanHeartbeat: Date.now(),
@@ -1273,12 +1862,23 @@ async function runScan() {
  }
  }
  saveLog();
- dlog(`=== v14 SCAN DONE - ${results.length} signals ===`);
+  dlog(`Candles: ${candleFetchStats.cacheHits + candleFetchStats.fallbackCacheHits} cached, ${candleFetchStats.apiFetches} fetched, ${noHistoryCount} no-history, ${candleFetchStats.apiRows} rows`);
+  dlog(`=== v14 SCAN DONE - ${results.length} signals, ${candidates.length} scanned, ${noHistoryCount} skipped no-history ===`);
+ try {
+ chrome.notifications.create(`scan_complete_${Date.now()}`, {
+  type: 'basic',
+  iconUrl: 'icons/icon48.png',
+  title: 'Scan complete',
+  message: `${universeMeta.label || 'Market'}: ${enrichedResults.length} signals from ${candidates.length} scanned (${noHistoryCount} no-history skipped).`,
+  priority: 1,
+ });
+ } catch (_) {}
 
  // -- Check custom price alerts --
  await checkCustomAlerts(tickerMap, telegramCfg);
 
  // Fire webhook for scan completion - NEW v14
+ if (typeof fireWebhooks === 'function') {
  fireWebhooks('scan_complete', {
  count: enrichedResults.length,
  totalScanned: candidates.length,
@@ -1290,15 +1890,11 @@ async function runScan() {
  session,
  timestamp: new Date().toISOString(),
  });
+ }
 
  // Build correlation matrix asynchronously so popup UI remains responsive.
  buildAndStoreCorrelationMatrix(enrichedResults, strat).catch(() => {});
 
- // -- Auto-Trade Engine: ALWAYS runs even if storage save failed --
- // enrichedResults are in memory - no storage dependency for order placement.
- if (typeof runAutoTradeEngine === 'function') {
- runAutoTradeEngine(enrichedResults).catch(err => dlog(`[AUTO-TRADE] Engine error: ${String(err?.message || err)} ${String(err?.stack || '').slice(0, 200)}`));
- }
  if (typeof fwdRecordPerformanceMetric === 'function') {
  fwdRecordPerformanceMetric('scan', {
  durationMs: performanceNow() - scanStartedAt,
@@ -1320,7 +1916,10 @@ async function runScan() {
  scannedRows: candidates.length,
  candidateRows: candidates.length,
  });
+ await globalThis.FWDTradeDeskScanContext?.deriveAll?.({ includeNative: false, source: 'main_scan_complete' })
+ .catch(error => dlog(`Strategy Lab derive after scan failed: ${error?.message || error}`));
  }
+ if (liveFeedPausedForScan) await setScanLiveFeedPaused(false);
  return enrichedResults;
 }
 
@@ -1447,10 +2046,10 @@ async function checkCustomAlerts(tickerMap, telegramCfg) {
 
  if (alert.direction === 'above' && currentPrice >= alert.targetPrice) {
  fired = true;
- message = ` ${alert.symbol} crossed ABOVE $${alert.targetPrice}\nCurrent: $${currentPrice.toFixed(6)}`;
+ message = ` ${alert.symbol} crossed ABOVE ${scanFormatInr(alert.targetPrice)}\nCurrent: ${scanFormatInr(currentPrice)}`;
  } else if (alert.direction === 'below' && currentPrice <= alert.targetPrice) {
  fired = true;
- message = ` ${alert.symbol} crossed BELOW $${alert.targetPrice}\nCurrent: $${currentPrice.toFixed(6)}`;
+ message = ` ${alert.symbol} crossed BELOW ${scanFormatInr(alert.targetPrice)}\nCurrent: ${scanFormatInr(currentPrice)}`;
  }
 
  } else if (alert.type === 'pct_change') {
@@ -1480,7 +2079,7 @@ async function checkCustomAlerts(tickerMap, telegramCfg) {
 
  if (isTriggered) {
  fired = true;
- message = `Chart ${sym} moved ${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}% in ${alert.timeWindowMinutes}m\nCurrent: $${ticker.price.toFixed(6)}`;
+ message = `Chart ${sym} moved ${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}% in ${alert.timeWindowMinutes}m\nCurrent: ${scanFormatInr(ticker.price)}`;
  break; // Only fire for first symbol match
  }
  }

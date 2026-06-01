@@ -1025,8 +1025,8 @@ async function openV16JournalDetail(trade = {}) {
  <div class="live-journal-trade-story">${v16Esc(tradeStory)}</div>
  </div>
  <div class="live-order-preview-card">
- <div class="v16-section-title"><div class="mo-section">System Actions</div>${v16BuildInlineHelpHtml('System actions', 'Use this to separate what FWD TradeDesk Pro actually did from what you may want to change as the trader.')}</div>
- <div class="live-order-preview-copy">This is the clean engine story: what FWD TradeDesk Pro placed, adjusted, or closed, in plain language and IST time.</div>
+ <div class="v16-section-title"><div class="mo-section">System Actions</div>${v16BuildInlineHelpHtml('System actions', 'Use this to separate what FWD Bharat MarketDesk actually did from what you may want to change as the trader.')}</div>
+ <div class="live-order-preview-copy">This is the clean engine story: what FWD Bharat MarketDesk placed, adjusted, or closed, in plain language and IST time.</div>
  <div class="live-journal-system-actions">${v16BuildAutoTradeSystemActionsHtml(trade)}</div>
  <div class="live-notification-list">${v16BuildAutoTradeTimelineHtml(trade)}</div>
  <div class="live-journal-shift-audit">
@@ -2283,8 +2283,8 @@ function renderV16CredentialModeStatus(profile = null, secret = null) {
 
  if (usesNative) {
  noteEl.textContent = label
- ? `Stored in encrypted Windows app storage as "${label}". Leave key fields blank to keep it, or enter new values to replace it.`
- : 'Stored in encrypted Windows app storage. Leave key fields blank to keep it, or enter new values to replace it.';
+ ? `Market Data Only | Manual Trading Only. Stored in encrypted Windows app storage as "${label}". Leave fields blank to keep it, or enter new values to replace it.`
+ : 'Market Data Only | Manual Trading Only. Stored in encrypted Windows app storage. Leave fields blank to keep it, or enter new values to replace it.';
  noteEl.className = 'account-inline-note good';
  keyInput.placeholder = 'Stored in encrypted Windows app storage';
  secretInput.placeholder = 'Stored in encrypted Windows app storage';
@@ -2292,14 +2292,14 @@ function renderV16CredentialModeStatus(profile = null, secret = null) {
  }
 
  if (v16NativeCredentialState.available) {
- noteEl.textContent = 'Encrypted Windows app storage is available. Saving a full key and secret will move them out of session storage.';
+ noteEl.textContent = 'Market Data Only | Manual Trading Only. Encrypted Windows app storage is available for your client ID and access token.';
  noteEl.className = 'account-inline-note good';
  } else {
- noteEl.textContent = 'Encrypted Windows app storage is not responding yet. Keys saved now stay only in this app session.';
+ noteEl.textContent = 'Encrypted Windows app storage is not responding yet. Do not paste credentials in chat; enter them only in this app.';
  noteEl.className = 'account-inline-note warn';
  }
- keyInput.placeholder = 'Required for live account data';
- secretInput.placeholder = 'Required for live account data';
+ keyInput.placeholder = 'Client ID';
+ secretInput.placeholder = 'Access Token';
 }
 
 function v16UpsertEditorProfileDraft(metadata, secrets, profile, secret, options = {}) {
@@ -2464,7 +2464,7 @@ async function renderV16CapabilityShell(preloaded = null) {
  ], ' | ');
  shell.innerHTML = `
  <div class="cap-shell-copy">
- <div class="cap-shell-kicker">FWD TradeDesk Pro Layer</div>
+ <div class="cap-shell-kicker">FWD Bharat MarketDesk Layer</div>
  <div class="cap-shell-title">${v16Esc(capabilityTitle)}</div>
  <div class="cap-shell-meta">${v16Esc(capabilityMetaLine)}</div>
  </div>
@@ -2479,10 +2479,10 @@ async function renderV16CapabilityShell(preloaded = null) {
  </button>
  <button class="cap-shell-card" data-v16-open-tab="strategy">
  <span>Active Guard</span>
- <strong class="${killSwitch.enabled ? 'bad' : capabilityMeta.tone === 'trade' ? 'good' : 'warn'}">${killSwitch.enabled ? 'Kill Switch' : v16Esc(capabilityLabel)}</strong>
+ <strong class="${killSwitch.enabled ? 'bad' : capabilityMeta.tone === 'trade' ? 'good' : 'warn'}">${killSwitch.enabled ? 'Manual Orders Disabled' : v16Esc(capabilityLabel)}</strong>
  <small>${killSwitch.enabled ? v16Esc(killSwitch.reason || 'Execution locked') : hasSecret ? (v16UsesNativeCredential(profile) ? 'Windows credential ready' : 'Session credential ready') : 'Preview mode, no key required'}</small>
  </button>
- <button class="cap-shell-kill ${killSwitch.enabled ? 'armed' : ''}" id="btnCapabilityKillSwitch">${killSwitch.enabled ? 'Disarm Kill Switch' : 'Arm Kill Switch'}</button>
+ <button class="cap-shell-kill ${killSwitch.enabled ? 'armed' : ''}" id="btnCapabilityKillSwitch" hidden>${killSwitch.enabled ? 'Enable Reviews' : 'Disable Reviews'}</button>
  </div>`;
 
  shell.querySelectorAll('[data-v16-capability]').forEach(button => {
@@ -2537,7 +2537,7 @@ async function renderV16DecisionEngineShell(preloaded = null) {
  </div>
  <div class="decision-grid">
  <article class="decision-card">
- <span>Profile</span>
+ <span>Workspace</span>
  <strong>${v16Esc(profileCardTitle)}</strong>
  <small>${v16Esc(profile.venue)} | risk ${Number(profile.riskPerTradePct || 0).toFixed(2)}%</small>
  </article>
@@ -2549,7 +2549,7 @@ async function renderV16DecisionEngineShell(preloaded = null) {
  <article class="decision-card">
  <span>Execution State</span>
  <strong class="${killSwitch.enabled ? 'bad' : capabilityMeta.tone === 'trade' ? 'good' : 'warn'}">${killSwitch.enabled ? 'Locked' : v16Esc(capabilityLabel)}</strong>
- <small>${killSwitch.enabled ? v16Esc(killSwitch.reason || 'Kill switch armed') : hasSecret ? (v16UsesNativeCredential(profile) ? 'Windows credential ready' : 'Session credential ready') : 'No trading key required yet'}</small>
+ <small>${killSwitch.enabled ? v16Esc(killSwitch.reason || 'Manual review only') : hasSecret ? (v16UsesNativeCredential(profile) ? 'Windows credential ready' : 'Session credential ready') : 'No trading key required yet'}</small>
  </article>
  <article class="decision-card">
  <span>Live Queue</span>
@@ -2576,7 +2576,7 @@ async function renderV16DecisionEngineShell(preloaded = null) {
  <div class="regime-block">
  <span>Freshness</span>
  <strong>${v16Esc(lastScanText)}</strong>
- <small>${summary.executeCount} execute alerts ready${killSwitch.enabled ? ' | kill switch armed' : summary.killSwitchSuggested ? ' | loss guard breached' : ''}</small>
+ <small>${summary.executeCount} execute alerts ready${killSwitch.enabled ? ' | manual review only' : summary.killSwitchSuggested ? ' | loss guard breached' : ''}</small>
  </div>
  </div>`;
 }
@@ -2602,19 +2602,21 @@ function renderV16RiskBridgeBanner() {
  <div class="risk-bridge-title">${v16Esc(v16RiskBridge.symbol)} | ${v16Esc(v16RiskBridge.side.toUpperCase())}</div>
  </div>
  <div class="risk-bridge-actions">
- <button class="bsm" id="btnRiskBridgeOpenDelta">Open in Delta</button>
+ <button class="bsm" id="btnRiskBridgeOpenDelta">Open Broker</button>
  <button class="bsm" id="btnRiskBridgePreview">Preview Trade</button>
  <button class="bsm" id="btnRiskBridgeClear">Clear</button>
  </div>
  </div>
  <div class="risk-bridge-grid">
- <div class="risk-bridge-card"><span>Profile</span><strong>${v16Esc(profile.name)}</strong><small>${v16Esc(v16ReadableCapabilityLabel(capabilityMeta.label))}</small></div>
- <div class="risk-bridge-card"><span>Entry / Stop</span><strong>$${fmtPrice(v16RiskBridge.entry)}</strong><small>SL $${fmtPrice(v16RiskBridge.stopLoss)}${v16RiskBridge.takeProfit ? ` | TP $${fmtPrice(v16RiskBridge.takeProfit)}` : ''}</small></div>
- <div class="risk-bridge-card"><span>Suggested Risk</span><strong>${Number(profile.riskPerTradePct || 0).toFixed(2)}%</strong><small>$${v16FmtNumber(suggestedRiskCash, 2)} on ${v16Esc(riskSeed.symbol)} wallet $${v16FmtNumber(riskSeed.balance, 2)}</small></div>
- <div class="risk-bridge-card"><span>Execution State</span><strong class="${killSwitch.enabled ? 'bad' : capabilityMeta.tone === 'trade' ? 'good' : 'warn'}">${killSwitch.enabled ? 'Locked' : capabilityMeta.label}</strong><small>${killSwitch.enabled ? v16Esc(killSwitch.reason || 'Kill switch armed') : 'Risk plan seeded from signal'}</small></div>
+ <div class="risk-bridge-card"><span>Workspace</span><strong>${v16Esc(profile.name)}</strong><small>${v16Esc(v16ReadableCapabilityLabel(capabilityMeta.label))}</small></div>
+ <div class="risk-bridge-card"><span>Entry / Stop</span><strong>Rs ${fmtPrice(v16RiskBridge.entry)}</strong><small>SL Rs ${fmtPrice(v16RiskBridge.stopLoss)}${v16RiskBridge.takeProfit ? ` | TP Rs ${fmtPrice(v16RiskBridge.takeProfit)}` : ''}</small></div>
+ <div class="risk-bridge-card"><span>Suggested Risk</span><strong>${Number(profile.riskPerTradePct || 0).toFixed(2)}%</strong><small>Rs ${v16FmtNumber(suggestedRiskCash, 2)} on ${v16Esc(riskSeed.symbol)} wallet Rs ${v16FmtNumber(riskSeed.balance, 2)}</small></div>
+ <div class="risk-bridge-card"><span>Execution State</span><strong class="good">Manual Only</strong><small>Risk plan seeded from signal</small></div>
  </div>`;
  banner.querySelector('#btnRiskBridgeOpenDelta')?.addEventListener('click', () => {
- v16OpenDeltaTradeWindow(v16RiskBridge?.symbol);
+  const symbol = String(v16RiskBridge?.symbol || '').trim().toUpperCase();
+  const url = symbol ? `https://web.dhan.co/?symbol=${encodeURIComponent(symbol)}` : 'https://web.dhan.co/';
+  window.open(url, '_blank', 'noopener,noreferrer');
  });
  banner.querySelector('#btnRiskBridgePreview')?.addEventListener('click', () => {
  const sizedContracts = parseFloat(document.getElementById('rcContracts')?.textContent || '1');
@@ -2649,7 +2651,7 @@ async function renderV16RiskManageBoard() {
  wrap.innerHTML = `
  <div class="risk-manage-grid">
  <div class="risk-manage-card"><span>Wallet</span><strong>$${v16FmtNumber(riskSeed.balance, 2)}</strong><small>${riskSeed.source === 'wallet' ? `Live ${v16Esc(riskSeed.symbol)} sync${riskSeed.available > 0 ? ` | Avail $${v16FmtNumber(riskSeed.available, 2)}` : ''}` : 'Profile balance fallback'}</small></div>
- <div class="risk-manage-card"><span>Kill Switch</span><strong class="${killSwitch.enabled ? 'bad' : 'good'}">${killSwitch.enabled ? 'Armed' : 'Ready'}</strong><small>${killSwitch.enabled ? v16Esc(killSwitch.reason || 'Execution locked') : 'Execution allowed by capability state'}</small></div>
+ <div class="risk-manage-card"><span>Orders</span><strong class="good">Manual Only</strong><small>Order placement is disabled in this app</small></div>
  <div class="risk-manage-card"><span>Live Positions</span><strong>${livePositions}</strong><small>Interactive reductions and closes available in Positions</small></div>
  <div class="risk-manage-card"><span>30D Review</span><strong class="${model.realized >= 0 ? 'good' : 'bad'}">${v16FmtSigned(model.realized)}</strong><small>${model.closedTrades.length} closed trades | ${model.winRate.toFixed(1)}% win rate</small></div>
  </div>
@@ -2773,7 +2775,7 @@ function renderV16SettingsConnectionCard(snapshot = null) {
  tickersEl.textContent = '-';
  productsEl.textContent = '-';
  candlesEl.textContent = '-';
- statusEl.textContent = 'Checking public Delta market data...';
+ statusEl.textContent = 'Checking market data...';
  statusEl.className = 'account-inline-note warn';
  if (runButton) runButton.disabled = true;
  return;
@@ -2787,7 +2789,7 @@ function renderV16SettingsConnectionCard(snapshot = null) {
  tickersEl.textContent = String(Number(data.tickerCount || 0));
  productsEl.textContent = String(Number(data.productCount || 0));
  candlesEl.textContent = String(Number(data.btcCandleCount || 0));
- statusEl.textContent = `Public market data OK via ${v16ShortBaseUrl(data.baseUrl)}. Add live credentials only when you want live positions or live order testing.`;
+ statusEl.textContent = `Market data ready. ${Number(data.instrumentCount || data.productCount || 0)} instruments available for scanner/chart use.`;
  statusEl.className = 'account-inline-note good';
  return;
  }
@@ -2797,7 +2799,7 @@ function renderV16SettingsConnectionCard(snapshot = null) {
  tickersEl.textContent = '-';
  productsEl.textContent = '-';
  candlesEl.textContent = '-';
- statusEl.textContent = v16ApiHealthState.error || 'Public market-data check failed.';
+ statusEl.textContent = v16ApiHealthState.error || 'Market-data check failed.';
  statusEl.className = 'account-inline-note bad';
  return;
  }
@@ -2891,25 +2893,15 @@ function activateV16SettingsPanel(panel = 'profile') {
  if (section.tagName === 'DETAILS') section.open = active;
  });
  const libraryMeta = {
- display: ['DISPLAY', 'Display & Currency', 'Report currency and fixed USD to INR display conversion.'],
- profile: ['LIVE TRADING PROFILE', 'Trading Profile', 'User identity, venue, and execution mode for the active desk.'],
- 'paper-mode': ['LIVE TRADING PROFILE', 'Paper Trading', 'Forward-test signals in the local shadow ledger while real futures auto-trade remains off.'],
- security: ['LIVE TRADING PROFILE', 'Login Security', 'Password and Microsoft Authenticator settings for this local Windows app.'],
- 'api-keys': ['LIVE TRADING PROFILE', 'API Keys & Kill Switch', 'Delta credentials, session secret state, and the global execution lock.'],
- connection: ['LIVE TRADING PROFILE', 'Connection Check', 'Public market-data readiness checks for scanner and live account setup.'],
- risk: ['RISK RULES', 'Risk Defaults', 'Base balance, session balance, risk-per-trade, and daily loss assumptions.'],
- guards: ['RISK RULES', 'Live Guards', 'Hard limits for live order size and blocked symbols.'],
- var: ['RISK RULES', 'VaR Planning', 'Drawdown cycles, slot capacity, sector limits, and per-trade loss caps.'],
- 'risk-templates': ['RISK RULES', 'Scanner Risk Templates', 'ATR stop and target R:R defaults used by scanner context.'],
- api: ['DEVELOPER / DEBUG', 'API Health', 'Runtime quota, cooldown, and candle-cache status.'],
- recovery: ['DEVELOPER / DEBUG', 'Recovery Center', 'Common blocked states and recovery actions for scanner, account sync, and execution readiness.'],
+ profile: ['LOCAL DESK', 'Workspace', 'Local defaults for the active desk.'],
+ security: ['LOCAL DESK', 'Login Security', 'Password and Microsoft Authenticator settings for this local Windows app.'],
+ 'api-keys': ['MARKET DATA ONLY', 'Market Data API', 'Read-only NSE/BSE market data credentials.'],
+ connection: ['MARKET DATA', 'Connection Check', 'Market-data readiness checks for scanner setup.'],
+ api: ['APP SUPPORT', 'API Health', 'Runtime quota, cooldown, and candle-cache status.'],
+ recovery: ['APP SUPPORT', 'Recovery Center', 'Common blocked states and recovery actions for scanner and data readiness.'],
  'scanner-rules': ['SCANNER RULES', 'Scanner & Market Data', 'Signal filters, timeframes, scan limits, market-data mode, and FWD-10 basket settings.'],
- 'strategy-profiles': ['SCANNER RULES', 'Strategy Profiles', 'Presets that update scanner, paper, chart, and risk-template fields before saving.'],
- 'futures-auto': ['AUTOMATION', 'Futures Auto-Trade', 'Live futures execution gates, size limits, funding exits, and notifications.'],
- 'options-auto': ['AUTOMATION', 'Options Auto-Trade', 'Defined-risk options automation rules for the theta desk.'],
- 'straddle-auto': ['AUTOMATION', 'Short Straddle', 'Short straddle entry, re-entry, expiry, premium, skew, and auto-sizing controls.'],
- charts: ['SYSTEM', 'Charts & Levels', 'Chart presets, key levels, and risk-template defaults used by scanner context.'],
- backup: ['SYSTEM', 'Notifications & Backup', 'Alert notifications, backup folder, and local alert archive settings.'],
+ 'strategy-profiles': ['SCANNER RULES', 'Strategy Profiles', 'Presets that update scanner, strategy, and chart fields before saving.'],
+ charts: ['SYSTEM', 'Charts & Levels', 'Chart presets, key levels, and scanner context.'],
  };
  const meta = libraryMeta[target];
  if (library) {
@@ -3051,7 +3043,7 @@ async function v16RenderSettingsRecoveryCenter() {
  const lastScanTs = Number(store?.lastScanTs || 0);
  const rows = [
  {
- label: 'Trading Profile',
+ label: 'Workspace',
  value: capability.label || 'Public',
  detail: profile?.username || profile?.name || 'Single active user',
  tone: profile ? (capability.tone || 'info') : 'warn',
@@ -3063,10 +3055,10 @@ async function v16RenderSettingsRecoveryCenter() {
  tone: secretOk ? 'good' : 'warn',
  },
  {
- label: 'Kill Switch',
- value: killSwitch.enabled ? 'Armed' : 'Clear',
- detail: killSwitch.reason || (killSwitch.enabled ? 'Execution locked.' : 'Execution guard is not blocking.'),
- tone: killSwitch.enabled ? 'bad' : 'good',
+ label: 'Orders',
+ value: 'Manual Only',
+ detail: 'Order placement is disabled in this app.',
+ tone: 'good',
  },
  {
  label: 'Runtime Cooldown',
@@ -3138,8 +3130,8 @@ function readV16ProfileEditor() {
  updatedAt: Date.now(),
  }),
  secret: {
- tradingKey: sanitizeText(document.getElementById('accountTradingKey')?.value || '', '', 120),
- tradingSecret: sanitizeText(document.getElementById('accountTradingSecret')?.value || '', '', 180),
+ tradingKey: sanitizeText(document.getElementById('accountTradingKey')?.value || '', '', 160),
+ tradingSecret: sanitizeText(document.getElementById('accountTradingSecret')?.value || '', '', 4096),
  label: sanitizeText(document.getElementById('accountSecretLabel')?.value || '', '', 48),
  updatedAt: Date.now(),
  },
@@ -3149,6 +3141,15 @@ function readV16ProfileEditor() {
 async function saveV16ProfileFromEditor(setActive = false) {
  await loadV16AccountState();
  const { profile, secret } = readV16ProfileEditor();
+ if (String(secret.tradingKey || '').trim() && String(secret.tradingSecret || '').trim() && globalThis.fwdDesktopNative?.sendNativeMessage) {
+ await globalThis.fwdDesktopNative.sendNativeMessage({
+  type: 'dhan_data',
+  action: 'credentials_set',
+  clientId: secret.tradingKey,
+  accessToken: secret.tradingSecret,
+  dataMode: 'rest',
+ });
+ }
  const draft = v16UpsertEditorProfileDraft(getV16Metadata(), getV16Secrets(), profile, secret, { setActive });
  await persistV16AccountState(draft.metadata, draft.secrets);
  await v16RefreshNativeCredentialState(true);
@@ -3166,6 +3167,59 @@ async function saveV16ProfileFromEditor(setActive = false) {
  await renderV16All();
 }
 
+async function saveDhanCredentialsFromEditor(options = {}) {
+ const resultEl = document.getElementById('accountApiTestResult');
+ const { secret } = readV16ProfileEditor();
+ const clientId = String(secret?.tradingKey || '').trim();
+ const accessToken = String(secret?.tradingSecret || '').trim();
+ if (!clientId || !accessToken) {
+  if (resultEl) {
+   const missing = !clientId && !accessToken
+    ? 'Enter Client ID and Access Token first.'
+    : (!clientId ? 'Client ID is required along with the Access Token.' : 'Access Token is required along with the Client ID.');
+   resultEl.textContent = missing;
+   resultEl.className = 'account-inline-note bad';
+  }
+  return { ok: false, error: 'Client ID and access token are required.' };
+ }
+ if (/^eyJ/i.test(accessToken) && (accessToken.length < 220 || accessToken.split('.').length < 3)) {
+  const msg = 'Access Token looks incomplete. Copy the full token; do not paste only a token ID or a shortened value.';
+  if (resultEl) {
+   resultEl.textContent = msg;
+   resultEl.className = 'account-inline-note bad';
+  }
+  return { ok: false, error: msg };
+ }
+ if (!globalThis.fwdDesktopNative?.sendNativeMessage) {
+  if (resultEl) {
+   resultEl.textContent = 'Encrypted Windows app storage is not available in this window. Restart the desktop app and try again.';
+   resultEl.className = 'account-inline-note bad';
+  }
+  return { ok: false, error: 'Secure credential storage is not available.' };
+ }
+ const response = await globalThis.fwdDesktopNative.sendNativeMessage({
+  type: 'dhan_data',
+  action: 'credentials_set',
+  clientId,
+  accessToken,
+  dataMode: 'rest',
+ });
+ if (response?.ok) {
+  await v16RefreshNativeCredentialState(true);
+  if (resultEl && !options.silent) {
+   resultEl.textContent = 'Credentials saved in encrypted Windows app storage. Order placement remains disabled.';
+   resultEl.className = 'account-inline-note good';
+  }
+  syncV16SettingsPanelState();
+  return response;
+ }
+ if (resultEl) {
+  resultEl.textContent = `X ${response?.error || 'Credential save failed.'}`;
+  resultEl.className = 'account-inline-note bad';
+ }
+ return response || { ok: false, error: 'Credential save failed.' };
+}
+
 async function toggleV16KillSwitchFromEditor() {
  const killSwitch = getV16KillSwitchState();
  const reason = document.getElementById('accountKillSwitchReason')?.value || '';
@@ -3176,7 +3230,9 @@ async function toggleV16KillSwitchFromEditor() {
 async function runV16ApiHealthCheck() {
  v16ApiHealthState = { status: 'loading', data: null, error: '' };
  renderV16SettingsConnectionCard(await getV16Snapshot());
- const response = await v16RuntimeSend('v16:checkMarketData');
+ const response = await globalThis.fwdDesktopNative?.sendNativeMessage
+ ? await globalThis.fwdDesktopNative.sendNativeMessage({ type: 'dhan_data', action: 'test' })
+ : await v16RuntimeSend('v16:checkMarketData');
  if (response?.ok) {
  v16ApiHealthState = { status: 'success', data: response, error: '' };
  } else {
@@ -5533,7 +5589,7 @@ function v16BuildLiveAnalyticsModel(metrics = {}, productDefinitions = new Map()
  primaryPnlLabel: hasOpenOptionExposure ? 'OPEN P&L' : 'REALIZED P&L',
  primaryPnlValue: hasOpenOptionExposure ? selectedUnrealized : totalRealized,
  primaryPnlMeta: hasOpenOptionExposure
- ? `Mark-to-market across ${positions.length} live option position${positions.length === 1 ? '' : 's'} from Delta positions.`
+ ? `Mark-to-market across ${positions.length} live option position${positions.length === 1 ? '' : 's'}.`
  : `${closedRecords.length} closed trade${closedRecords.length === 1 ? '' : 's'} in range.`,
  usesDeltaOptionMtM: hasOpenOptionExposure,
  realized: totalRealized,
@@ -5812,7 +5868,7 @@ function v16RenderAnalyticsBarChart(elementId, series = [], tone = 'neutral', em
 function v16NormalizeTradeCheckSymbol(value = '') {
  const raw = String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
  if (!raw) return '';
- if (raw === 'FWD100') return 'FWD100';
+ if (raw === 'NIFTY') return 'NIFTY';
  if (raw.endsWith('USD') || raw.endsWith('USDT')) return raw;
  return `${raw}USD`;
 }
@@ -5876,7 +5932,7 @@ function v16BuildManualTradeCheckDecision({ symbol = '', side = 'long', scannerR
  } else if (avoid.length && !supportive.length) {
  verdict = 'Avoid now';
  tone = 'bad';
- reasons.push(`${avoid[0].sourceLabel} is showing avoid/ignore for this coin.`);
+ reasons.push(`${avoid[0].sourceLabel} is showing avoid/ignore for this stock.`);
  } else {
  reasons.push('No strong scanner agreement for this manual idea yet.');
  }
@@ -5888,7 +5944,7 @@ function v16BuildManualTradeCheckDecision({ symbol = '', side = 'long', scannerR
 
 async function v16OpenAnalyticsChart(symbol = '', trade = null) {
  const normalized = v16NormalizeTradeCheckSymbol(symbol || trade?.symbol || v16LiveAnalyticsView.tradeCheckSymbol || '');
- if (!normalized || normalized === 'FWD100') return;
+ if (!normalized || normalized === 'NIFTY') return;
  await globalThis.ensureChartWorkspaceLoaded?.();
  if (trade) {
  await globalThis.FWDTradeDeskChartWorkspace?.openReplayForTrade?.(trade);
@@ -5988,8 +6044,8 @@ async function v16RenderAnalyticsTradeCheck(analyticsModel = {}, shadowLedger = 
  if (chartButton) chartButton.onclick = () => { void v16OpenAnalyticsChart(v16LiveAnalyticsView.tradeCheckSymbol); };
  const symbol = v16NormalizeTradeCheckSymbol(v16LiveAnalyticsView.tradeCheckSymbol || '');
  if (!symbol) {
- if (meta) meta.textContent = 'Search a coin before taking a manual trade.';
- if (result) result.innerHTML = `<div class="account-inline-note">Enter a coin to compare scanner signals, paper history, and closed journal results.</div>`;
+ if (meta) meta.textContent = 'Search a stock before taking a manual trade.';
+ if (result) result.innerHTML = `<div class="account-inline-note">Enter a stock to compare scanner signals, paper history, and closed journal results.</div>`;
  return;
  }
  const scannerRows = await v16LoadStrategyRowsForSymbol(symbol);
@@ -6010,7 +6066,7 @@ async function v16RenderAnalyticsTradeCheck(analyticsModel = {}, shadowLedger = 
  ${decision.liveTrades[0] ? `<button class="bsm" type="button" data-analytics-live-replay="${v16Esc(decision.liveTrades[0].id)}">Replay Last Real</button>` : ''}
  </div>
  ${paperHtml}
- <div class="live-analytics-match-grid">${rowsHtml || '<div class="account-inline-note">No scanner currently matches this coin.</div>'}</div>`;
+ <div class="live-analytics-match-grid">${rowsHtml || '<div class="account-inline-note">No scanner currently matches this stock.</div>'}</div>`;
  result.querySelector('[data-analytics-chart-symbol]')?.addEventListener('click', event => { void v16OpenAnalyticsChart(event.currentTarget?.dataset.analyticsChartSymbol || symbol); });
  result.querySelector('[data-analytics-paper-replay]')?.addEventListener('click', event => {
  const trade = decision.closedPaper.find(item => String(item.id || '') === String(event.currentTarget?.dataset.analyticsPaperReplay || '')) || decision.closedPaper[0];
@@ -6073,7 +6129,7 @@ function v16RenderLiveAnalyticsReview(model = {}) {
  ? 'At least one closed trade still needs post-trade notes.'
  : `${trades.length} closed trade${trades.length === 1 ? '' : 's'} ready for review.`;
  if (!trades.length) {
- journalWrap.innerHTML = `<div class="empty"><div class="ei">--</div><div class="eh">No journal trades yet</div><div class="es">Closed positions detected from Delta history will appear here.</div></div>`;
+ journalWrap.innerHTML = `<div class="empty"><div class="ei">--</div><div class="eh">No journal trades yet</div><div class="es">Closed positions detected from history will appear here.</div></div>`;
  } else {
  journalWrap.innerHTML = trades.slice(0, 40).map(trade => `
  <button class="live-journal-row ${trade.hasNotes ? '' : 'pending'}" data-live-analytics-journal-id="${v16Esc(trade.id)}">
@@ -6101,7 +6157,7 @@ function v16RenderLiveAnalyticsReview(model = {}) {
  ? `${resolvedFeed.length} activity record${resolvedFeed.length === 1 ? '' : 's'} in the selected range.`
  : 'No activity in the selected range.';
  if (!resolvedFeed.length) {
- historyWrap.innerHTML = `<div class="empty"><div class="ei">--</div><div class="eh">No trade activity loaded</div><div class="es">Refresh live data to load fills and order history from Delta Exchange.</div></div>`;
+ historyWrap.innerHTML = `<div class="empty"><div class="ei">--</div><div class="eh">No trade activity loaded</div><div class="es">Refresh live data to load fills and order history.</div></div>`;
  return;
  }
  historyWrap.innerHTML = resolvedFeed.slice(0, 40).map(item => `
@@ -6119,7 +6175,7 @@ async function renderV16LiveAnalyticsPane(preloaded = null, forceRefresh = false
  if (!pane) return;
  const statusEl = document.getElementById('liveAnalyticsStatus');
  const syncEnabled = v16IsLiveAccountSyncEnabled();
- const clearAnalyticsUi = (title = 'Load a Trade Enabled or Read Only profile with session secrets to fetch private Delta account analytics.') => {
+ const clearAnalyticsUi = (title = 'Connect market data to fetch read-only account analytics.') => {
  const setHtml = (id, html) => {
  const element = document.getElementById(id);
  if (element) element.innerHTML = html;
@@ -6180,7 +6236,7 @@ async function renderV16LiveAnalyticsPane(preloaded = null, forceRefresh = false
  v16SyncLiveAnalyticsAutoRefreshButtons();
  if (!snapshot) {
  clearAnalyticsUi(syncEnabled
- ? 'Load a Trade Enabled or Read Only profile with session secrets to fetch private Delta account analytics.'
+ ? 'Connect market data to fetch read-only account analytics.'
  : 'Live account sync is paused in Settings. Enable it or click Refresh for an on-demand snapshot.');
  return;
  }
@@ -6240,8 +6296,8 @@ async function renderV16LiveAnalyticsPane(preloaded = null, forceRefresh = false
  const extra = activeRateLimit ? ` | API cooldown ${v16FormatDurationShort(activeRateLimit.waitMs)} (cached)` : '';
  const syncCopy = !syncEnabled ? ' | auto sync paused' : '';
  const analyticsRefreshCopy = v16IsLiveAnalyticsAutoRefreshEnabled() ? ' | analytics auto refresh on' : ' | analytics manual mode';
- const optionCopy = analyticsModel.usesDeltaOptionMtM ? ' | Delta option P&L from live positions' : '';
- const feedCopy = ` | Mode ${v16MarketDataModeLabel(snapshot?.marketDataMode || globalThis.deltaMarketDataMode || 'auto')} | Feed ${v16MarketDataSourceLabel(snapshot?.feedSource || 'rest')} | Updated ${v16FormatFeedAge(snapshot?.fetchedAt || 0)}`;
+ const optionCopy = analyticsModel.usesDeltaOptionMtM ? ' | option P&L from live positions' : '';
+ const feedCopy = ` | Mode ${v16MarketDataModeLabel(snapshot?.marketDataMode || globalThis.dhanMarketDataMode || 'auto')} | Feed ${v16MarketDataSourceLabel(snapshot?.feedSource || 'rest')} | Updated ${v16FormatFeedAge(snapshot?.fetchedAt || 0)}`;
  statusEl.textContent = `${analyticsModel.instrumentLabel} | ${v16AnalyticsRangeLabel(analyticsModel.view.rangeDays)} | ${analyticsModel.tradeCount} closed trade${analyticsModel.tradeCount === 1 ? '' : 's'} | ${analyticsModel.equityMode === 'absolute' ? 'Account-level curve' : 'Relative curve'}${optionCopy}${syncCopy}${analyticsRefreshCopy}${extra}${feedCopy}`;
  statusEl.className = `live-account-status ${Number(analyticsModel.realized || 0) >= 0 ? 'good' : 'bad'}`;
  }
@@ -6267,7 +6323,7 @@ async function renderV16LiveAnalyticsPane(preloaded = null, forceRefresh = false
  }
  if (realizedMetaEl) {
  realizedMetaEl.textContent = analyticsModel.usesDeltaOptionMtM
- ? `Delta option closes only. Live option P&L is read from open positions until close or expiry.`
+ ? `Option closes only. Live option P&L is read from open positions until close or expiry.`
  : `${analyticsModel.tradeCount} closed trade${analyticsModel.tradeCount === 1 ? '' : 's'} in range.`;
  }
  if (volumeMetaEl) volumeMetaEl.textContent = `$${v16FmtNumber(analyticsModel.volume || 0, analyticsModel.volume >= 1000 ? 0 : 2)} approximate notional traded.`;
@@ -6724,7 +6780,7 @@ function v16RenderOpenOrders(metrics) {
  v16RenderOrdersStatusRail(metrics, filteredOrders);
  meta.textContent = `${filteredOrders.length} open order${filteredOrders.length === 1 ? '' : 's'} visible | ${freshOrders.length} fresh | ${linkedOrders.length} linked${actionCopy}`;
  if (!filteredOrders.length) {
- wrap.innerHTML = `<div class="empty"><div class="ei">+</div><div class="eh">No open orders</div><div class="es">Delta returned no open or pending orders for this filter.</div></div>`;
+ wrap.innerHTML = `<div class="empty"><div class="ei">+</div><div class="eh">No open orders</div><div class="es">No open or pending orders were returned for this filter.</div></div>`;
  return;
  }
  wrap.innerHTML = [
@@ -6936,11 +6992,11 @@ function v16ExplainAutoTradeReason(reason = '', status = '') {
  if (!raw) return 'No explicit block reason was recorded.';
  if (lower.includes('kill switch is armed')) return 'Kill switch is armed, so the engine can scan but cannot place new orders.';
  if (lower.includes('tradeenabled profile required')) return 'Auto-trade needs a Trade Enabled profile before it can place live orders.';
- if (lower.includes('readonly or tradeenabled profile required')) return 'Choose a Delta profile before auto-trade can continue.';
+ if (lower.includes('readonly or tradeenabled profile required')) return 'Connect market data before automation can continue.';
  if (lower.includes('trading key and secret are required')) return 'Trading credentials are missing for the configured profile.';
  if (lower.includes('windows credential alias is missing')) return 'Windows credential alias is missing for the configured profile.';
- if (lower.includes('no active delta profile found')) return 'No active Delta profile is available right now.';
- if (lower.includes('api circuit breaker')) return 'Delta API protection is paused after repeated auth or request failures.';
+ if (lower.includes('no active delta profile found')) return 'No active market-data connection is available right now.';
+ if (lower.includes('api circuit breaker')) return 'API protection is paused after repeated authentication or request failures.';
  if (lower.startsWith('funding block:')) return raw.replace(/^funding block:\s*/i, 'Funding is adverse: ');
  if (lower.includes('max concurrent reached')) return 'All auto-trade slots are currently in use, so no fresh entry can be added.';
  if (lower.includes('max trades per day reached')) return 'The daily trade budget is fully used for today.';
@@ -7124,8 +7180,8 @@ async function v16BuildSystemHealthModel({ metrics = null, snapshot = null } = {
  return {
  items: [
  { label: 'Engine', value: store?.autoTrade ? 'On' : 'Off', detail: store?.autoTrade ? 'Scanner can evaluate live entries.' : 'Auto-trade master toggle is off.', tone: store?.autoTrade ? 'good' : 'bad' },
- { label: 'Profile', value: profileValue, detail: profileDetail, tone: profileTone },
- { label: 'Kill Switch', value: killSwitch.enabled ? 'On' : 'Off', detail: killSwitch.enabled ? 'New live orders are blocked.' : 'No kill-switch block is active.', tone: killSwitch.enabled ? 'bad' : 'good' },
+ { label: 'Workspace', value: profileValue, detail: profileDetail, tone: profileTone },
+ { label: 'Orders', value: 'Manual Only', detail: 'Order placement is disabled in this app.', tone: 'good' },
  { label: 'Slots', value: `${slotSummary.used}/${slotSummary.maxConcurrent}`, detail: `${slotSummary.live} live | ${slotSummary.queued} queued | ${slotSummary.reserved || 0} reserved`, tone: slotSummary.available > 0 ? 'good' : 'warn' },
  { label: 'Daily Loss', value: dailyLossLimit > 0 ? `$${v16FmtNumber(dailyLoss, 2)} / $${v16FmtNumber(dailyLossLimit, 2)}` : `$${v16FmtNumber(dailyLoss, 2)} / Not set`, detail: dailyLossDetail, tone: dailyLossLimit > 0 && dailyLoss >= dailyLossLimit ? 'bad' : 'info' },
  { label: 'Funding Feed', value: hasFundingFeed ? (fundingFresh ? 'Live' : 'Stale') : 'Missing', detail: hasFundingFeed ? (fundingFresh ? 'Funding data refreshed recently.' : 'Funding data exists but looks stale.') : 'No funding rate feed is available right now.', tone: hasFundingFeed ? (fundingFresh ? 'good' : 'warn') : 'bad' },
@@ -7403,7 +7459,7 @@ async function v16RenderAutoTradeDecisionAudit(metrics = {}) {
  tone: statusMeta.tone === 'bad' ? 'warn' : 'info',
  })}
  <div class="live-order-audit-grid">
- <div class="live-order-audit-metric"><span>Configured Profile</span><strong>${v16Esc(configuredProfileLabel)}</strong><small>${v16Esc(configuredProfileCapability)} | ${configuredProfileHasSecret ? 'credentials ready' : 'credentials missing'}</small></div>
+ <div class="live-order-audit-metric"><span>Workspace</span><strong>${v16Esc(configuredProfileLabel)}</strong><small>${v16Esc(configuredProfileCapability)} | ${configuredProfileHasSecret ? 'credentials ready' : 'credentials missing'}</small></div>
  <div class="live-order-audit-metric live-order-audit-metric--blocker"><span>Exact Blocker ${v16BuildInlineHelpHtml('Exact blocker', 'This is the one state that is currently stopping the engine from placing a fresh entry.')}</span><strong>${v16Esc(statusMeta.label)}</strong><small>${v16Esc(effectiveReason || 'No explicit block reason was recorded.')}</small></div>
  <div class="live-order-audit-metric live-order-audit-metric--capacity"><span>Next Engine Pass ${v16BuildInlineHelpHtml('Next engine pass', 'This tells you what the next scan can still do if the current blocker clears before the engine checks again.')}</span><strong>${currentCapacity}</strong><small>${v16Esc(nextPassSummary)}</small></div>
  <div class="live-order-audit-metric"><span>Slots Now</span><strong>${slotSummary.used}/${slotSummary.maxConcurrent}</strong><small>${slotSummary.live} live | ${slotSummary.queued} queued | ${slotSummary.reserved || 0} reserved</small></div>
@@ -7426,7 +7482,7 @@ async function v16RenderAutoTradeDecisionAudit(metrics = {}) {
  </div>
  <div class="live-order-audit-item-reasons">${v16Esc(note)}</div>
  </div>`).join('')}</div>` : ''}
- ${status === 'blocked_kill_switch' ? `<div class="live-order-audit-best"><span>Kill Switch</span><strong>${killSwitchState?.enabled ? 'Armed' : 'Cleared'}</strong><small>${killSwitchState?.enabled ? 'Turn it off in Settings before the engine can place new orders.' : 'The kill switch looks cleared now. Run another scan to refresh the audit state.'}</small></div>` : ''}
+ ${status === 'blocked_kill_switch' ? `<div class="live-order-audit-best"><span>Orders</span><strong>Manual Only</strong><small>Order placement is disabled in this app.</small></div>` : ''}
  ${dailyLossLimit > 0 ? `<div class="live-order-audit-best"><span>Loss Guard</span><strong>$${v16FmtNumber(dailyLossUsed, 2)} / $${v16FmtNumber(dailyLossLimit, 2)}</strong><small>${dailyLossUsed >= dailyLossLimit ? 'The loss guard is actively blocking fresh entries.' : 'The loss guard has not reached its block threshold.'}</small></div>` : ''}
  ${lossTrades.length ? `<div class="live-order-audit-best"><span>Trades Counted Toward Daily Loss</span><strong>${lossTrades.length}</strong><small>These recent losing closes are contributing to the current daily loss guard.</small></div>` : ''}
  ${lossTrades.length ? `<div class="live-order-audit-list">${lossTrades.map(entry => `
@@ -7662,7 +7718,7 @@ function v16BuildNotificationCenterEntries(metrics = {}) {
  sourceScannerId: 'current',
  sourceScannerName: 'Current Live',
  sourceType: 'scanner',
- what: `${String(alert.direction || '').toUpperCase()} score ${Number(alert.score || 0)} | entry $${v16FmtPrice(Number(alert.entry || alert.price || 0))}`,
+ what: `${String(alert.direction || '').toUpperCase()} score ${Number(alert.score || 0)} | entry Rs ${v16FmtPrice(Number(alert.entry || alert.price || 0))}`,
  why: Array.isArray(alert.reasons) && alert.reasons.length ? alert.reasons.slice(0, 2).join(' | ') : 'Signal entered the alert stack.',
  next: 'The engine will re-check live filters and auto-trade rules on the next decision pass.',
  action: 'Open the signal popup to inspect live decision status and funding forecast.',
@@ -8985,7 +9041,7 @@ function v16LiveOrderModeLabel(mode = 'usd', definition = null) {
 
 // Order preview chart, protection orders and private account refresh
  }
- return 'USD Notional';
+ return 'INR Value';
 }
 
 function v16IsLiveOrderPreviewChartEnabled() {
@@ -8999,10 +9055,7 @@ function v16SyncLiveOrderDeltaButton(symbol = '') {
  const resolvedSymbol = String(symbol || '').trim().toUpperCase();
  button.hidden = !resolvedSymbol;
  button.dataset.liveOrderSymbol = resolvedSymbol;
- // Build and set the trade URL so the click handler can open it
- const tradeUrl = typeof buildDeltaTradeUrl === 'function'
- ? buildDeltaTradeUrl(resolvedSymbol)
- : (resolvedSymbol ? `https://www.delta.exchange/app/futures/trade/${encodeURIComponent(resolvedSymbol)}` : '');
+ const tradeUrl = resolvedSymbol ? `https://web.dhan.co/?symbol=${encodeURIComponent(resolvedSymbol)}` : '';
  button.dataset.tradeUrl = tradeUrl;
 }
 
@@ -9010,23 +9063,21 @@ function v16RenderTradeOrderPreviewCard(preview = {}) {
  const computedContracts = Math.max(1, Math.round(Number(preview.size || 0)));
  const requestedNotional = Number(preview.requestedNotional || 0);
  const estimatedNotional = Number(preview.estimatedNotional || 0);
- const roundedAboveRequest = requestedNotional > 0 && estimatedNotional > requestedNotional * 1.05;
  return `
  <div class="live-order-preview-metrics">
- <div><span>Computed Contracts</span><strong>${v16FmtNumber(computedContracts, 0)}</strong></div>
+ <div><span>Qty / Lots</span><strong>${v16FmtNumber(computedContracts, 0)}</strong></div>
  <div><span>Mode</span><strong>${preview.orderType === 'limit_order' ? 'Limit' : 'Market'}</strong></div>
  <div><span>Side</span><strong>${String(preview.side || '').toUpperCase()}</strong></div>
  <div><span>Entered Size</span><strong>${v16Esc(v16LiveOrderModeLabel(v16LiveAccountView.orderSignalMeta?.sizeMode || 'usd', v16LiveAccountView.orderSignalMeta?.definition || null))}</strong></div>
- <div><span>Mark</span><strong>${Number(preview.markPrice || 0) > 0 ? `$${v16FmtPrice(preview.markPrice)}` : '-'}</strong></div>
- <div><span>Notional</span><strong>${estimatedNotional > 0 ? `$${v16FmtNumber(estimatedNotional, 2)}` : '-'}</strong></div>
+ <div><span>Reference</span><strong>${Number(preview.markPrice || 0) > 0 ? `Rs ${v16FmtPrice(preview.markPrice)}` : '-'}</strong></div>
+ <div><span>Approx Value</span><strong>${estimatedNotional > 0 ? `Rs ${v16FmtNumber(estimatedNotional, 2)}` : '-'}</strong></div>
  <div><span>Risk / Reward</span><strong>${Number(preview.riskRewardRatio || 0) > 0 ? `1:${v16FmtNumber(preview.riskRewardRatio, 2)}` : '-'}</strong></div>
  </div>
- ${roundedAboveRequest ? `<div class="account-inline-note bad">${v16Esc(`Requested $${v16FmtNumber(requestedNotional, 2)}, but Delta minimum tradable size is ${computedContracts} contract here, making actual notional $${v16FmtNumber(estimatedNotional, 2)}.`)}</div>` : ''}
  <div class="account-inline-note ${Number(preview.estimatedRisk || 0) > 0 ? 'warn' : 'good'}">
  ${v16Esc([
- Number(preview.limitPrice || 0) > 0 ? `Limit $${v16FmtPrice(preview.limitPrice)}` : 'Market execution',
- Number(preview.stopLoss || 0) > 0 ? `SL $${v16FmtPrice(preview.stopLoss)}` : 'No SL',
- Number(preview.takeProfit || 0) > 0 ? `TP $${v16FmtPrice(preview.takeProfit)}` : 'No TP',
+ Number(preview.limitPrice || 0) > 0 ? `Limit Rs ${v16FmtPrice(preview.limitPrice)}` : 'Market reference',
+ Number(preview.stopLoss || 0) > 0 ? `SL Rs ${v16FmtPrice(preview.stopLoss)}` : 'No SL',
+ Number(preview.takeProfit || 0) > 0 ? `TP Rs ${v16FmtPrice(preview.takeProfit)}` : 'No TP',
  ].filter(Boolean).join(' | '))}
  </div>`;
 }
@@ -9037,8 +9088,8 @@ function v16RenderProtectionOrderPreviewCard(preview = {}) {
  <div><span>Kind</span><strong>${preview.kind === 'target' ? 'Target' : 'Stop'}</strong></div>
  <div><span>Side</span><strong>${String(preview.side || '').toUpperCase()}</strong></div>
  <div><span>Size</span><strong>${v16FmtNumber(Number(preview.size || 0), 0)}</strong></div>
- <div><span>Trigger</span><strong>${Number(preview.triggerPrice || 0) > 0 ? `$${v16FmtPrice(preview.triggerPrice)}` : '-'}</strong></div>
- <div><span>Mark</span><strong>${Number(preview.markPrice || 0) > 0 ? `$${v16FmtPrice(preview.markPrice)}` : '-'}</strong></div>
+ <div><span>Trigger</span><strong>${Number(preview.triggerPrice || 0) > 0 ? `Rs ${v16FmtPrice(preview.triggerPrice)}` : '-'}</strong></div>
+ <div><span>Mark</span><strong>${Number(preview.markPrice || 0) > 0 ? `Rs ${v16FmtPrice(preview.markPrice)}` : '-'}</strong></div>
  <div><span>Projected P&amp;L</span><strong class="${Number(preview.projectedPnl || 0) >= 0 ? 'good' : 'bad'}">${v16FmtSigned(Number(preview.projectedPnl || 0))}</strong></div>
  </div>
  <div class="account-inline-note ${preview.kind === 'target' ? 'good' : 'warn'}">
@@ -9063,8 +9114,8 @@ function v16RenderPositionActionPreviewCard(payload = {}, preview = {}) {
  <div><span>Exit Side</span><strong>${String(preview.side || '').toUpperCase()}</strong></div>
  <div><span>Reduce Size</span><strong>${v16FmtNumber(size, 0)}</strong></div>
  <div><span>Mode</span><strong>${v16Esc(modeLabel)}</strong></div>
- <div><span>Exit Limit</span><strong>${Number(preview.limitPrice || 0) > 0 ? `$${v16FmtPrice(preview.limitPrice)}` : '-'}</strong></div>
- <div><span>Mark</span><strong>${Number(preview.markPrice || 0) > 0 ? `$${v16FmtPrice(preview.markPrice)}` : '-'}</strong></div>
+ <div><span>Exit Limit</span><strong>${Number(preview.limitPrice || 0) > 0 ? `Rs ${v16FmtPrice(preview.limitPrice)}` : '-'}</strong></div>
+ <div><span>Mark</span><strong>${Number(preview.markPrice || 0) > 0 ? `Rs ${v16FmtPrice(preview.markPrice)}` : '-'}</strong></div>
  <div><span>Reduce Only</span><strong>${preview.reduceOnly ? 'Yes' : 'No'}</strong></div>
  </div>
  <div class="account-inline-note warn">${v16Esc(action === 'close' ? 'This sends a reduce-only close order and then attempts linked-order cleanup.' : 'This sends a reduce-only partial close order.')}</div>`;
@@ -9202,42 +9253,44 @@ async function v16RefreshLiveTradeOrderPreview() {
  submitBtn.disabled = true;
  return null;
  }
+ const entryPrice = Number(draft.entry || draft.limitPrice || draft.price || 0);
+ const stopLoss = Number(draft.stopLoss || 0);
+ const takeProfit = Number(draft.takeProfit || 0);
+ const risk = Math.abs(entryPrice - stopLoss);
+ const reward = Math.abs(takeProfit - entryPrice);
+ const manualPreview = {
+  symbol: draft.symbol,
+  side: draft.side,
+  size: Math.max(0, Number(draft.size || draft.sizeInput || 0)),
+  orderType: draft.orderType,
+  limitPrice: draft.limitPrice,
+  markPrice: entryPrice,
+  requestedNotional: Math.max(0, Number(draft.sizeInput || 0)),
+  estimatedNotional: Math.max(0, Number(draft.sizeInput || 0)),
+  stopLoss,
+  takeProfit,
+  riskRewardRatio: entryPrice > 0 && risk > 0 && reward > 0 ? reward / risk : 0,
+ };
  const protections = resolveBracketProtectionLevels(draft);
  const protectionWarning = !draft.reduceOnly && !protections.hasFullProtection
- ? 'Manual override: stop loss and take profit are not complete. The entry order can still be sent.'
+ ? 'Manual warning: stop loss and take profit are not complete.'
  : '';
- previewCard.innerHTML = '<div class="account-inline-note">Preparing live order preview...</div>';
- const response = await v16RuntimeSend('v16:getTradeOrderPreview', {
- profileId: getV16ActiveAccountProfile().id,
- ...draft,
- });
- if (!response?.ok) {
- previewCard.innerHTML = `<div class="account-inline-note bad">${v16Esc(response?.error || 'Failed to prepare order preview.')}</div>`;
- submitBtn.disabled = true;
- v16LiveAccountView.preview = null;
- return null;
- }
- v16LiveAccountView.preview = response.preview || null;
+ v16LiveAccountView.preview = manualPreview;
  v16LiveAccountView.orderSignalMeta = {
  ...(v16LiveAccountView.orderSignalMeta || {}),
  symbol: draft.symbol,
  definition,
  sizeMode,
- markPrice: Number(response.preview?.markPrice || 0),
- computedContracts: Math.max(1, Math.round(Number(response.preview?.size || draft.size || 1))),
+ markPrice: Number(manualPreview.markPrice || 0),
+ computedContracts: Math.max(1, Math.round(Number(manualPreview.size || draft.size || 1))),
  };
- const blockReason = v16ResolveTradeEntryBlockReason({
- symbol: draft.symbol,
- preview: response.preview || null,
- draft,
- });
  const settings = sanitizeAutoTradeSettings((await storeGet('autoTradeSettings'))?.autoTradeSettings || {});
  const riskQuality = resolveRiskQualityGate({
  ...(v16LiveAccountView.orderSignal || {}),
  symbol: draft.symbol,
  direction: draft.side,
- entry: draft.entry || draft.limitPrice || response.preview?.limitPrice,
- price: response.preview?.markPrice || draft.entry,
+ entry: draft.entry || draft.limitPrice || manualPreview.limitPrice,
+ price: manualPreview.markPrice || draft.entry,
  sl: draft.stopLoss,
  tp1: draft.takeProfit,
  }, settings);
@@ -9246,10 +9299,10 @@ async function v16RefreshLiveTradeOrderPreview() {
  : '';
  const riskNoteLabel = riskBlock ? riskBlock.replace(/^Risk quality blocked:/, 'Manual override warning:') : `${riskQuality.label}: ${(riskQuality.reasons || []).slice(0, 3).join(' | ') || `RR ${riskQuality.rr}`}`;
  const riskNote = `<div class="account-inline-note ${riskQuality.passed ? 'good' : 'warn'}">${v16Esc(riskNoteLabel)}</div>`;
- previewCard.innerHTML = `${v16RenderTradeOrderPreviewCard(response.preview || {})}${protectionWarning ? `<div class="account-inline-note warn">${v16Esc(protectionWarning)}</div>` : ''}${riskNote}${blockReason ? `<div class="account-inline-note bad">${v16Esc(blockReason)}</div>` : ''}`;
- submitBtn.disabled = !!blockReason || !v16CapabilityAllowsTrade();
+ previewCard.innerHTML = `${v16RenderTradeOrderPreviewCard(manualPreview)}${protectionWarning ? `<div class="account-inline-note warn">${v16Esc(protectionWarning)}</div>` : ''}${riskNote}<div class="account-inline-note good">Market Data Only | Manual Trading Only. No order will be placed from this app.</div>`;
+ submitBtn.disabled = false;
  await v16RefreshLiveOrderPreviewChart(true);
- return response;
+ return { ok: true, preview: manualPreview, manualOnly: true };
 }
 
 async function openV16ProtectionOrderPreview(position = null, kind = 'stop', seedOverrides = {}) {
@@ -9272,8 +9325,8 @@ async function openV16ProtectionOrderPreview(position = null, kind = 'stop', see
  <div class="live-order-preview-grid">
  <label class="account-field"><span>Symbol</span><input class="si" value="${v16Esc(seed.symbol)}" readonly></label>
  <label class="account-field"><span>Position Side</span><input class="si" value="${v16Esc(String(seed.positionSide || 'long').toUpperCase())}" readonly></label>
- <label class="account-field"><span>Entry</span><input class="si" value="${seed.entryPrice > 0 ? `$${v16FmtPrice(seed.entryPrice)}` : '-'}" readonly></label>
- <label class="account-field"><span>Mark</span><input class="si" value="${seed.markPrice > 0 ? `$${v16FmtPrice(seed.markPrice)}` : '-'}" readonly></label>
+ <label class="account-field"><span>Entry</span><input class="si" value="${seed.entryPrice > 0 ? `Rs ${v16FmtPrice(seed.entryPrice)}` : '-'}" readonly></label>
+ <label class="account-field"><span>Mark</span><input class="si" value="${seed.markPrice > 0 ? `Rs ${v16FmtPrice(seed.markPrice)}` : '-'}" readonly></label>
  <label class="account-field"><span>Reduce Size</span><input class="si" type="number" id="liveProtectionSize" min="1" step="1" value="${Math.max(1, Math.round(seed.size || 1))}"></label>
  <label class="account-field"><span>${kind === 'target' ? 'Target Trigger' : 'Stop Trigger'}</span><input class="si" type="number" id="liveProtectionTriggerPrice" min="0" step="any" value="${Number(seed.triggerPrice || 0) > 0 ? v16Esc(String(seed.triggerPrice)) : ''}"></label>
  </div>
@@ -9345,8 +9398,8 @@ async function openV16PositionActionPreview(position = null, action = 'close') {
  <label class="account-field"><span>Symbol</span><input class="si" value="${v16Esc(position.symbol)}" readonly></label>
  <label class="account-field"><span>Position</span><input class="si" value="${v16Esc(String(position.side || 'long').toUpperCase())}" readonly></label>
  <label class="account-field"><span>Position Size</span><input class="si" value="${v16FmtNumber(Number(position.size || 0), 0)}" readonly></label>
- <label class="account-field"><span>Entry</span><input class="si" value="${Number(position.entry || 0) > 0 ? `$${v16FmtPrice(position.entry)}` : '-'}" readonly></label>
- <label class="account-field"><span>Mark</span><input class="si" value="${Number(position.markPrice || 0) > 0 ? `$${v16FmtPrice(position.markPrice)}` : '-'}" readonly></label>
+ <label class="account-field"><span>Entry</span><input class="si" value="${Number(position.entry || 0) > 0 ? `Rs ${v16FmtPrice(position.entry)}` : '-'}" readonly></label>
+ <label class="account-field"><span>Mark</span><input class="si" value="${Number(position.markPrice || 0) > 0 ? `Rs ${v16FmtPrice(position.markPrice)}` : '-'}" readonly></label>
  <label class="account-field"><span>Action</span><input class="si" value="${v16Esc(v16PositionActionLabel(action))}" readonly></label>
  <label class="account-field"><span>Order Type</span><select class="si" id="livePositionActionOrderType"><option value="market_order" selected>Market</option><option value="limit_order">Limit</option></select></label>
  <label class="account-field"><span>Exit Mode</span><select class="si" id="livePositionActionEntryMode"><option value="market" selected>Market</option><option value="limit">Limit</option><option value="maker_only">Maker Only</option></select></label>
@@ -10201,7 +10254,7 @@ async function openV16LiveTradeOrderPreview(signal = null) {
  };
  const initialSizeMode = v16NormalizeLiveOrderSizeMode(v16LiveAccountView.orderSignalMeta?.sizeMode || 'usd');
  const titleEl = document.getElementById('liveOrderTitle');
- if (titleEl) titleEl.textContent = 'Live Order Preview';
+ if (titleEl) titleEl.textContent = 'Manual Trade Ticket';
  const initialSizeValue = v16ComputeLiveOrderInputFromContracts(orderSignal.size, v16LiveAccountView.orderSignalMeta?.sizeMode || 'usd', {
  definition: v16LiveAccountView.orderSignalMeta?.definition || null,
  price: Math.max(0, Number(orderSignal.limitPrice || orderSignal.entry || 0)),
@@ -10210,7 +10263,7 @@ async function openV16LiveTradeOrderPreview(signal = null) {
  <div class="live-order-preview-grid">
  <label class="account-field"><span>Symbol</span><input class="si" id="liveOrderSymbol" value="${v16Esc(orderSignal.symbol)}"></label>
  <label class="account-field"><span>Side</span><select class="si" id="liveOrderSide"><option value="long" ${orderSignal.side === 'long' ? 'selected' : ''}>Long / Buy</option><option value="short" ${orderSignal.side === 'short' ? 'selected' : ''}>Short / Sell</option></select></label>
- <label class="account-field"><span>Qty Mode</span><select class="si" id="liveOrderQtyMode"><option value="usd" ${initialSizeMode === 'usd' ? 'selected' : ''}>USD</option><option value="contracts" ${initialSizeMode === 'contracts' ? 'selected' : ''}>Lot / Contracts</option><option value="coin" ${initialSizeMode === 'coin' ? 'selected' : ''}>Coin</option></select></label>
+ <label class="account-field"><span>Qty Mode</span><select class="si" id="liveOrderQtyMode"><option value="contracts" ${initialSizeMode === 'contracts' ? 'selected' : ''}>Qty / Lots</option><option value="usd" ${initialSizeMode === 'usd' ? 'selected' : ''}>INR Value</option><option value="coin" ${initialSizeMode === 'coin' ? 'selected' : ''}>Units</option></select></label>
  <label class="account-field"><span id="liveOrderSizeLabel">USD Notional</span><input class="si" type="number" id="liveOrderSize" min="0" step="any" value="${v16Esc(String(initialSizeValue))}"></label>
  <label class="account-field"><span>Order Type</span><select class="si" id="liveOrderType"><option value="market_order" ${orderSignal.orderType === 'market_order' ? 'selected' : ''}>Market</option><option value="limit_order" ${orderSignal.orderType === 'limit_order' ? 'selected' : ''}>Limit</option></select></label>
  <label class="account-field"><span>Entry Mode</span><select class="si" id="liveOrderEntryMode"><option value="market" ${orderSignal.entryMode === 'market' ? 'selected' : ''}>Market</option><option value="limit" ${orderSignal.entryMode === 'limit' ? 'selected' : ''}>Limit</option><option value="maker_only" ${orderSignal.entryMode === 'maker_only' ? 'selected' : ''}>Maker Only</option></select></label>
@@ -10220,17 +10273,17 @@ async function openV16LiveTradeOrderPreview(signal = null) {
  <label class="account-field"><span>TP1 (Full Close)</span><input class="si" type="number" id="liveOrderTakeProfit" min="0" step="any" value="${orderSignal.takeProfit > 0 ? v16Esc(String(orderSignal.takeProfit)) : ''}"></label>
  <label class="account-field"><span>TP2 (Optional 2nd Target)</span><input class="si" type="number" id="liveOrderTakeProfit2" min="0" step="any" value="${orderSignal.takeProfit2 > 0 ? v16Esc(String(orderSignal.takeProfit2)) : ''}"></label>
  </div>
- <div class="live-order-preview-copy">${v16Esc(orderSignal.note || 'Review the FWD TradeDesk Pro live trade preview below before sending the order to the connected exchange.')}</div>
+ <div class="live-order-preview-copy">${v16Esc(orderSignal.note || 'Review this manual trade ticket, then place the trade yourself in your broker app if you choose to act.')}</div>
  <div class="account-inline-note ${previewEntryTrigger.passed ? 'good' : 'bad'}">Entry trigger: ${v16Esc(previewEntryTrigger.label || 'Unknown')} - ${v16Esc((previewEntryTrigger.confirmations || previewEntryTrigger.reasons || []).slice(0, 2).join(' | ') || 'Balanced confirm required')}. Setup edge: ${v16Esc(previewSetupEdge?.statusLabel || 'Proving')} (${previewSetupEdge ? `${Number(previewSetupEdge.trades || 0)} sample, expectancy ${Number(previewSetupEdge.expectancy || 0) >= 0 ? '+' : ''}${v16FmtNumber(Number(previewSetupEdge.expectancy || 0), 2)}` : 'no paper/live sample yet'}).</div>
- <div class="live-order-preview-card" id="liveOrderPreviewCard">Preparing live order preview...</div>
+ <div class="live-order-preview-card" id="liveOrderPreviewCard">Preparing manual trade ticket...</div>
  <div class="live-order-preview-card">
  <div class="mo-section">Chart Review</div>
- <div class="live-order-preview-copy">Chart in review panel is back. Use it to inspect the live order context before opening the detached chart.</div>
+ <div class="live-order-preview-copy">Use this chart to inspect the setup before opening your broker app.</div>
  <div id="liveOrderChartPreview"></div>
  </div>`;
  overlay.style.display = 'flex';
  v16SyncLiveOrderDeltaButton(orderSignal.symbol);
- submitBtn.textContent = 'Place Live Order';
+ submitBtn.textContent = 'Save Manual Ticket';
  submitBtn.disabled = true;
  const syncTypeControls = () => {
  const typeEl = document.getElementById('liveOrderType');
@@ -10327,9 +10380,43 @@ async function submitV16LiveOrder() {
  }
  v16LiveAccountView.submitInFlight = true;
  submitBtn.disabled = true;
- previewCard.innerHTML = '<div class="account-inline-note">Submitting request...</div>';
+ previewCard.innerHTML = '<div class="account-inline-note">Saving manual trade ticket...</div>';
  let response = null;
  try {
+ const draft = v16LiveAccountView.activeOpenOrder
+ ? v16ReadOpenOrderEditDraftFromForm()
+ : v16LiveAccountView.protectionOrder
+ ? v16ReadProtectionOrderDraftFromForm()
+ : v16LiveAccountView.positionAction
+ ? (document.getElementById('livePositionActionOrderType') ? v16ReadPositionActionDraftFromForm() : v16LiveAccountView.positionAction)
+ : v16ReadLiveOrderDraftFromForm();
+ const manualTicket = {
+  id: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  ts: Date.now(),
+  mode: 'dhan_manual_only',
+  source: v16LiveAccountView.activeOpenOrder ? 'order_edit_review' : v16LiveAccountView.protectionOrder ? 'protection_review' : v16LiveAccountView.positionAction ? 'position_action_review' : 'signal_ticket',
+  symbol: String(draft?.symbol || '').trim().toUpperCase(),
+  side: String(draft?.side || draft?.positionSide || draft?.requestedAction || '').trim().toLowerCase(),
+  entry: Number(draft?.entry || draft?.price || draft?.limitPrice || draft?.triggerPrice || 0),
+  stopLoss: Number(draft?.stopLoss || draft?.sl || 0),
+  target: Number(draft?.takeProfit || draft?.tp1 || draft?.triggerPrice || 0),
+  target2: Number(draft?.takeProfit2 || draft?.tp2 || 0),
+  size: Number(draft?.size || draft?.sizeInput || draft?.orderSize || 0),
+  orderType: String(draft?.orderType || 'manual').trim(),
+  reason: String(v16LiveAccountView.orderSignal?.note || v16LiveAccountView.orderSignal?.setup || 'Manual ticket from FWD Bharat MarketDesk (NSE/BSE)').trim(),
+  status: 'planned',
+ };
+ const existing = await storeGet('dhanManualTradeTickets');
+ const rows = Array.isArray(existing?.dhanManualTradeTickets) ? existing.dhanManualTradeTickets : [];
+ await storeSet({ dhanManualTradeTickets: [manualTicket, ...rows].slice(0, 200) });
+ v16LiveAccountView.lastOrderAction = { type: 'manual-ticket', symbol: manualTicket.symbol, at: Date.now() };
+ response = { ok: true, manualTicket };
+ previewCard.innerHTML = `<div class="account-inline-note good">${v16Esc(`Manual ticket saved for ${manualTicket.symbol || 'this setup'}. Order placement is disabled. Use your broker app for manual trading.`)}</div>`;
+ globalThis.showSystemToast?.('Manual ticket saved', `${manualTicket.symbol || 'Setup'} is ready for manual review.`, 'success', 4200);
+ setTimeout(() => {
+  closeV16LiveOrderOverlay();
+ }, 700);
+ return response;
  if (v16LiveAccountView.activeOpenOrder) {
  response = await v16RuntimeSend('v16:updateOrder', v16ReadOpenOrderEditDraftFromForm());
  if (!response?.ok) {
@@ -10430,6 +10517,22 @@ function bindV16SettingsUi() {
  document.addEventListener('click', async (e) => {
  if (e.target?.id !== 'btnAccountProfileSetActive' && !e.target?.closest('#btnAccountProfileSetActive')) return;
  await saveV16ProfileFromEditor(true);
+ });
+ // Delegation: Save Dhan Data Credentials
+ document.addEventListener('click', async (e) => {
+ if (e.target?.id !== 'btnSaveDhanCredentials' && !e.target?.closest('#btnSaveDhanCredentials')) return;
+ const btn = document.getElementById('btnSaveDhanCredentials');
+ if (btn) btn.disabled = true;
+ const resultEl = document.getElementById('accountApiTestResult');
+ if (resultEl) {
+ resultEl.textContent = 'Saving credentials in encrypted Windows app storage...';
+ resultEl.className = 'account-inline-note warn';
+ }
+ try {
+ await saveDhanCredentialsFromEditor();
+ } finally {
+ if (btn) btn.disabled = false;
+ }
  });
  // Delegation: Save profile security
  document.addEventListener('click', async (e) => {
@@ -10589,51 +10692,41 @@ function bindV16SettingsUi() {
  await renderV16PositionsPane(null, false);
  document.getElementById('livePositionsRows')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
  });
- // Delegation: Test API Key
+ // Delegation: Test Dhan Data API
  document.addEventListener('click', async (e) => {
  if (e.target?.id !== 'btnTestPrivateApi' && !e.target?.closest('#btnTestPrivateApi')) return;
  const resultEl = document.getElementById('accountApiTestResult');
  const btn = document.getElementById('btnTestPrivateApi');
  if (!resultEl || !btn) return;
- const { profile, secret } = readV16ProfileEditor();
- const tradingKey = String(secret?.tradingKey || '').trim();
- const tradingSecret = String(secret?.tradingSecret || '').trim();
- const existingProfile = getV16ProfileById(profile.id) || profile;
- const usesNative = v16UsesNativeCredential(profile) || v16UsesNativeCredential(existingProfile);
- if ((!tradingKey || !tradingSecret) && !usesNative) {
- resultEl.textContent = 'Enter Trading Key and Trading Secret first.';
- resultEl.className = 'account-inline-note bad';
- return;
- }
- if (!['ReadOnly', 'TradeEnabled'].includes(profile.capability)) {
- resultEl.textContent = 'Set capability to ReadOnly or TradeEnabled before testing.';
+ const { secret } = readV16ProfileEditor();
+ const clientId = String(secret?.tradingKey || '').trim();
+ const accessToken = String(secret?.tradingSecret || '').trim();
+ if ((!clientId || !accessToken) && !globalThis.fwdDesktopNative?.sendNativeMessage) {
+ resultEl.textContent = 'Enter Client ID and Access Token in this app first.';
  resultEl.className = 'account-inline-note bad';
  return;
  }
  btn.disabled = true;
- resultEl.textContent = 'Saving and activating profile, then testing API...';
+ resultEl.textContent = 'Saving credentials, then testing read-only market data...';
  resultEl.className = 'account-inline-note warn';
  try {
- await loadV16AccountState();
- const draft = v16UpsertEditorProfileDraft(getV16Metadata(), getV16Secrets(), profile, secret, { setActive: true });
- await persistV16AccountState(draft.metadata, draft.secrets);
- await v16RefreshNativeCredentialState(true);
- resultEl.textContent = (usesNative || v16UsesNativeCredential(getV16ProfileById(profile.id) || {}))
- ? 'Testing connection through encrypted Windows app storage...'
- : 'Testing FWD TradeDesk Pro connection to the exchange...';
- const response = await v16RuntimeSend('v16:getPrivateAccountSnapshot', { profileId: profile.id });
+ if (clientId || accessToken) {
+  const saveResponse = await saveDhanCredentialsFromEditor({ silent: true });
+  if (!saveResponse?.ok) {
+   btn.disabled = false;
+   return;
+  }
+ }
+ const response = await globalThis.fwdDesktopNative?.sendNativeMessage?.({ type: 'dhan_data', action: 'test' });
  btn.disabled = false;
  if (response?.ok) {
- const wCount = Array.isArray(response.walletBalances) ? response.walletBalances.length : 0;
- const pCount = Array.isArray(response.marginedPositions) ? response.marginedPositions.length : 0;
- resultEl.textContent = `OK API key valid - ${wCount} wallet balance(s), ${pCount} open position(s) returned from ${String(response.region || '').toUpperCase() || 'Delta'}.`;
+ resultEl.textContent = `OK Market Data API ready - ${Number(response.instrumentCount || 0)} instruments cached. Order placement remains disabled.`;
  resultEl.className = 'account-inline-note good';
- // Light UI refresh + positions pane refresh
  syncV16SettingsPanelState();
- populateV16ProfileEditor(getV16SelectedAccountProfile());
- globalThis.renderV16PositionsPane?.(null, true);
  } else {
- resultEl.textContent = `X ${response?.error || 'API key test failed. Check key, secret, and capability.'}`;
+ const status = response?.ltpStatus || response?.status || 0;
+ const suffix = status ? ` (HTTP ${status})` : '';
+ resultEl.textContent = `X ${response?.error || 'Market Data API test failed. Check client ID, access token, and data access.'}${suffix}`;
  resultEl.className = 'account-inline-note bad';
  }
  } catch (err) {
@@ -11264,7 +11357,7 @@ async function renderV16RiskAutomationCockpit() {
  const reservedSlots = v16CountReservedSlotsFromControls(manualControls, new Set(positions.map(position => v16NormalizeSymbol(position.symbol || position.product_symbol || ''))));
  const slotUsed = positions.length + reservedSlots;
  const dailyLossLimit = Number(settings.dailyLossLimitUSD || 0);
- const dailyLossUsed = Math.abs(Math.min(Number(store?.autoTradeDailyLoss || 0), 0));
+ const dailyLossUsed = Math.max(0, Number(store?.autoTradeDailyLoss || 0));
  const profileReady = !!profile?.id && capabilityMeta.allowsAccountRead;
  const tradeCapable = !!capabilityMeta.allowsTrade;
  const apiReady = capabilityMeta.allowsAccountRead ? hasSecret : true;
@@ -11286,30 +11379,30 @@ async function renderV16RiskAutomationCockpit() {
  const strip = document.getElementById('riskAutomationStrip');
  if (strip) {
  const stripRows = [
- ['Profile', capabilityMeta.label || 'Public', profileReady ? (tradeCapable ? 'Trade-enabled profile' : 'Read-only profile') : 'Research profile only', profileReady ? (tradeCapable ? 'good' : 'warn') : 'warn'],
- ['API', apiReady ? 'Ready' : 'Missing', apiReady ? (hasSecret ? 'Private session available' : 'Public data only') : 'Save/test credentials', apiReady ? 'good' : 'bad'],
+ ['Workspace', capabilityMeta.label || 'Public', profileReady ? 'Read-only market data' : 'Research mode only', profileReady ? 'good' : 'warn'],
+ ['API', apiReady ? 'Ready' : 'Missing', apiReady ? (hasSecret ? 'Market-data session available' : 'Public data only') : 'Save/test credentials', apiReady ? 'good' : 'bad'],
  ['Risk', riskReady ? 'Clear' : 'Blocked', dailyLossLimit > 0 ? `$${dailyLossUsed.toFixed(0)} / $${dailyLossLimit.toFixed(0)} daily loss` : `${slotUsed}/${slotMax || '-'} slots used`, riskReady ? 'good' : 'bad'],
  ['Automation', automationMode, v16RiskAutoModeDetail({ autoTradeOn: !!store.autoTrade, settings, liveAutomationAllowed }), liveAutomationAllowed ? 'good' : (store.autoTrade ? 'bad' : 'warn')],
- ['Kill Switch', killSwitch.enabled ? 'On' : 'Off', killSwitch.reason || (killSwitch.enabled ? 'Execution locked' : 'No global execution block'), killSwitch.enabled ? 'bad' : 'good'],
+ ['Orders', 'Manual Only', 'Order placement is disabled in this app', 'good'],
  ];
  strip.innerHTML = stripRows.map(([label, value, detail, tone]) => `<div class="risk-auto-status is-${v16Esc(v16RiskAutoToneClass(tone))}"><span>${v16Esc(label)}</span><strong>${v16Esc(value)}</strong><small>${v16Esc(detail)}</small></div>`).join('');
  }
  const apiGrid = document.getElementById('riskApiSafetyGrid');
  if (apiGrid) {
  apiGrid.innerHTML = [
- v16RiskAutoCardHtml('Profile Mode', capabilityMeta.label || 'Public', capabilityMeta.description || 'Current account capability.', tradeCapable ? 'good' : capabilityMeta.allowsAccountRead ? 'warn' : 'info'),
- v16RiskAutoCardHtml('Credential State', hasSecret ? 'Session Ready' : 'No Secret', hasSecret ? 'Private account snapshot can be requested.' : 'Open API Keys and run Test API Key.', hasSecret ? 'good' : 'warn'),
- v16RiskAutoCardHtml('Live Sync', v16IsLiveAccountSyncEnabled() ? 'On' : 'Off', v16IsLiveAccountSyncEnabled() ? 'Positions and analytics can refresh.' : 'Manual refresh only.', v16IsLiveAccountSyncEnabled() ? 'good' : 'warn'),
+ v16RiskAutoCardHtml('Workspace Mode', capabilityMeta.label || 'Public', 'Read-only market-data capability. Orders stay manual outside this app.', 'info'),
+ v16RiskAutoCardHtml('Credential State', hasSecret ? 'Session Ready' : 'No Secret', hasSecret ? 'Market-data checks can be requested.' : 'Open API Keys and run Test API Key.', hasSecret ? 'good' : 'warn'),
+ v16RiskAutoCardHtml('Account Sync', 'Disabled', 'This build does not read positions or place orders.', 'info'),
  v16RiskAutoCardHtml('API Cooldown', runtimeIssue ? 'Cooling' : 'Clear', runtimeIssue ? `Retry in ${v16FormatDurationShort(runtimeIssue.waitMs)}` : 'No private/public cooldown active.', runtimeIssue ? 'bad' : 'good'),
  v16RiskAutoCardHtml('Open Positions', String(positions.length), `${openOrders.length} open order${openOrders.length === 1 ? '' : 's'} currently known.`, positions.length ? 'info' : 'good'),
- v16RiskAutoCardHtml('Kill Switch', killSwitch.enabled ? 'On' : 'Off', killSwitch.reason || (killSwitch.enabled ? 'Execution locked.' : 'Execution guard clear.'), killSwitch.enabled ? 'bad' : 'good'),
+ v16RiskAutoCardHtml('Orders', 'Manual Only', 'Order placement is disabled in this app.', 'good'),
  ].join('');
  }
  const apiNote = document.getElementById('riskApiSafetyNote');
  if (apiNote) {
  apiNote.textContent = apiReady
- ? 'API safety is usable. Keep live mode off until order permissions, max order size, and daily loss limits are confirmed.'
- : 'API safety is incomplete. Save/test credentials before expecting live positions, live analytics, or order previews.';
+ ? 'Market-data access is usable. Order placement remains blocked; review ideas manually in your broker app.'
+ : 'API safety is incomplete. Save/test credentials before expecting market-data scans or manual review tickets.';
  apiNote.className = `risk-auto-note ${apiReady ? 'good' : 'warn'}`;
  }
  const preview = document.getElementById('riskAutomationRulePreview');
@@ -11319,10 +11412,10 @@ async function renderV16RiskAutomationCockpit() {
  const rulesGrid = document.getElementById('riskAutomationRulesGrid');
  if (rulesGrid) {
  rulesGrid.innerHTML = [
- v16RiskAutoCardHtml('Automation Mode', automationMode, store.autoTrade ? 'Live futures auto-trade toggle is on.' : settings.paperTrackingEnabled ? 'Qualified signals go to paper ledger.' : 'Automation will not place live futures orders.', liveAutomationAllowed ? 'good' : store.autoTrade ? 'bad' : 'warn'),
- v16RiskAutoCardHtml('Entry Score', String(settings.minScore || 0), 'Minimum signal score for automated entry consideration.', Number(settings.minScore || 0) >= 70 ? 'good' : 'warn'),
- v16RiskAutoCardHtml('Max Per Scan', String(settings.maxPerScan || 0), 'Limits how many new signals can be acted on per scan.', Number(settings.maxPerScan || 0) > 0 ? 'good' : 'warn'),
- v16RiskAutoCardHtml('Max Per Day', String(settings.maxPerDay || 0), 'Daily automation entry cap.', Number(settings.maxPerDay || 0) > 0 ? 'good' : 'warn'),
+ v16RiskAutoCardHtml('Automation Mode', 'Manual Only', 'Signals create review context only; order placement is blocked.', 'info'),
+ v16RiskAutoCardHtml('Entry Score', String(settings.minScore || 0), 'Minimum signal score for manual review consideration.', Number(settings.minScore || 0) >= 70 ? 'good' : 'warn'),
+ v16RiskAutoCardHtml('Max Per Scan', String(settings.maxPerScan || 0), 'Limits how many new signals can enter the review queue per scan.', Number(settings.maxPerScan || 0) > 0 ? 'good' : 'warn'),
+ v16RiskAutoCardHtml('Max Per Day', String(settings.maxPerDay || 0), 'Daily manual-review queue cap.', Number(settings.maxPerDay || 0) > 0 ? 'good' : 'warn'),
  v16RiskAutoCardHtml('Max Concurrent', String(settings.maxConcurrent || 0), `${slotUsed}/${slotMax || '-'} slots used including reserved manual controls.`, slotMax > 0 && slotUsed >= slotMax ? 'bad' : 'good'),
  v16RiskAutoCardHtml('Risk Quality Gate', settings.riskQualityRequired ? 'Required' : 'Optional', settings.riskQualityRequired ? `R:R >= ${settings.riskQualityMinRewardRisk}, stop <= ${settings.riskQualityMaxStopDistancePct}%` : 'Signals may pass without quality gate.', settings.riskQualityRequired ? 'good' : 'warn'),
  v16RiskAutoCardHtml('Cooldown', `${settings.cooldownSec || 0}s`, 'Delay after automated action before next eligible entry.', Number(settings.cooldownSec || 0) > 0 ? 'good' : 'warn'),

@@ -340,7 +340,7 @@ function v16BuildLiveAnalyticsModel(metrics = {}, productDefinitions = new Map()
  primaryPnlLabel: hasOpenOptionExposure ? 'OPEN P&L' : 'REALIZED P&L',
  primaryPnlValue: hasOpenOptionExposure ? selectedUnrealized : totalRealized,
  primaryPnlMeta: hasOpenOptionExposure
- ? `Mark-to-market across ${positions.length} live option position${positions.length === 1 ? '' : 's'} from Delta positions.`
+ ? `Mark-to-market across ${positions.length} live option position${positions.length === 1 ? '' : 's'}.`
  : `${closedRecords.length} closed trade${closedRecords.length === 1 ? '' : 's'} in range.`,
  usesDeltaOptionMtM: hasOpenOptionExposure,
  realized: totalRealized,
@@ -619,7 +619,7 @@ function v16RenderAnalyticsBarChart(elementId, series = [], tone = 'neutral', em
 function v16NormalizeTradeCheckSymbol(value = '') {
  const raw = String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
  if (!raw) return '';
- if (raw === 'FWD100') return 'FWD100';
+ if (raw === 'NIFTY') return 'NIFTY';
  if (raw.endsWith('USD') || raw.endsWith('USDT')) return raw;
  return `${raw}USD`;
 }
@@ -683,7 +683,7 @@ function v16BuildManualTradeCheckDecision({ symbol = '', side = 'long', scannerR
  } else if (avoid.length && !supportive.length) {
  verdict = 'Avoid now';
  tone = 'bad';
- reasons.push(`${avoid[0].sourceLabel} is showing avoid/ignore for this coin.`);
+ reasons.push(`${avoid[0].sourceLabel} is showing avoid/ignore for this stock.`);
  } else {
  reasons.push('No strong scanner agreement for this manual idea yet.');
  }
@@ -695,7 +695,7 @@ function v16BuildManualTradeCheckDecision({ symbol = '', side = 'long', scannerR
 
 async function v16OpenAnalyticsChart(symbol = '', trade = null) {
  const normalized = v16NormalizeTradeCheckSymbol(symbol || trade?.symbol || v16LiveAnalyticsView.tradeCheckSymbol || '');
- if (!normalized || normalized === 'FWD100') return;
+ if (!normalized || normalized === 'NIFTY') return;
  await globalThis.ensureChartWorkspaceLoaded?.();
  if (trade) {
  await globalThis.FWDTradeDeskChartWorkspace?.openReplayForTrade?.(trade);
@@ -795,8 +795,8 @@ async function v16RenderAnalyticsTradeCheck(analyticsModel = {}, shadowLedger = 
  if (chartButton) chartButton.onclick = () => { void v16OpenAnalyticsChart(v16LiveAnalyticsView.tradeCheckSymbol); };
  const symbol = v16NormalizeTradeCheckSymbol(v16LiveAnalyticsView.tradeCheckSymbol || '');
  if (!symbol) {
- if (meta) meta.textContent = 'Search a coin before taking a manual trade.';
- if (result) result.innerHTML = `<div class="account-inline-note">Enter a coin to compare scanner signals, paper history, and closed journal results.</div>`;
+ if (meta) meta.textContent = 'Search a stock before taking a manual trade.';
+ if (result) result.innerHTML = `<div class="account-inline-note">Enter a stock to compare scanner signals, paper history, and closed journal results.</div>`;
  return;
  }
  const scannerRows = await v16LoadStrategyRowsForSymbol(symbol);
@@ -817,7 +817,7 @@ async function v16RenderAnalyticsTradeCheck(analyticsModel = {}, shadowLedger = 
  ${decision.liveTrades[0] ? `<button class="bsm" type="button" data-analytics-live-replay="${v16Esc(decision.liveTrades[0].id)}">Replay Last Real</button>` : ''}
  </div>
  ${paperHtml}
- <div class="live-analytics-match-grid">${rowsHtml || '<div class="account-inline-note">No scanner currently matches this coin.</div>'}</div>`;
+ <div class="live-analytics-match-grid">${rowsHtml || '<div class="account-inline-note">No scanner currently matches this stock.</div>'}</div>`;
  result.querySelector('[data-analytics-chart-symbol]')?.addEventListener('click', event => { void v16OpenAnalyticsChart(event.currentTarget?.dataset.analyticsChartSymbol || symbol); });
  result.querySelector('[data-analytics-paper-replay]')?.addEventListener('click', event => {
  const trade = decision.closedPaper.find(item => String(item.id || '') === String(event.currentTarget?.dataset.analyticsPaperReplay || '')) || decision.closedPaper[0];
@@ -880,7 +880,7 @@ function v16RenderLiveAnalyticsReview(model = {}) {
  ? 'At least one closed trade still needs post-trade notes.'
  : `${trades.length} closed trade${trades.length === 1 ? '' : 's'} ready for review.`;
  if (!trades.length) {
- journalWrap.innerHTML = `<div class="empty"><div class="ei">--</div><div class="eh">No journal trades yet</div><div class="es">Closed positions detected from Delta history will appear here.</div></div>`;
+ journalWrap.innerHTML = `<div class="empty"><div class="ei">--</div><div class="eh">No journal trades yet</div><div class="es">Closed positions detected from history will appear here.</div></div>`;
  } else {
  journalWrap.innerHTML = trades.slice(0, 40).map(trade => `
  <button class="live-journal-row ${trade.hasNotes ? '' : 'pending'}" data-live-analytics-journal-id="${v16Esc(trade.id)}">
@@ -908,7 +908,7 @@ function v16RenderLiveAnalyticsReview(model = {}) {
  ? `${resolvedFeed.length} activity record${resolvedFeed.length === 1 ? '' : 's'} in the selected range.`
  : 'No activity in the selected range.';
  if (!resolvedFeed.length) {
- historyWrap.innerHTML = `<div class="empty"><div class="ei">--</div><div class="eh">No trade activity loaded</div><div class="es">Refresh live data to load fills and order history from Delta Exchange.</div></div>`;
+ historyWrap.innerHTML = `<div class="empty"><div class="ei">--</div><div class="eh">No trade activity loaded</div><div class="es">Refresh live data to load fills and order history.</div></div>`;
  return;
  }
  historyWrap.innerHTML = resolvedFeed.slice(0, 40).map(item => `
@@ -926,7 +926,7 @@ async function renderV16LiveAnalyticsPane(preloaded = null, forceRefresh = false
  if (!pane) return;
  const statusEl = document.getElementById('liveAnalyticsStatus');
  const syncEnabled = v16IsLiveAccountSyncEnabled();
- const clearAnalyticsUi = (title = 'Load a Trade Enabled or Read Only profile with session secrets to fetch private Delta account analytics.') => {
+ const clearAnalyticsUi = (title = 'Connect market data to fetch read-only account analytics.') => {
  const setHtml = (id, html) => {
  const element = document.getElementById(id);
  if (element) element.innerHTML = html;
@@ -987,7 +987,7 @@ async function renderV16LiveAnalyticsPane(preloaded = null, forceRefresh = false
  v16SyncLiveAnalyticsAutoRefreshButtons();
  if (!snapshot) {
  clearAnalyticsUi(syncEnabled
- ? 'Load a Trade Enabled or Read Only profile with session secrets to fetch private Delta account analytics.'
+ ? 'Connect market data to fetch read-only account analytics.'
  : 'Live account sync is paused in Settings. Enable it or click Refresh for an on-demand snapshot.');
  return;
  }
@@ -1047,8 +1047,8 @@ async function renderV16LiveAnalyticsPane(preloaded = null, forceRefresh = false
  const extra = activeRateLimit ? ` | API cooldown ${v16FormatDurationShort(activeRateLimit.waitMs)} (cached)` : '';
  const syncCopy = !syncEnabled ? ' | auto sync paused' : '';
  const analyticsRefreshCopy = v16IsLiveAnalyticsAutoRefreshEnabled() ? ' | analytics auto refresh on' : ' | analytics manual mode';
- const optionCopy = analyticsModel.usesDeltaOptionMtM ? ' | Delta option P&L from live positions' : '';
- const feedCopy = ` | Mode ${v16MarketDataModeLabel(snapshot?.marketDataMode || globalThis.deltaMarketDataMode || 'auto')} | Feed ${v16MarketDataSourceLabel(snapshot?.feedSource || 'rest')} | Updated ${v16FormatFeedAge(snapshot?.fetchedAt || 0)}`;
+ const optionCopy = analyticsModel.usesDeltaOptionMtM ? ' | option P&L from live positions' : '';
+ const feedCopy = ` | Mode ${v16MarketDataModeLabel(snapshot?.marketDataMode || globalThis.dhanMarketDataMode || 'auto')} | Feed ${v16MarketDataSourceLabel(snapshot?.feedSource || 'rest')} | Updated ${v16FormatFeedAge(snapshot?.fetchedAt || 0)}`;
  statusEl.textContent = `${analyticsModel.instrumentLabel} | ${v16AnalyticsRangeLabel(analyticsModel.view.rangeDays)} | ${analyticsModel.tradeCount} closed trade${analyticsModel.tradeCount === 1 ? '' : 's'} | ${analyticsModel.equityMode === 'absolute' ? 'Account-level curve' : 'Relative curve'}${optionCopy}${syncCopy}${analyticsRefreshCopy}${extra}${feedCopy}`;
  statusEl.className = `live-account-status ${Number(analyticsModel.realized || 0) >= 0 ? 'good' : 'bad'}`;
  }
@@ -1074,7 +1074,7 @@ async function renderV16LiveAnalyticsPane(preloaded = null, forceRefresh = false
  }
  if (realizedMetaEl) {
  realizedMetaEl.textContent = analyticsModel.usesDeltaOptionMtM
- ? `Delta option closes only. Live option P&L is read from open positions until close or expiry.`
+ ? `Option closes only. Live option P&L is read from open positions until close or expiry.`
  : `${analyticsModel.tradeCount} closed trade${analyticsModel.tradeCount === 1 ? '' : 's'} in range.`;
  }
  if (volumeMetaEl) volumeMetaEl.textContent = `$${v16FmtNumber(analyticsModel.volume || 0, analyticsModel.volume >= 1000 ? 0 : 2)} approximate notional traded.`;
@@ -1531,7 +1531,7 @@ function v16RenderOpenOrders(metrics) {
  v16RenderOrdersStatusRail(metrics, filteredOrders);
  meta.textContent = `${filteredOrders.length} open order${filteredOrders.length === 1 ? '' : 's'} visible | ${freshOrders.length} fresh | ${linkedOrders.length} linked${actionCopy}`;
  if (!filteredOrders.length) {
- wrap.innerHTML = `<div class="empty"><div class="ei">+</div><div class="eh">No open orders</div><div class="es">Delta returned no open or pending orders for this filter.</div></div>`;
+ wrap.innerHTML = `<div class="empty"><div class="ei">+</div><div class="eh">No open orders</div><div class="es">No open or pending orders were returned for this filter.</div></div>`;
  return;
  }
  wrap.innerHTML = [
@@ -1743,11 +1743,11 @@ function v16ExplainAutoTradeReason(reason = '', status = '') {
  if (!raw) return 'No explicit block reason was recorded.';
  if (lower.includes('kill switch is armed')) return 'Kill switch is armed, so the engine can scan but cannot place new orders.';
  if (lower.includes('tradeenabled profile required')) return 'Auto-trade needs a Trade Enabled profile before it can place live orders.';
- if (lower.includes('readonly or tradeenabled profile required')) return 'Choose a Delta profile before auto-trade can continue.';
+ if (lower.includes('readonly or tradeenabled profile required')) return 'Connect market data before automation can continue.';
  if (lower.includes('trading key and secret are required')) return 'Trading credentials are missing for the configured profile.';
  if (lower.includes('windows credential alias is missing')) return 'Windows credential alias is missing for the configured profile.';
- if (lower.includes('no active delta profile found')) return 'No active Delta profile is available right now.';
- if (lower.includes('api circuit breaker')) return 'Delta API protection is paused after repeated auth or request failures.';
+ if (lower.includes('no active delta profile found')) return 'No active market-data connection is available right now.';
+ if (lower.includes('api circuit breaker')) return 'API protection is paused after repeated authentication or request failures.';
  if (lower.startsWith('funding block:')) return raw.replace(/^funding block:\s*/i, 'Funding is adverse: ');
  if (lower.includes('max concurrent reached')) return 'All auto-trade slots are currently in use, so no fresh entry can be added.';
  if (lower.includes('max trades per day reached')) return 'The daily trade budget is fully used for today.';

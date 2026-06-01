@@ -2,8 +2,8 @@
 
 (function initPullbackScanner(global) {
  const PULLBACK_DEFAULT_SETTINGS = Object.freeze({
-  maxCoins: 180,
-  outputLimit: 180,
+  maxCoins: 500,
+  outputLimit: 500,
   minUsdVolume24h: 100000,
   preferredDailyCandles: 140,
   minDailyCandles: 45,
@@ -12,10 +12,17 @@
   touchLookback: 6,
   emaTouchTolerancePct: 1.4,
   reclaimLookback: 4,
-  maxEntryExtensionPct: 7.5,
-  maxWatchExtensionPct: 10,
+  maxEntryExtensionPct: 3.2,
+  maxWatchExtensionPct: 5.5,
+  maxEntryExtensionAtr: 1.35,
+  maxWatchExtensionAtr: 2.25,
+  freshEntryExtensionPct: 1.4,
   roundNumberTolerancePct: 1.3,
   stopAtrBuffer: 0.18,
+  minDailyBodyRatio: 0.28,
+  minDailyClosePosition: 0.58,
+  minIntradayBodyRatio: 0.38,
+  minIntradayClosePosition: 0.62,
  });
 
  const LIVE_15M = Object.freeze({ closedOnly: false });
@@ -95,6 +102,209 @@
   return ((a - b) / b) * 100;
  }
 
+ function pullbackClamp(value = 0, min = 0, max = 1) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, n));
+ }
+
+ function pullbackCandleShape(candle = {}, isShort = false) {
+  const open = Number(candle.open || 0);
+  const high = Number(candle.high || 0);
+  const low = Number(candle.low || 0);
+  const close = Number(candle.close || 0);
+  const range = high > low ? high - low : 0;
+  const body = Math.abs(close - open);
+  const closePosition = range > 0
+   ? isShort ? (high - close) / range : (close - low) / range
+   : 0;
+  return {
+   open,
+   high,
+   low,
+   close,
+   range,
+   bodyRatio: range > 0 ? body / range : 0,
+   closePosition: pullbackClamp(closePosition, 0, 1),
+   directional: isShort ? close < open : close > open,
+  };
+ }
+
+ function pullbackDailyProof(candle = {}, isShort = false, ema9 = 0, atr14 = 0, settings = PULLBACK_DEFAULT_SETTINGS, context = {}) {
+  const shape = pullbackCandleShape(candle, isShort);
+  const closeThroughLevel = isShort ? shape.close < ema9 : shape.close > ema9;
+  const touchedLevel = isShort ? shape.high >= ema9 : shape.low <= ema9;
+  const recentTouch = touchedLevel || context.touchedRecently === true;
+  const closeQuality = shape.closePosition >= Number(settings.minDailyClosePosition || 0.58);
+  const bodyQuality = shape.bodyRatio >= Number(settings.minDailyBodyRatio || 0.28);
+  const atrParticipation = Number(atr14 || 0) > 0 ? shape.range / Number(atr14 || 1) : 0;
+  const clean = closeThroughLevel && recentTouch && closeQuality && (bodyQuality || shape.directional);
+  const label = clean
+   ? isShort ? 'Clean daily rejection' : 'Clean daily reclaim'
+   : closeThroughLevel
+   ? isShort ? 'Close below 9 EMA, candle weak' : 'Close above 9 EMA, candle weak'
+   : isShort ? 'No daily 9 EMA rejection close' : 'No daily 9 EMA reclaim close';
+  return {
+   clean,
+   label,
+   closeThroughLevel,
+   touchedLevel,
+   recentTouch,
+   closePosition: pullbackRound(shape.closePosition * 100, 0),
+   bodyRatio: pullbackRound(shape.bodyRatio * 100, 0),
+   atrParticipation: pullbackRound(atrParticipation, 2),
+  };
+ }
+
+ function pullbackVwap(candles = []) {
+  let pv = 0;
+  let vol = 0;
+  (Array.isArray(candles) ? candles : []).forEach(candle => {
+   const high = Number(candle?.high || 0);
+   const low = Number(candle?.low || 0);
+   const close = Number(candle?.close || 0);
+   const volume = Number(candle?.volume || 0);
+   if (!(high > 0) || !(low > 0) || !(close > 0) || !(volume > 0)) return;
+   pv += ((high + low + close) / 3) * volume;
+   vol += volume;
+  });
+  return vol > 0 ? pv / vol : 0;
+ }
+
+ function pullbackRangeMin(rows = [], key = 'low') {
+  const values = (Array.isArray(rows) ? rows : []).map(row => Number(row?.[key] || 0)).filter(value => value > 0);
+  return values.length ? Math.min(...values) : 0;
+ }
+
+ function pullbackRangeMax(rows = [], key = 'high') {
+  const values = (Array.isArray(rows) ? rows : []).map(row => Number(row?.[key] || 0)).filter(value => value > 0);
+  return values.length ? Math.max(...values) : 0;
+ }
+
+ function pullbackAnalyzeIntradayTiming(intradayCandles = [], context = {}) {
+  const settings = { ...PULLBACK_DEFAULT_SETTINGS, ...(context.settings || {}) };
+  const rows = (Array.isArray(intradayCandles) ? intradayCandles : []).filter(candle => Number(candle?.close || 0) > 0);
+  const isShort = context.direction === 'short';
+  if (rows.length < Number(settings.minIntradayCandles || 24)) {
+   return {
+    state: 'no_15m',
+    label: 'No 15m timing',
+    ready: false,
+    scoreDelta: -8,
+    confirmations: [],
+    blockers: ['Not enough 15m candles for entry timing'],
+   };
+  }
+  const last = rows[rows.length - 1];
+  const prev = rows[rows.length - 2] || {};
+  const closes = rows.map(candle => Number(candle.close || 0));
+  const ema9s = pullbackEmaSeries(closes, 9);
+  const ema21s = pullbackEmaSeries(closes, 21);
+  const ema9 = Number(ema9s[ema9s.length - 1] || 0);
+  const ema21 = Number(ema21s[ema21s.length - 1] || 0);
+  const vwap = pullbackVwap(rows.slice(-Math.min(48, rows.length)));
+  const atr15 = pullbackAtr(rows, 14);
+  const shape = pullbackCandleShape(last, isShort);
+  const priorRows = rows.slice(Math.max(0, rows.length - 9), Math.max(0, rows.length - 1));
+  const priorLow = pullbackRangeMin(priorRows, 'low');
+  const priorHigh = pullbackRangeMax(priorRows, 'high');
+  const higherLow = !isShort && priorLow > 0 && Number(last.low || 0) >= priorLow * 0.997;
+  const lowerHigh = isShort && priorHigh > 0 && Number(last.high || 0) <= priorHigh * 1.003;
+  const close = Number(last.close || 0);
+  const prevClose = Number(prev.close || 0);
+  const emaAligned = isShort
+   ? close < ema9 && (!ema21 || ema9 <= ema21 * 1.003)
+   : close > ema9 && (!ema21 || ema9 >= ema21 * 0.997);
+  const vwapAligned = vwap > 0 ? (isShort ? close < vwap : close > vwap) : true;
+  const triggerCandle = shape.closePosition >= Number(settings.minIntradayClosePosition || 0.62)
+   && shape.bodyRatio >= Number(settings.minIntradayBodyRatio || 0.38)
+   && shape.directional;
+  const reclaimOrReject = isShort
+   ? close < ema9 && (prevClose >= ema9 || close < Number(prev.low || close))
+   : close > ema9 && (prevClose <= ema9 || close > Number(prev.high || close));
+  const structureOk = isShort ? lowerHigh : higherLow;
+  const ready = !!(emaAligned && vwapAligned && triggerCandle && (structureOk || reclaimOrReject));
+  const confirmations = [
+   emaAligned ? (isShort ? '15m below 9 EMA' : '15m above 9 EMA') : '',
+   vwapAligned ? (isShort ? '15m below VWAP' : '15m above VWAP') : '',
+   triggerCandle ? (isShort ? 'Clean 15m rejection candle' : 'Clean 15m reclaim candle') : '',
+   structureOk ? (isShort ? 'Lower-high structure' : 'Higher-low structure') : '',
+  ].filter(Boolean);
+  const blockers = [
+   !emaAligned ? (isShort ? '15m not below 9 EMA yet' : '15m not above 9 EMA yet') : '',
+   !vwapAligned ? (isShort ? '15m not below VWAP yet' : '15m not above VWAP yet') : '',
+   !triggerCandle ? (isShort ? 'Need clean 15m rejection candle' : 'Need clean 15m reclaim candle') : '',
+   !structureOk && !reclaimOrReject ? (isShort ? 'Need lower-high or breakdown proof' : 'Need higher-low or breakout proof') : '',
+  ].filter(Boolean);
+  const trigger = isShort
+   ? Math.min(Number(last.low || close), ema9 || close, vwap || close)
+   : Math.max(Number(last.high || close), ema9 || close, vwap || close);
+  return {
+   state: ready ? 'entry_ready' : 'setup_wait_trigger',
+   label: ready ? (isShort ? '15m short trigger ready' : '15m long trigger ready') : 'Wait 15m trigger',
+   ready,
+   scoreDelta: ready ? 12 : -4,
+   confirmations,
+   blockers,
+   triggerPrice: pullbackRound(trigger, 8),
+   ema9: pullbackRound(ema9, 8),
+   ema21: pullbackRound(ema21, 8),
+   vwap: pullbackRound(vwap, 8),
+   atr15: pullbackRound(atr15, 8),
+   closePosition: pullbackRound(shape.closePosition * 100, 0),
+   bodyRatio: pullbackRound(shape.bodyRatio * 100, 0),
+   structureOk,
+  };
+ }
+
+ function pullbackMarketRegimeRead(marketIndex = null, direction = 'long') {
+  if (!marketIndex || typeof marketIndex !== 'object') {
+   return {
+    state: 'unknown',
+    label: 'Market unknown',
+    fit: true,
+    supportive: false,
+    scoreDelta: 0,
+    blockers: [],
+    confirmations: ['Market regime unavailable; do not treat as confirmation'],
+   };
+  }
+  const condition = String(marketIndex.condition || marketIndex.sentiment?.condition || '').toLowerCase();
+  const label = marketIndex.sentiment?.label || marketIndex.label || condition || 'Market mixed';
+  const changePct = Number(marketIndex.indexChangePct ?? marketIndex.scanChangePct ?? 0);
+  const sentimentScore = Number(marketIndex.sentiment?.score ?? marketIndex.sentimentScore ?? 0);
+  const breadthPct = Number(marketIndex.sentiment?.breadthPct ?? marketIndex.breadth?.breadthPct ?? 50);
+  const leadership = String(marketIndex.leadership?.state || '').toLowerCase();
+  const isShort = direction === 'short';
+  const longSupport = ['bull', 'euphoric'].includes(condition) || sentimentScore >= 12 || changePct >= 0.35 || breadthPct >= 54 || ['broad_risk_on', 'eth_alt'].includes(leadership);
+  const shortSupport = ['bear', 'crash'].includes(condition) || sentimentScore <= -12 || changePct <= -0.35 || breadthPct <= 46 || leadership === 'broad_risk_off';
+  const longAgainst = ['bear', 'crash'].includes(condition) || sentimentScore <= -18 || changePct <= -0.65 || leadership === 'broad_risk_off';
+  const shortAgainst = ['bull', 'euphoric'].includes(condition) || sentimentScore >= 18 || changePct >= 0.65 || ['broad_risk_on', 'eth_alt'].includes(leadership);
+  const supportive = isShort ? shortSupport : longSupport;
+  const against = isShort ? shortAgainst : longAgainst;
+  const state = against ? 'against' : supportive ? 'aligned' : 'neutral';
+  const fit = !against;
+  const confirmations = [
+   supportive ? `${isShort ? 'Short' : 'Long'} side has market support` : '',
+   condition ? `Condition ${condition}` : '',
+   Number.isFinite(changePct) ? `FWD index ${pullbackRound(changePct, 2)}%` : '',
+  ].filter(Boolean);
+  return {
+   state,
+   label: state === 'against' ? `${label} against ${isShort ? 'short' : 'long'}` : label,
+   fit,
+   supportive,
+   scoreDelta: state === 'aligned' ? 6 : state === 'against' ? -18 : 0,
+   condition,
+   changePct: pullbackRound(changePct, 2),
+   sentimentScore: pullbackRound(sentimentScore, 0),
+   breadthPct: pullbackRound(breadthPct, 1),
+   leadership,
+   confirmations,
+   blockers: against ? [`Market regime is against the ${isShort ? 'short' : 'long'} pullback`] : [],
+  };
+ }
+
  function pullbackObv(candles = []) {
   let obv = 0;
   return (Array.isArray(candles) ? candles : []).map((candle, index, rows) => {
@@ -136,12 +346,15 @@
   });
  }
 
- async function pullbackLoadSettings() {
-  const stored = await pullbackLoadStored(['strategySettings.pullback']);
-  return {
+async function pullbackLoadSettings() {
+ const stored = await pullbackLoadStored(['strategySettings.pullback']);
+  const settings = {
    ...PULLBACK_DEFAULT_SETTINGS,
    ...(stored['strategySettings.pullback'] || {}),
   };
+  settings.maxCoins = Math.max(PULLBACK_DEFAULT_SETTINGS.maxCoins, Number(settings.maxCoins || 0));
+  settings.outputLimit = Math.max(PULLBACK_DEFAULT_SETTINGS.outputLimit, Number(settings.outputLimit || 0));
+  return settings;
  }
 
  function pullbackBuildUniverse(tickerMap = {}, products = [], settings = PULLBACK_DEFAULT_SETTINGS) {
@@ -149,10 +362,10 @@
   return Object.entries(tickerMap || {})
   .filter(([symbol, ticker]) => {
    const sym = String(symbol || '').toUpperCase();
-   if (!sym || productSymbols.size && !productSymbols.has(sym)) return false;
-   if (!sym.endsWith('USD') && !sym.endsWith('USDT')) return false;
-   if (!(Number(ticker?.price || 0) > 0)) return false;
-   return Number(ticker?.usdVol24h || 0) >= Number(settings.minUsdVolume24h || 0);
+ if (!sym || productSymbols.size && !productSymbols.has(sym)) return false;
+ if (!(Number(ticker?.price || 0) > 0)) return false;
+   const turnover = Number(ticker?.inrTurnover24h || ticker?.turnover24h || ticker?.usdVol24h || 0);
+   return !(turnover > 0) || turnover >= Number(settings.minUsdVolume24h || 0);
   })
   .map(([symbol, ticker]) => ({ symbol: String(symbol || '').toUpperCase(), ticker }))
   .sort((a, b) => Number(b.ticker?.usdVol24h || 0) - Number(a.ticker?.usdVol24h || 0))
@@ -180,9 +393,13 @@
    ['Trend stack', Number(parts.trend || 0)],
    ['9 EMA touch', Number(parts.touch || 0)],
    ['Reclaim/reject proof', Number(parts.reclaim || 0)],
+   ['Daily candle proof', Number(parts.candleProof || 0)],
+   ['15m timing trigger', Number(parts.intradayTiming || 0)],
+   ['Market regime', Number(parts.marketRegime || 0)],
    ['OBV confirmation', Number(parts.obv || 0)],
    ['Risk reward', Number(parts.riskReward || 0)],
    ['Round support', Number(parts.roundSupport || 0)],
+   ['Market penalty', Number(parts.marketPenalty || 0)],
    ['Extension penalty', Number(parts.extensionPenalty || 0)],
    ['Liquidity penalty', Number(parts.liquidityPenalty || 0)],
   ].filter(([, value]) => value !== 0);
@@ -208,10 +425,13 @@
 
  function pullbackSortRows(results = []) {
   const rank = { ema_reclaim: 6, ema_reject_short: 6, round_support: 5, round_resistance_short: 5, ema_pullback: 4, ema_pullback_short: 4, trend_watch: 3, trend_watch_short: 3, review: 1, avoid_chase: 0 };
+  const workflowRank = { entry_ready: 8, daily_setup_wait_trigger: 6, near_pullback_wait_proof: 4, trend_watch: 3, review: 1, avoid_late: 0 };
   return (Array.isArray(results) ? results : []).slice().sort((a, b) => {
    const ar = rank[String(a.eventType || a.raw?.eventType || '')] ?? 0;
    const br = rank[String(b.eventType || b.raw?.eventType || '')] ?? 0;
-   return br - ar || Number(b.score || 0) - Number(a.score || 0) || Number(a.raw?.extensionPct || 999) - Number(b.raw?.extensionPct || 999);
+   const aw = workflowRank[String(a.raw?.workflowStage || '')] ?? 0;
+   const bw = workflowRank[String(b.raw?.workflowStage || '')] ?? 0;
+   return bw - aw || br - ar || Number(b.score || 0) - Number(a.score || 0) || Number(a.raw?.extensionPct || 999) - Number(b.raw?.extensionPct || 999);
   });
  }
 
@@ -240,12 +460,14 @@
   const obvPrev = Number(obv[Math.max(0, lastIndex - 10)] || 0);
   const volumes = daily.map(pullbackQuoteVolume);
   const avgVolume20 = pullbackSma(volumes, 20, Math.max(0, volumes.length - 2)) || 0;
-  const latestQuoteVolume = pullbackQuoteVolume(last) || Number(ticker?.usdVol24h || 0) / 24 || 0;
+  const tickerTurnover = Number(ticker?.inrTurnover24h || ticker?.turnover24h || ticker?.usdVol24h || 0);
+  const latestQuoteVolume = pullbackQuoteVolume(last) || tickerTurnover / 24 || 0;
   const volumeRatio = avgVolume20 > 0 ? latestQuoteVolume / avgVolume20 : 0;
-  const lowLiquidity = Number(ticker?.usdVol24h || 0) < Number(settings.minUsdVolume24h || 0);
+  const lowLiquidity = tickerTurnover > 0 && tickerTurnover < Number(settings.minUsdVolume24h || 0);
   const trendUp = price > ema21 && ema9 > ema21 && (!ema50 || ema21 >= ema50 * 0.97) && ema9 > ema9Prev && ema21 >= ema21Prev * 0.985;
   const trendDown = price < ema21 && ema9 < ema21 && (!ema50 || ema21 <= ema50 * 1.03) && ema9 < ema9Prev && ema21 <= ema21Prev * 1.015;
   const shortBias = trendDown && !trendUp;
+  const direction = shortBias ? 'short' : 'long';
   const obvUp = obvNow >= obvPrev;
   const obvDown = obvNow <= obvPrev;
   const touchRows = [];
@@ -264,12 +486,23 @@
   const touchedRecently = !!lastTouch;
   const undercutRecently = touchRows.some(row => row.undercut || Number(row.close || 0) < Number(row.ema || 0));
   const overcutRecently = touchRows.some(row => Number(row.high || 0) > Number(row.ema || 0) || Number(row.close || 0) > Number(row.ema || 0));
-  const reclaim = touchedRecently && price > ema9 && (Number(last.close || price) > ema9 || Number(prev.close || 0) < Number(ema9s[lastIndex - 1] || 0));
-  const reject = touchedRecently && price < ema9 && (Number(last.close || price) < ema9 || Number(prev.close || 0) > Number(ema9s[lastIndex - 1] || 0));
+  const dailyProof = pullbackDailyProof(last, shortBias, ema9, atr14, settings, { touchedRecently });
+  const rawReclaim = touchedRecently && price > ema9 && (Number(last.close || price) > ema9 || Number(prev.close || 0) < Number(ema9s[lastIndex - 1] || 0));
+  const rawReject = touchedRecently && price < ema9 && (Number(last.close || price) < ema9 || Number(prev.close || 0) > Number(ema9s[lastIndex - 1] || 0));
+  const reclaim = rawReclaim && dailyProof.clean;
+  const reject = rawReject && dailyProof.clean;
   const recentHigh20 = Math.max(...highs.slice(Math.max(0, highs.length - 22), Math.max(0, highs.length - 1)).filter(value => value > 0), 0);
   const recentLow20 = Math.min(...lows.slice(Math.max(0, lows.length - 22), Math.max(0, lows.length - 1)).filter(value => value > 0));
   const extensionPct = ema9 > 0 ? pullbackPct(price, ema9) : 0;
   const shortExtensionPct = ema9 > 0 ? pullbackPct(ema9, price) : 0;
+  const activeExtensionPct = Math.max(0, shortBias ? shortExtensionPct : extensionPct);
+  const directionalExtension = shortBias ? Math.max(0, ema9 - price) : Math.max(0, price - ema9);
+  const extensionAtr = atr14 > 0 ? directionalExtension / atr14 : 0;
+  const entryFresh = activeExtensionPct <= Number(settings.freshEntryExtensionPct || 1.4) && extensionAtr <= 0.75;
+  const lateEntry = activeExtensionPct > Number(settings.maxEntryExtensionPct || 3.2) || extensionAtr > Number(settings.maxEntryExtensionAtr || 1.35);
+  const veryLateEntry = activeExtensionPct > Number(settings.maxWatchExtensionPct || 5.5) || extensionAtr > Number(settings.maxWatchExtensionAtr || 2.25);
+  const timingRead = pullbackAnalyzeIntradayTiming(intraday, { direction, settings });
+  const marketRead = pullbackMarketRegimeRead(ctx.marketIndex, direction);
   const roundSupport = pullbackRoundSupport(shortBias ? (lastTouch?.high || Number(last.high || 0) || price) : (lastTouch?.low || Number(last.low || 0) || price));
   const roundSupportDistancePct = roundSupport > 0 ? Math.abs(((Number(shortBias ? (lastTouch?.high || last.high || price) : (lastTouch?.low || last.low || price)) - roundSupport) / roundSupport) * 100) : 999;
   const roundSupportHit = roundSupport > 0 && roundSupportDistancePct <= Number(settings.roundNumberTolerancePct || 1.3);
@@ -296,35 +529,63 @@
   else blockers.push('No recent 9 EMA touch');
   if (shortBias && reject) { scoreParts.reclaim = 18; reasons.push('Price rejected the 9 EMA after the pullback rally'); }
   else if (!shortBias && reclaim) { scoreParts.reclaim = 18; reasons.push('Price reclaimed the 9 EMA after the pullback'); }
+  else if (touchedRecently && (rawReject || rawReclaim)) blockers.push(dailyProof.label);
   else if (touchedRecently) blockers.push(shortBias ? 'Wait for a close back below the 9 EMA' : 'Wait for a close back above the 9 EMA');
   if (shortBias ? obvDown : obvUp) { scoreParts.obv = 10; reasons.push(shortBias ? 'OBV is confirming distribution' : 'OBV is supporting the trend'); }
   else blockers.push(shortBias ? 'OBV is not confirming distribution' : 'OBV is not confirming accumulation');
   if (rrToTarget1 >= 1.4) scoreParts.riskReward = rrToTarget1 >= 2 ? 12 : 8;
   else blockers.push('Reward is not strong enough from current price');
   if (roundSupportHit) { scoreParts.roundSupport = 8; reasons.push(shortBias ? `Rally rejected round/resistance area near ${pullbackRound(roundSupport, 8)}` : `Pullback respected round/support area near ${pullbackRound(roundSupport, 8)}`); }
-  const activeExtensionPct = shortBias ? shortExtensionPct : extensionPct;
-  if (activeExtensionPct > Number(settings.maxEntryExtensionPct || 7.5)) { scoreParts.extensionPenalty = -18; blockers.push(shortBias ? `Price is ${pullbackRound(activeExtensionPct, 2)}% below 9 EMA; do not chase short` : `Price is ${pullbackRound(activeExtensionPct, 2)}% above 9 EMA; do not chase`); }
+  if (dailyProof.clean) { scoreParts.candleProof = 10; reasons.push(dailyProof.label); }
+  else if (touchedRecently) blockers.push(shortBias ? 'Daily rejection candle is not clean yet' : 'Daily reclaim candle is not clean yet');
+  if (timingRead.ready) { scoreParts.intradayTiming = 12; reasons.push(timingRead.label); }
+  else if (touchedRecently) blockers.push(timingRead.blockers[0] || 'Wait for 15m timing trigger');
+  if (marketRead.supportive) { scoreParts.marketRegime = 6; reasons.push(marketRead.confirmations[0] || 'Market regime supports pullback side'); }
+  if (!marketRead.fit) { scoreParts.marketPenalty = -18; blockers.push(marketRead.blockers[0] || 'Market regime is against this setup'); }
+  if (!entryFresh && touchedRecently) blockers.push(`${shortBias ? 'Short' : 'Long'} entry is not close to the 9 EMA sweet spot`);
+  if (lateEntry) { scoreParts.extensionPenalty = -18; blockers.push(shortBias ? `Price is ${pullbackRound(activeExtensionPct, 2)}% / ${pullbackRound(extensionAtr, 2)} ATR below 9 EMA; do not chase short` : `Price is ${pullbackRound(activeExtensionPct, 2)}% / ${pullbackRound(extensionAtr, 2)} ATR above 9 EMA; do not chase`); }
   if (lowLiquidity) { scoreParts.liquidityPenalty = -16; blockers.push('Liquidity below pullback scanner threshold'); }
 
   let eventType = 'review';
   let signal = 'IGNORE';
   let actionLabel = 'Review manually';
   let priorityLabel = 'Review';
-  if (activeExtensionPct > Number(settings.maxWatchExtensionPct || 10)) {
+  const longDailySetup = !shortBias && trendUp && reclaim && !lowLiquidity && rrToTarget1 >= 1.2;
+  const shortDailySetup = shortBias && reject && !lowLiquidity && rrToTarget1 >= 1.2;
+  const rawDailySetup = !shortBias ? rawReclaim : rawReject;
+  const dailySetup = longDailySetup || shortDailySetup;
+  const entryReady = dailySetup && timingRead.ready && marketRead.fit && !lateEntry;
+  if (veryLateEntry || lateEntry) {
    eventType = 'avoid_chase';
    signal = 'IGNORE';
    actionLabel = shortBias ? 'Avoid chasing short' : 'Avoid chasing';
-   priorityLabel = shortBias ? 'Short too extended' : 'Too extended';
-  } else if (shortBias && reject && !lowLiquidity && rrToTarget1 >= 1.2 && activeExtensionPct <= Number(settings.maxEntryExtensionPct || 7.5)) {
+   priorityLabel = shortBias ? 'Too far below 9 EMA' : 'Too far above 9 EMA';
+  } else if (entryReady && shortBias) {
    eventType = roundSupportHit ? 'round_resistance_short' : 'ema_reject_short';
    signal = 'SELL';
-   actionLabel = roundSupportHit ? 'Short resistance reject' : 'Short 9 EMA reject';
-   priorityLabel = 'Action';
-  } else if (!shortBias && trendUp && reclaim && !lowLiquidity && rrToTarget1 >= 1.2 && extensionPct <= Number(settings.maxEntryExtensionPct || 7.5)) {
+   actionLabel = roundSupportHit ? 'Sell resistance reject now' : 'Sell 9 EMA reject now';
+   priorityLabel = 'Entry ready';
+  } else if (entryReady && !shortBias) {
    eventType = roundSupportHit ? 'round_support' : 'ema_reclaim';
    signal = 'BUY';
-   actionLabel = roundSupportHit ? 'Long support reclaim' : 'Long 9 EMA reclaim';
-   priorityLabel = 'Action';
+   actionLabel = roundSupportHit ? 'Buy support reclaim now' : 'Buy 9 EMA reclaim now';
+   priorityLabel = 'Entry ready';
+  } else if (shortDailySetup || longDailySetup) {
+   eventType = shortBias
+    ? (roundSupportHit ? 'round_resistance_short' : 'ema_reject_short')
+    : (roundSupportHit ? 'round_support' : 'ema_reclaim');
+   signal = 'WATCHLIST';
+   actionLabel = !marketRead.fit
+    ? 'Market against - wait'
+    : timingRead.ready
+    ? 'Setup valid - review manually'
+    : 'Daily setup - wait 15m trigger';
+   priorityLabel = !marketRead.fit ? 'Blocked by market' : 'Setup valid';
+  } else if (rawDailySetup && touchedRecently && !lowLiquidity) {
+   eventType = shortBias ? 'ema_pullback_short' : 'ema_pullback';
+   signal = 'WATCHLIST';
+   actionLabel = shortBias ? 'Wait clean daily rejection' : 'Wait clean daily reclaim';
+   priorityLabel = 'Candle proof needed';
   } else if (shortBias && touchedRecently && !lowLiquidity) {
    eventType = 'ema_pullback_short';
    signal = 'WATCHLIST';
@@ -345,7 +606,7 @@
    signal = 'WATCHLIST';
    actionLabel = 'Wait for pullback';
    priorityLabel = 'Trend watch';
-  } else if (activeExtensionPct > Number(settings.maxEntryExtensionPct || 7.5)) {
+  } else if (lateEntry) {
    eventType = 'avoid_chase';
    signal = 'IGNORE';
    actionLabel = shortBias ? 'Wait for next short pullback' : 'Wait for next pullback';
@@ -360,17 +621,60 @@
   const riskFlags = [
    lowLiquidity ? 'Thin volume' : '',
    !(shortBias || trendUp) ? 'Trend not clean' : '',
-   shortBias && !reject && touchedRecently ? 'Needs 9 EMA rejection candle' : '',
-   !shortBias && !reclaim && touchedRecently ? 'Needs reclaim candle' : '',
-   activeExtensionPct > Number(settings.maxEntryExtensionPct || 7.5) ? (shortBias ? 'Late below 9 EMA' : 'Late above 9 EMA') : '',
+   shortBias && !reject && touchedRecently ? 'Needs clean 9 EMA rejection candle' : '',
+   !shortBias && !reclaim && touchedRecently ? 'Needs clean reclaim candle' : '',
+   dailySetup && !timingRead.ready ? '15m trigger not ready' : '',
+   !marketRead.fit ? 'Market regime against setup' : '',
+   lateEntry ? (shortBias ? 'Late below 9 EMA' : 'Late above 9 EMA') : '',
    rrToTarget1 > 0 && rrToTarget1 < 1.4 ? 'Weak reward from current price' : '',
   ].filter(Boolean);
+
+  const workflowStage = eventType === 'avoid_chase'
+   ? 'avoid_late'
+   : entryReady
+   ? 'entry_ready'
+   : dailySetup
+   ? 'daily_setup_wait_trigger'
+   : touchedRecently
+   ? 'near_pullback_wait_proof'
+   : (shortBias || trendUp)
+   ? 'trend_watch'
+   : 'review';
+  const workflowLabel = workflowStage === 'entry_ready'
+   ? 'Entry ready now'
+   : workflowStage === 'daily_setup_wait_trigger'
+   ? 'Daily setup valid'
+   : workflowStage === 'near_pullback_wait_proof'
+   ? 'Near pullback'
+   : workflowStage === 'avoid_late'
+   ? 'Avoid late chase'
+   : workflowStage === 'trend_watch'
+   ? 'Trend watch'
+   : 'Review';
+  const tradePlan = {
+   state: workflowStage,
+   label: workflowLabel,
+   entryCommand: entryReady
+    ? shortBias
+     ? `Sell below ${pullbackRound(timingRead.triggerPrice || entry, 8)} after 15m rejection`
+     : `Buy above ${pullbackRound(timingRead.triggerPrice || entry, 8)} after 15m reclaim`
+    : dailySetup
+    ? shortBias ? 'Daily short setup valid - wait for 15m trigger' : 'Daily long setup valid - wait for 15m trigger'
+    : eventType === 'avoid_chase'
+    ? shortBias ? 'Do not short here; wait for a fresh 9 EMA rally' : 'Do not buy here; wait for a fresh 9 EMA pullback'
+    : actionLabel,
+   invalidation: shortBias ? `Invalid above ${pullbackRound(stop, 8)}` : `Invalid below ${pullbackRound(stop, 8)}`,
+   target: pullbackRound(target1, 8),
+   trigger: pullbackRound(timingRead.triggerPrice || entry, 8),
+   entryFresh,
+   lateEntry,
+  };
 
   return global.FWDTradeDeskStrategies.normalizeStrategyResult({
    symbol,
    strategyId: 'pullback',
    signal,
-   direction: shortBias ? 'short' : 'long',
+   direction,
    setupLabel: pullbackEventLabel(eventType),
    eventType,
    actionLabel,
@@ -379,7 +683,7 @@
    confidence: score,
    entry: pullbackRound(entry, 8),
    stop: pullbackRound(stop, 8),
-   triggerPrice: pullbackRound(shortBias ? (price < ema9 ? price : ema9) : (price > ema9 ? price : ema9), 8),
+   triggerPrice: pullbackRound(timingRead.triggerPrice || (shortBias ? (price < ema9 ? price : ema9) : (price > ema9 ? price : ema9)), 8),
    riskPercent: entry > 0 && risk > 0 ? pullbackRound((risk / entry) * 100, 2) : 0,
    targets: {
     target1: pullbackRound(target1, 8),
@@ -400,9 +704,15 @@
     overcutRecently,
     reclaim,
     reject,
+    rawReclaim,
+    rawReject,
+    cleanDailyCandle: dailyProof.clean,
+    intradayReady: timingRead.ready,
+    marketFit: marketRead.fit,
+    entryFresh,
     obvUp: shortBias ? obvDown : obvUp,
     roundSupportHit,
-    lateChase: activeExtensionPct > Number(settings.maxEntryExtensionPct || 7.5),
+    lateChase: lateEntry,
     lowLiquidity,
     advisoryOnly: true,
    },
@@ -410,7 +720,10 @@
    raw: {
     eventType,
     eventLabel: pullbackEventLabel(eventType),
-    direction: shortBias ? 'short' : 'long',
+    direction,
+    workflowStage,
+    workflowLabel,
+    tradePlan,
     latestPrice: pullbackRound(price, 8),
     bestEntry: pullbackRound(entry, 8),
     idealPullback: pullbackRound(ema9, 8),
@@ -421,6 +734,8 @@
     ema9SlopePct: ema9Prev > 0 ? pullbackRound(pullbackPct(ema9, ema9Prev), 2) : 0,
     ema21SlopePct: ema21Prev > 0 ? pullbackRound(pullbackPct(ema21, ema21Prev), 2) : 0,
     extensionPct: pullbackRound(activeExtensionPct, 2),
+    extensionAtr: pullbackRound(extensionAtr, 2),
+    entryFresh,
     touchLow: pullbackRound(touchLow, 8),
     touchHigh: pullbackRound(touchHigh, 8),
     touchAge: lastTouch ? Math.max(0, daily.length - 1 - lastTouch.index) : null,
@@ -435,22 +750,27 @@
     change24h: pullbackRound(Number(ticker?.change24h || pullbackPct(Number(last.close || price), Number(prev.close || 0)) || 0), 2),
     candleCount15m: intraday.length,
     candleCount1d: daily.length,
+    dailyProof,
+    timing: timingRead,
+    marketRegime: marketRead,
     riskFlags,
     scoreParts: pullbackBuildScoreParts(scoreParts),
     decision: {
      whySelected: reasons.slice(0, 3),
      whyNotNow: blockers.slice(0, 3),
-     nextAction: signal === 'BUY' || signal === 'SELL'
-      ? 'Review the daily candle and 15m timing; scanner-only pullback setup, no auto order is enabled.'
+     nextAction: entryReady
+      ? `${tradePlan.entryCommand}. ${tradePlan.invalidation}. Scanner-only; no auto order is enabled.`
       : eventType === 'avoid_chase'
-      ? (shortBias ? 'Do not chase this short after extension; wait for the next 9 EMA rally and rejection.' : 'Do not chase this candle; wait for the next 9 EMA pullback or a tighter base.')
+      ? tradePlan.entryCommand
+      : dailySetup
+      ? tradePlan.entryCommand
       : shortBias
       ? 'Wait for a clean 9 EMA rejection candle with stop above the pullback high.'
       : 'Wait for a clean 9 EMA reclaim candle with stop below the pullback low.',
     },
     chartLevels: {
      idealEntry: pullbackRound(ema9, 8),
-     trigger: pullbackRound(shortBias ? (price < ema9 ? price : ema9) : (price > ema9 ? price : ema9), 8),
+     trigger: pullbackRound(timingRead.triggerPrice || (shortBias ? (price < ema9 ? price : ema9) : (price > ema9 ? price : ema9)), 8),
      entry: pullbackRound(entry, 8),
      stop: pullbackRound(stop, 8),
      target1: pullbackRound(target1, 8),
@@ -468,6 +788,8 @@
   await chrome.storage.local.set({ 'strategyResults.pullback': [] });
   await detectAPI(true);
   const settings = await pullbackLoadSettings();
+  const marketStore = await pullbackLoadStored(['marketIndex']);
+  const marketIndex = marketStore.marketIndex || null;
   const tickerMap = await fetchAllTickers();
   const products = await fetchProducts().catch(() => []);
   const universe = pullbackBuildUniverse(tickerMap, products, settings);
@@ -491,7 +813,7 @@
      continue;
     }
     const intraday = await fetchCandles(item.symbol, '15m', settings.preferredIntradayCandles, LIVE_15M).catch(() => []);
-    const result = pullbackAnalyzeSymbol(item.symbol, daily, Array.isArray(intraday) ? intraday : [], item.ticker, { settings });
+    const result = pullbackAnalyzeSymbol(item.symbol, daily, Array.isArray(intraday) ? intraday : [], item.ticker, { settings, marketIndex });
     if (result.eventType === 'review') skipped.reviewOnly += 1;
     results.push(result);
    } catch (error) {
@@ -528,6 +850,7 @@
   await pullbackSetStatus('Deriving pullback rows from main scan...', { active: true, progress: 5, scanId: context.scanId });
   await chrome.storage.local.set({ 'strategyResults.pullback': [] });
   const settings = await pullbackLoadSettings();
+  const marketIndex = context.marketIndex || null;
   const tickerMap = context.tickerMap || {};
   const products = Array.isArray(context.products) ? context.products : [];
   const universe = pullbackBuildUniverse(tickerMap, products, settings);
@@ -554,7 +877,7 @@
      continue;
     }
     const intraday = getContextCandles?.(context, item.symbol, '15m', settings.preferredIntradayCandles) || [];
-    const result = pullbackAnalyzeSymbol(item.symbol, daily, intraday, item.ticker, { settings });
+    const result = pullbackAnalyzeSymbol(item.symbol, daily, intraday, item.ticker, { settings, marketIndex });
     if (result.eventType === 'review') skipped.reviewOnly += 1;
     results.push(result);
    } catch (error) {

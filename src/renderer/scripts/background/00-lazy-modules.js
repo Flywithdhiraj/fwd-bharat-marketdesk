@@ -30,11 +30,6 @@
    globalName: 'FWDTradeDeskPullbackScanner',
    actions: Object.freeze(['pullback:startScan', 'pullback:getResults', 'pullback:clearResults']),
   }),
-  native_straddle: Object.freeze({
-   src: 'scripts/background/13-native-straddle-scanner.js',
-   globalName: 'FWDTradeDeskNativeStraddleScanner',
-   actions: Object.freeze(['native-straddle:startScan', 'native-straddle:getResults', 'native-straddle:clearResults']),
-  }),
  });
 
  const actionToModule = new Map();
@@ -103,7 +98,6 @@
 
  async function ensureStrategyLabScannersLoaded(options = {}) {
   const ids = ['wizard', 'stage', 'radar', 'reversal', 'darvas', 'pullback'];
-  if (options.includeNative !== false) ids.push('native_straddle');
   const results = await Promise.all(ids.map(loadModule));
   return { ok: true, results };
  }

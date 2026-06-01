@@ -1,6 +1,14 @@
 const STALE_SCAN_HEARTBEAT_MS = 10 * 60 * 1000;
-const SCAN_HARD_DEADLINE_MS = 45 * 60 * 1000; // full Delta universe scans can be slow under weighted throttling
+const SCAN_HARD_DEADLINE_MS = 50 * 60 * 1000; // Full Nifty 500 scans are deliberately paced to avoid broker chart limits.
 let strategyLabAutoScanPromise = null;
+globalThis.scanAbortRequested = false;
+
+async function resumeMarketLiveFeedAfterScan() {
+ if (typeof globalThis.dhanNative !== 'function') return;
+ try {
+  await globalThis.dhanNative('live_feed_resume', { reason: 'scanner_cleanup' });
+ } catch (_) {}
+}
 
 function hasFreshPartialScanContext() {
  const context = globalThis.FWDTradeDeskScanContext?.getFresh?.();
@@ -22,12 +30,17 @@ function runScanWithDeadline() {
  if (settled) return;
  settled = true;
  markScanStoppedWithPartialFallback('Scan timed out - restarting next cycle')
+ .then(() => resumeMarketLiveFeedAfterScan())
  .catch(() => {})
  .finally(() => reject(new Error('Scan exceeded hard deadline')));
  }, SCAN_HARD_DEADLINE_MS);
  runScan()
  .then(r => { if (!settled) { settled = true; clearTimeout(timer); resolve(r); } })
- .catch(e => { if (!settled) { settled = true; clearTimeout(timer); reject(e); } });
+ .catch(e => {
+  resumeMarketLiveFeedAfterScan().finally(() => {
+   if (!settled) { settled = true; clearTimeout(timer); reject(e); }
+  });
+ });
 });
 }
 
@@ -96,14 +109,12 @@ function kickStrategyLabDeriveAfterManualScan() {
  });
 }
 
-chrome.storage.local.get(['scanActive', 'scanHeartbeat'], async data => {
+chrome.storage.local.get(['scanActive', 'scanHeartbeat', 'scanStatus', 'scannedCoins'], async data => {
  if (chrome.runtime.lastError) return;
  const scanActive = !!data?.scanActive;
- const heartbeat = Number(data?.scanHeartbeat || 0);
- if (!scanActive || !heartbeat) return;
- if ((Date.now() - heartbeat) < STALE_SCAN_HEARTBEAT_MS) return;
- await markScanStopped('Scan stopped - restart scan', 0);
- dlog('Recovered stale scan state after service worker restart');
+ if (!scanActive) return;
+ await markScanStopped('Ready - previous scan state cleared', 0);
+ dlog('Cleared stored scan-active state on startup; scans now start only from Scan Now or Auto Scan alarm.');
 });
 
 chrome.alarms.onAlarm.addListener(alarm => {
@@ -115,20 +126,6 @@ chrome.alarms.onAlarm.addListener(alarm => {
  if (alarm.name === AUTO_TRADE_MONITOR_ALARM_NAME) {
  runAutoTradeLifecycleMonitor()
  .catch(error => dlog(`Auto-trade monitor err: ${error?.message || error}`));
- return;
- }
- if (alarm.name === DCA_BOT_MONITOR_ALARM_NAME) {
- if (typeof runDcaBotMonitor === 'function') {
- runDcaBotMonitor()
- .catch(error => dlog(`DCA bot monitor err: ${error?.message || error}`));
- }
- return;
- }
- if (alarm.name === OPTIONS_STRADDLE_MONITOR_ALARM) {
- if (typeof runOptionsStraddleMonitor === 'function') {
- runOptionsStraddleMonitor()
- .catch(error => dlog(`Straddle monitor err: ${error?.message || error}`));
- }
  return;
  }
  if (alarm.name === TELEGRAM_SUMMARY_ALARM) {
@@ -181,6 +178,9 @@ chrome.storage.local.get(['autoScan', 'autoScanInterval', 'strategy'], d => {
  chrome.alarms.clear('autoScan');
  return;
  }
+ chrome.alarms.clear('autoScan');
+ dlog('Auto-scan is enabled but startup restore is quiet; use Auto button to resume the schedule.');
+ return;
  // Check if alarm already exists - don't re-create (that resets the timer)
  chrome.alarms.get('autoScan', existing => {
  if (existing) {
@@ -193,8 +193,6 @@ chrome.storage.local.get(['autoScan', 'autoScanInterval', 'strategy'], d => {
 });
 syncCustomAlertPollingAlarm(() => {});
 syncAutoTradeMonitorAlarm(() => {});
-syncDcaBotMonitorAlarm(() => {});
-syncOptionsStraddleMonitorAlarm(() => {});
 syncTelegramSummaryAlarm(() => {});
 
 // ================================================================
@@ -221,7 +219,7 @@ function openOrFocusDesktopApp(callback = () => {}) {
  state: 'maximized',
  }, (win) => {
  if (!win?.id || chrome.runtime.lastError) {
- finish({ ok: false, error: chrome.runtime.lastError?.message || 'Failed to open FWD TradeDesk Pro workspace' });
+ finish({ ok: false, error: chrome.runtime.lastError?.message || 'Failed to open FWD Bharat MarketDesk workspace' });
  return;
  }
  chrome.storage.local.set({ desktopWindowId: win.id });
@@ -320,21 +318,40 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
  // -- Scan ------------------------------------------------------
  if (msg.action === 'startScan') {
- if (!scanRunPromise) {
- scanRunPromise = runScanWithDeadline().finally(() => {
- scanRunPromise = null;
- });
+  globalThis.scanAbortRequested = false;
+  const alreadyRunning = !!scanRunPromise;
+  if (!scanRunPromise) {
+   scanRunPromise = runScanWithDeadline()
+   .then(r => {
+    kickStrategyLabDeriveAfterManualScan();
+    return r;
+   })
+   .catch(async e => {
+    await markScanStoppedWithPartialFallback();
+    dlog(`Manual scan failed: ${e?.message || e}`);
+    throw e;
+   })
+   .finally(() => {
+    scanRunPromise = null;
+   });
+  }
+  sendResponse({
+   ok: true,
+   started: !alreadyRunning,
+   alreadyRunning,
+   strategyLabDeriving: true,
+   status: alreadyRunning ? 'Scan already running' : 'Scan started',
+  });
+  return false;
  }
- scanRunPromise
- .then(r => {
- kickStrategyLabDeriveAfterManualScan();
- sendResponse({ ok: true, count: r.length, strategyLabDeriving: true });
- })
- .catch(async e => {
- await markScanStoppedWithPartialFallback();
- sendResponse({ ok: false, error: e.message });
- });
- return true;
+
+ if (msg.action === 'stopScan') {
+  globalThis.scanAbortRequested = true;
+ markScanStopped('Scan stopped by user', 0)
+  .then(() => resumeMarketLiveFeedAfterScan())
+  .then(() => sendResponse({ ok: true, stopped: true }))
+  .catch(error => sendResponse({ ok: false, error: error?.message || 'Failed to stop scan' }));
+  return true;
  }
 
  // -- Auto-scan toggle ------------------------------------------
@@ -348,9 +365,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
  // -- Auto-trade toggle -----------------------------------------
  if (msg.action === 'toggleAutoTrade') {
- chrome.storage.local.set({ autoTrade: !!msg.enable }, () => {
+ chrome.storage.local.set({ autoTrade: false }, () => {
  syncAutoTradeMonitorAlarm(() => {
- sendResponse({ ok: true, enabled: !!msg.enable });
+ sendResponse({
+ ok: true,
+ enabled: false,
+ manualOnly: true,
+ blocked: !!msg.enable,
+  error: msg.enable ? 'Order placement is disabled in this build' : undefined,
+ });
  });
  });
  return true;
@@ -455,9 +478,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
  }
 
  if (msg.action === 'syncDcaBotAlarm') {
+ chrome.storage.local.get(['dcaBotSettings'], current => chrome.storage.local.set({
+ dcaBotSettings: { ...(current?.dcaBotSettings || {}), enabled: false },
+ dcaBotState: {
+  status: 'off',
+  reason: 'Manual-only build disables scheduled order automation',
+  updatedAt: Date.now(),
+ },
+ }, () => {
  syncDcaBotMonitorAlarm(result => {
- sendResponse({ ok: true, ...result });
+ sendResponse({ ok: true, manualOnly: true, ...result });
  });
+ }));
  return true;
  }
 
@@ -466,10 +498,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
  const quota = typeof globalThis.v17GetApiQuotaState === 'function'
  ? globalThis.v17GetApiQuotaState()
  : null;
+ const metrics = typeof globalThis.buildPerformanceMetricsSnapshot === 'function'
+ ? globalThis.buildPerformanceMetricsSnapshot()
+ : null;
  const candleCache = typeof globalThis.v17GetPersistentCandleCacheStats === 'function'
  ? await globalThis.v17GetPersistentCandleCacheStats()
  : { supported: false, entries: 0, latestUpdatedAt: 0, oldestUpdatedAt: 0 };
- sendResponse({ ok: true, quota, candleCache });
+ sendResponse({ ok: true, quota, metrics, candleCache });
  })().catch(e => sendResponse({ ok: false, error: e?.message || 'Runtime health failed' }));
  return true;
  }
@@ -567,7 +602,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
  return;
  }
  sendWebhook(hook, 'test', {
- message: 'This is a test from FWD TradeDesk Pro',
+ message: 'This is a test from FWD Bharat MarketDesk',
  timestamp: new Date().toISOString(),
  symbol: 'BTCUSD', direction: 'long', score: 88,
  notes: 'Test Test webhook - if you see this, your integration is working!',
@@ -610,7 +645,7 @@ chrome.commands?.onCommand.addListener((command) => {
  }
 });
 
-dlog('FWD TradeDesk Pro ready - Webhooks, workspace mode, journal tools, research modules, and branded icons are loaded.');
+dlog('FWD Bharat MarketDesk ready - Webhooks, workspace mode, journal tools, research modules, and branded icons are loaded.');
 
 migrateSensitiveConfig().catch(e => {
  dlog(`Sensitive config migration error: ${e?.message || 'unknown error'}`);

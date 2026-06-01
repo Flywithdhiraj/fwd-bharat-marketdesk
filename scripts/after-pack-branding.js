@@ -5,11 +5,12 @@ const path = require('path');
 exports.default = async function afterPackBranding(context) {
   if (context.electronPlatformName !== 'win32') return;
 
-  const productName = 'FWD TradeDesk Pro';
+  const productName = 'FWD Bharat MarketDesk';
+  const executableName = context.packager.appInfo.productFilename || 'FWD Bharat MarketDesk';
   const publisherName = 'Dhiraj Jha';
   const version = context.packager.appInfo.version || '0.1.0';
-  const exePath = path.join(context.appOutDir, `${productName}.exe`);
-  const iconPath = path.join(context.packager.projectDir, 'src', 'renderer', 'icons', 'fwd-tradedesk-pro.ico');
+  const exePath = path.join(context.appOutDir, `${executableName}.exe`);
+  const iconPath = path.join(context.packager.projectDir, 'src', 'renderer', 'icons', 'fwd-bharat-marketdesk.ico');
   const rceditPath = path.join(context.packager.projectDir, 'node_modules', 'electron-winstaller', 'vendor', 'rcedit.exe');
   const localesDir = path.join(context.appOutDir, 'locales');
 
@@ -29,7 +30,7 @@ exports.default = async function afterPackBranding(context) {
     '--set-version-string', 'CompanyName', publisherName,
     '--set-version-string', 'FileDescription', productName,
     '--set-version-string', 'InternalName', productName,
-    '--set-version-string', 'OriginalFilename', `${productName}.exe`,
+    '--set-version-string', 'OriginalFilename', `${executableName}.exe`,
     '--set-version-string', 'ProductName', productName,
     '--set-version-string', 'LegalCopyright', `Copyright (c) 2026 ${publisherName}`,
     '--set-version-string', 'LegalTrademarks', productName,

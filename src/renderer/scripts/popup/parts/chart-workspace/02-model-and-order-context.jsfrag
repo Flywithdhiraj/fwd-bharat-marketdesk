@@ -74,9 +74,9 @@
  .sort((a, b) => scoreSignalForChart(b) - scoreSignalForChart(a))[0] || null;
  }
 
-function signalTimeframe(signal = {}, fallback = '5m') {
+function signalTimeframe(signal = {}, fallback = '15m') {
  const lowerLabel = String(signal?.lower?.label || '').trim().toLowerCase();
- return normalizeTimeframe(lowerLabel || signal?.timeframe || signal?.raw?.timeframe || fallback || '5m');
+ return normalizeTimeframe(lowerLabel || signal?.timeframe || signal?.raw?.timeframe || fallback || '15m');
 }
 
  async function setChartSymbolFromSignal(signal = {}, options = {}) {
@@ -347,12 +347,13 @@ function signalTimeframe(signal = {}, fallback = '5m') {
 
  function resolutionCoverageRequirement(state = {}) {
  const timeframe = normalizeTimeframe(state.timeframe);
+ const maxHistoryCount = timeframe === '15m' ? MAX_15M_HISTORY_CANDLES : MAX_RENDER_CANDLES;
  const baseVisible = state.replaySeed?.baselineVisibleCount || defaultVisibleCount(timeframe);
  const visible = Math.max(baseVisible, Math.round(Number(state.visibleCandleCount || baseVisible) || baseVisible));
- const paddedCount = Math.min(MAX_RENDER_CANDLES, Math.max(80, visible + (FETCH_BUFFER_COUNTS[timeframe] || 80)));
+ const paddedCount = Math.min(maxHistoryCount, Math.max(80, visible + (FETCH_BUFFER_COUNTS[timeframe] || 80)));
  if (!state.replaySeed) {
  return {
- count: MAX_RENDER_CANDLES,
+ count: maxHistoryCount,
  startMs: 0,
  endMs: 0,
  };
@@ -393,7 +394,7 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  nextCache[cacheKey] = payload;
  Object.keys(nextCache).forEach(key => {
  const entry = nextCache[key];
- const timeframe = normalizeTimeframe(key.split(':')[1] || '5m');
+ const timeframe = normalizeTimeframe(key.split(':')[1] || '15m');
  const ttl = (TTL_MS[timeframe] || 60000) * 4;
  if ((Date.now() - Number(entry?.fetchedAt || 0)) > ttl) delete nextCache[key];
  });
@@ -402,7 +403,7 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  .slice(0, 8));
  }
 
- function cacheEntryFresh(entry = null, timeframe = '5m') {
+ function cacheEntryFresh(entry = null, timeframe = '15m') {
  if (!entry || typeof entry !== 'object') return false;
  return (Date.now() - Number(entry.fetchedAt || 0)) < ((TTL_MS[normalizeTimeframe(timeframe)] || 60000) * 4);
  }
@@ -541,8 +542,8 @@ function signalTimeframe(signal = {}, fallback = '5m') {
 
  function fwdIndexConfiguredCount(marketIndex = null) {
  const sanitized = typeof shared.sanitizeMarketIndexSettings === 'function'
- ? shared.sanitizeMarketIndexSettings({ maxConstituents: marketIndex?.configuredMaxConstituents || marketIndex?.topCount || marketIndex?.topCoins?.length || 10 })
- : { maxConstituents: Math.max(3, Math.min(100, Number(marketIndex?.configuredMaxConstituents || marketIndex?.topCoins?.length || 10) || 10)) };
+ ? shared.sanitizeMarketIndexSettings({ maxConstituents: marketIndex?.configuredMaxConstituents || marketIndex?.topCount || marketIndex?.topStocks?.length || 10 })
+ : { maxConstituents: Math.max(3, Math.min(100, Number(marketIndex?.configuredMaxConstituents || marketIndex?.topStocks?.length || 10) || 10)) };
  return Math.max(3, Math.min(100, Math.round(Number(sanitized.maxConstituents || 10) || 10)));
  }
 
@@ -576,8 +577,8 @@ function signalTimeframe(signal = {}, fallback = '5m') {
 
  async function fwdIndexHistoryCandidateSymbols(marketIndex = null) {
  const excludedSymbols = fwdIndexExcludedSymbols(marketIndex);
- const topSymbols = (Array.isArray(marketIndex?.topCoins) ? marketIndex.topCoins : [])
- .map(coin => String(coin?.sym || coin?.symbol || '').trim().toUpperCase());
+ const topSymbols = (Array.isArray(marketIndex?.topStocks) ? marketIndex.topStocks : [])
+ .map(stock => String(stock?.sym || stock?.symbol || '').trim().toUpperCase());
  const products = await loadChartMarketSymbols(false).catch(() => []);
  const productSymbols = (Array.isArray(products) ? products : [])
  .map(product => String(product?.symbol || product || '').trim().toUpperCase());
@@ -829,18 +830,18 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  function classifyIndexCorrelation(value) {
  const numeric = Number(value);
  if (!Number.isFinite(numeric)) return { label: 'Index correlation unavailable', tone: 'neutral' };
- if (numeric >= 0.75) return { label: 'Strong same as FWD-100', tone: 'good' };
- if (numeric >= 0.5) return { label: 'Mostly same as FWD-100', tone: 'good' };
+ if (numeric >= 0.75) return { label: 'Strong same as Nifty 50', tone: 'good' };
+ if (numeric >= 0.5) return { label: 'Mostly same as Nifty 50', tone: 'good' };
  if (numeric >= 0.25) return { label: 'Some index alignment', tone: 'neutral' };
  if (numeric > -0.25) return { label: 'Low index link', tone: 'neutral' };
- if (numeric > -0.5) return { label: 'Mild inverse to FWD-100', tone: 'warn' };
- return { label: 'Inverse to FWD-100', tone: 'bad' };
+ if (numeric > -0.5) return { label: 'Mild inverse to Nifty 50', tone: 'warn' };
+ return { label: 'Inverse to Nifty 50', tone: 'bad' };
  }
 
  async function buildIndexCorrelation(symbol = '', marketIndex = null, indexDatasetOverride = null) {
  const normalized = String(symbol || '').trim().toUpperCase();
  if (!normalized || isFwdIndexSymbol(normalized)) return null;
- const [coinResponse, indexDataset] = await Promise.all([
+ const [stockResponse, indexDataset] = await Promise.all([
  runtimeSend('v16:getPublicCandles', {
  symbol: normalized,
  resolution: '1d',
@@ -848,12 +849,12 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  }),
  indexDatasetOverride || loadFwdIndexChartDataset({ symbol: FWD_INDEX_SYMBOL, timeframe: '1d' }),
  ]);
- const coinReturns = dailyReturnMapFromCandles(coinResponse?.candles || []);
+ const stockReturns = dailyReturnMapFromCandles(stockResponse?.candles || []);
  const indexReturns = dailyReturnMapFromCandles(indexDataset?.candles || []);
- const days = Array.from(coinReturns.keys()).filter(day => indexReturns.has(day)).sort();
+ const days = Array.from(stockReturns.keys()).filter(day => indexReturns.has(day)).sort();
  const calcWindow = size => {
  const selected = days.slice(-size);
- const xs = selected.map(day => coinReturns.get(day)).filter(Number.isFinite);
+ const xs = selected.map(day => stockReturns.get(day)).filter(Number.isFinite);
  const ys = selected.map(day => indexReturns.get(day)).filter(Number.isFinite);
  const value = xs.length === ys.length ? pearsonCorrelation(xs, ys) : null;
  return {
@@ -937,13 +938,243 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  }).filter(candle => candle.time > 0 && candle.close > 0);
  }
 
+ function clampFwdIndexMetricPct(value = 0, fallback = 0) {
+ const numeric = finiteChartNumber(value, fallback);
+ return Math.max(0, Math.min(100, numeric));
+ }
+
+ function buildFwdIndexMetricSnapshot(source = {}) {
+ const ts = finiteChartNumber(source?.ts, 0);
+ const advancing = finiteChartNumber(source?.advancing, 0);
+ const declining = finiteChartNumber(source?.declining, 0);
+ const topCount = finiteChartNumber(source?.topCount, advancing + declining);
+ const hasConstituentCounts = topCount > 0 && (advancing > 0 || declining > 0);
+ const hasBreadthPct = source?.breadthPct !== undefined && source?.breadthPct !== null && Number.isFinite(Number(source.breadthPct));
+ const derivedBreadth = hasConstituentCounts ? (advancing / topCount) * 100 : null;
+ const parsedBreadthPct = hasBreadthPct ? clampFwdIndexMetricPct(source.breadthPct, derivedBreadth ?? 0) : derivedBreadth;
+ const breadthPct = parsedBreadthPct == null || (!hasConstituentCounts && parsedBreadthPct <= 0) ? null : clampFwdIndexMetricPct(parsedBreadthPct, 0);
+ const hasAdvancingVolumePct = source?.advancingVolumePct !== undefined && source?.advancingVolumePct !== null && Number.isFinite(Number(source.advancingVolumePct));
+ const advancingVolumePct = hasAdvancingVolumePct ? clampFwdIndexMetricPct(source.advancingVolumePct, breadthPct ?? 0) : breadthPct;
+ const hasFundingStressPct = source?.fundingStressPct !== undefined && source?.fundingStressPct !== null && Number.isFinite(Number(source.fundingStressPct));
+ const fundingStressPct = hasFundingStressPct ? clampFwdIndexMetricPct(source.fundingStressPct, 0) : null;
+ const hasFundingCrowdingIndex = source?.fundingCrowdingIndex !== undefined && source?.fundingCrowdingIndex !== null && Number.isFinite(Number(source.fundingCrowdingIndex));
+ const fundingCrowdingIndex = hasFundingCrowdingIndex ? clampFwdIndexMetricPct(source.fundingCrowdingIndex, fundingStressPct ?? 0) : fundingStressPct;
+ const carryAnnualPct = source?.carryAnnualPct !== undefined && source?.carryAnnualPct !== null && Number.isFinite(Number(source.carryAnnualPct))
+ ? Number(source.carryAnnualPct)
+ : null;
+ const rawRatio = finiteChartNumber(source?.advanceDeclineRatio, null);
+ const advanceDeclineRatio = rawRatio != null
+ ? rawRatio
+ : (hasConstituentCounts ? advancing / Math.max(1, declining) : null);
+ return {
+ ts,
+ breadthPct,
+ advancingVolumePct,
+ fundingStressPct,
+ fundingCrowdingIndex,
+ fundingCrowdingShock: finiteChartNumber(source?.fundingCrowdingShock, 0),
+ fundingLongPressure: clampFwdIndexMetricPct(source?.fundingLongPressure, 0),
+ fundingShortPressure: clampFwdIndexMetricPct(source?.fundingShortPressure, 0),
+ fundingOiConfirmationPct: clampFwdIndexMetricPct(source?.fundingOiConfirmationPct, 0),
+ extremeFundingPct: clampFwdIndexMetricPct(source?.extremeFundingPct, 0),
+ fundingCrowdingBias: String(source?.fundingCrowdingBias || 'balanced'),
+ topFundingCrowding: Array.isArray(source?.topFundingCrowding) ? source.topFundingCrowding : [],
+ carryAnnualPct,
+ carryUsableRows: Math.max(0, finiteChartNumber(source?.carryUsableRows, 0)),
+ carryExecutableRows: Math.max(0, finiteChartNumber(source?.carryExecutableRows, 0)),
+ carrySource: String(source?.carrySource || ''),
+ advanceDeclineRatio: advanceDeclineRatio == null ? null : Math.max(0, advanceDeclineRatio),
+ advancing,
+ declining,
+ topCount,
+ };
+ }
+
+ function buildCurrentFwdIndexMetricSource(marketIndex = null) {
+ if (!marketIndex?.ts) return null;
+ const topStocks = Array.isArray(marketIndex.fnoConstituents)
+ ? marketIndex.fnoConstituents
+ : (Array.isArray(marketIndex.topStocks) ? marketIndex.topStocks : (Array.isArray(marketIndex.topCoins) ? marketIndex.topCoins : []));
+ const advancing = topStocks.filter(stock => Number(stock?.change || 0) > 0).length;
+ const declining = topStocks.filter(stock => Number(stock?.change || 0) < 0).length;
+ return {
+ ts: finiteChartNumber(marketIndex.ts, Date.now()),
+ breadthPct: marketIndex.sentiment?.breadthPct,
+ advancingVolumePct: marketIndex.sentiment?.advancingVolumePct,
+ fundingStressPct: marketIndex.sentiment?.fundingStressPct,
+ fundingCrowdingIndex: marketIndex.sentiment?.fundingCrowdingIndex,
+ fundingCrowdingShock: marketIndex.sentiment?.fundingCrowdingShock,
+ fundingLongPressure: marketIndex.sentiment?.fundingLongPressure,
+ fundingShortPressure: marketIndex.sentiment?.fundingShortPressure,
+ fundingOiConfirmationPct: marketIndex.sentiment?.fundingOiConfirmationPct,
+ extremeFundingPct: marketIndex.sentiment?.extremeFundingPct,
+ fundingCrowdingBias: marketIndex.sentiment?.fundingCrowdingBias,
+ topFundingCrowding: marketIndex.sentiment?.topFundingCrowding,
+ advanceDeclineRatio: advancing / Math.max(1, declining),
+ advancing,
+ declining,
+ topCount: topStocks.length,
+ };
+ }
+
+ function buildFwdIndexMetricRows(history = [], marketIndex = null) {
+ const rows = (Array.isArray(history) ? history : [])
+ .map(buildFwdIndexMetricSnapshot)
+ .filter(row => row.ts > 0)
+ .sort((a, b) => a.ts - b.ts);
+ const current = buildCurrentFwdIndexMetricSource(marketIndex);
+ if (current) {
+ const currentMetric = buildFwdIndexMetricSnapshot(current);
+ const last = rows[rows.length - 1] || null;
+ if (!last || Math.abs(finiteChartNumber(last.ts, 0) - currentMetric.ts) > 1000) rows.push(currentMetric);
+ }
+ const seen = new Set();
+ return rows.filter(row => {
+ const key = Math.floor(row.ts / 1000);
+ if (seen.has(key)) return false;
+ seen.add(key);
+ return true;
+ });
+ }
+
+ function fwdIndexMetricDefinition(symbol = '') {
+ const normalized = normalizeFwdIndexSyntheticSymbol(symbol);
+ if (normalized === FWD_INDEX_FUNDING_SYMBOL) {
+ return {
+ symbol: FWD_INDEX_FUNDING_SYMBOL,
+ key: 'carryAnnualPct',
+ displayName: 'F&O Carry - Implied Basis',
+ historyMode: 'fno_carry_snapshot_history',
+ minWick: 0.02,
+ volumeKey: 'carryUsableRows',
+ allowNegative: true,
+ guide: {
+ title: 'Implied carry %',
+ text: 'Median annualized cash-futures basis from stored F&O snapshots. This is not a funding rate.',
+ zones: ['Below 0 discount', '0-5 mild premium', '5-10 carry watch', '10+ elevated basis', 'Manual review only'],
+ },
+ };
+ }
+ if (normalized === FWD_INDEX_BREADTH_SYMBOL) {
+ return {
+ symbol: FWD_INDEX_BREADTH_SYMBOL,
+ key: 'breadthPct',
+ displayName: 'F&O Stock Breadth %',
+ historyMode: 'scan_breadth_history',
+ minWick: 0.05,
+ visualFloor: 0.0001,
+ volumeKey: 'topCount',
+ guide: {
+ title: 'Breadth %',
+ text: 'Percent of scanned F&O stock constituents advancing in the latest scan. This is a participation chart, not Nifty 50 breadth.',
+ zones: ['70+ strong bullish', '55-70 positive', '45-55 neutral', '30-45 weak', 'Below 30 risk-off'],
+ },
+ };
+ }
+ if (normalized === FWD_INDEX_AD_SYMBOL) {
+ return {
+ symbol: FWD_INDEX_AD_SYMBOL,
+ key: 'advanceDeclineRatio',
+ displayName: 'F&O Advance Decline Ratio (capped)',
+ historyMode: 'scan_advance_decline_history_capped',
+ minWick: 0.01,
+ capValue: 10,
+ volumeKey: 'advancingVolumePct',
+ guide: {
+ title: 'Raw A/D ratio',
+ text: 'Advancing F&O stock names divided by declining names. Display is capped at 10 so rare spikes do not crush the chart.',
+ zones: ['Below 1 weak', '1-2 normal', '2-5 strong', '5-10 stretched', '10+ shown as capped'],
+ },
+ };
+ }
+ return null;
+ }
+
+ function buildFwdIndexMetricCandles(history = [], marketIndex = null, definition = null) {
+ if (!definition?.key) return [];
+ const rows = buildFwdIndexMetricRows(history, marketIndex)
+ .map(row => {
+ const rawValue = row?.[definition.key];
+ const parsedValue = rawValue === undefined || rawValue === null ? null : finiteChartNumber(rawValue, null);
+  return {
+  ...row,
+ rawValue: parsedValue,
+ value: parsedValue == null ? null : Math.min(Number(definition.capValue || Number.POSITIVE_INFINITY), parsedValue),
+  };
+  })
+ .filter(row => row.ts > 0 && row.value != null && Number.isFinite(Number(row.value)))
+ .sort((a, b) => a.ts - b.ts);
+ return rows.slice(-FWD_INDEX_CHART_HISTORY_LIMIT).map((point, index, source) => {
+ const previousValue = finiteChartNumber(source[index - 1]?.value, point.value);
+ const visualFloor = Number(definition.visualFloor || 0.0001);
+ const open = definition.allowNegative ? previousValue : Math.max(visualFloor, previousValue);
+ const close = definition.allowNegative ? point.value : Math.max(visualFloor, point.value);
+ const moveAbs = Math.abs(close - open);
+ const wick = moveAbs > 0 ? Math.max(Number(definition.minWick || 0.01), moveAbs * 0.18) : 0;
+ const high = Math.max(open, close) + wick;
+ const low = definition.allowNegative ? Math.min(open, close) - wick : Math.max(visualFloor, Math.min(open, close) - wick);
+ const rawVolume = finiteChartNumber(point?.[definition.volumeKey || 'topCount'], finiteChartNumber(point.topCount, 1));
+ return normalizeCandle({
+ time: point.ts,
+ open,
+ high,
+ low,
+ close,
+ volume: Math.max(1, rawVolume),
+ });
+ }).filter(candle => candle.time > 0 && Number.isFinite(Number(candle.close)));
+ }
+
  async function loadFwdIndexChartDataset(state = {}, strategy = {}) {
- const data = await localGet(['marketIndex', 'marketIndexHistory']);
+ const syntheticSymbol = normalizeFwdIndexSyntheticSymbol(state.symbol || FWD_INDEX_SYMBOL) || FWD_INDEX_SYMBOL;
+ const data = await localGet(['marketIndex', 'marketIndexHistory', 'fnoCarryMetricHistoryV1']);
+ const metricDefinition = fwdIndexMetricDefinition(syntheticSymbol);
+ if (metricDefinition) {
+ const metricHistory = metricDefinition.key === 'carryAnnualPct' ? (data.fnoCarryMetricHistoryV1 || []) : (data.marketIndexHistory || []);
+ const metricMarketIndex = metricDefinition.key === 'carryAnnualPct' ? null : (data.marketIndex || null);
+ const candles = buildFwdIndexMetricCandles(metricHistory, metricMarketIndex, metricDefinition).slice(-FWD_INDEX_DAILY_HISTORY_LIMIT);
+ const metricSnapshot = Array.isArray(metricHistory) ? metricHistory[metricHistory.length - 1] || null : null;
+ if (!candles.length) {
+ return {
+ ok: false,
+ symbol: metricDefinition.symbol,
+ timeframe: '1d',
+ candles: [],
+ studies: {},
+ keyLevels: null,
+ fetchedAt: 0,
+ syntheticIndex: true,
+ syntheticMetric: metricDefinition.key,
+ error: metricDefinition.key === 'carryAnnualPct'
+ ? 'Refresh F&O Carry first. This chart uses stored cash-futures carry snapshots.'
+ : 'Run Scan Now first. This F&O participation chart uses stored scan history.',
+ };
+ }
+ return {
+ ok: true,
+ symbol: metricDefinition.symbol,
+ timeframe: '1d',
+ candles,
+ studies: {},
+ keyLevels: null,
+ fetchedAt: Date.now(),
+ syntheticIndex: true,
+ syntheticMetric: metricDefinition.key,
+ historyMode: metricDefinition.historyMode,
+ historyMetadata: { mode: metricDefinition.historyMode, samples: candles.length },
+ displayName: metricDefinition.displayName,
+ metricGuide: metricDefinition.guide || null,
+ metricDisplayCap: Number(metricDefinition.capValue || 0) || null,
+ metricSnapshot,
+ marketIndex: data.marketIndex || null,
+ };
+ }
  const historicalDaily = await buildFwdIndexDailyCandlesFromConstituents(data.marketIndex || null).catch(() => ({ candles: [], metadata: { mode: 'build_failed' } }));
  const historicalCandles = Array.isArray(historicalDaily?.candles) ? historicalDaily.candles : [];
  const candles = historicalCandles.length >= 20
  ? historicalCandles
  : buildFwdIndexSyntheticCandles(data.marketIndexHistory || [], data.marketIndex || null).slice(-FWD_INDEX_DAILY_HISTORY_LIMIT);
+ const historyMode = historicalCandles.length >= 20 ? (historicalDaily?.metadata?.mode || 'historical_daily_liquidity_ranked') : 'scan_snapshot_fallback';
  if (!candles.length) {
  return {
  ok: false,
@@ -954,7 +1185,7 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  keyLevels: null,
  fetchedAt: 0,
  syntheticIndex: true,
- error: 'Run Scan Now first. FWD-100 chart uses stored market-index history from scans.',
+ error: 'Run Scan Now first. Nifty 50 chart uses stored market-index history from scans.',
  };
  }
  return {
@@ -966,7 +1197,7 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  keyLevels: null,
  fetchedAt: Date.now(),
  syntheticIndex: true,
- historyMode: historicalCandles.length >= 20 ? (historicalDaily?.metadata?.mode || 'historical_daily_liquidity_ranked') : 'scan_snapshot_fallback',
+ historyMode,
  historyMetadata: historicalDaily?.metadata || {},
  displayName: fwdIndexDisplayName(data.marketIndex || null),
  marketIndex: data.marketIndex || null,
@@ -975,7 +1206,7 @@ function signalTimeframe(signal = {}, fallback = '5m') {
 
  async function loadChartDataset(state = {}, strategy = {}, options = {}) {
  const symbol = String(state.symbol || '').trim().toUpperCase();
- const timeframe = normalizeTimeframe(state.timeframe || '5m');
+ const timeframe = normalizeTimeframe(state.timeframe || '15m');
  if (!symbol) {
  return {
  ok: false,
@@ -987,7 +1218,7 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  };
  }
  if (isFwdIndexSymbol(symbol)) {
- return loadFwdIndexChartDataset({ ...state, symbol: FWD_INDEX_SYMBOL, timeframe: '1d' }, strategy);
+ return loadFwdIndexChartDataset({ ...state, symbol: normalizeFwdIndexSyntheticSymbol(symbol) || FWD_INDEX_SYMBOL, timeframe: '1d' }, strategy);
  }
  const requirement = resolutionCoverageRequirement(state);
  const cacheKey = `${symbol}:${timeframe}`;
@@ -1644,7 +1875,7 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  };
  }
 
- function rankSahiKeyZones(zones = [], settings = {}, referencePrice = 0, chartTimeframe = '5m') {
+ function rankSahiKeyZones(zones = [], settings = {}, referencePrice = 0, chartTimeframe = '15m') {
  const limit = 4;
  const byKind = ['resistance', 'support'].flatMap(kind => {
  return mergeNearbyKeyZones(
@@ -1709,14 +1940,14 @@ function signalTimeframe(signal = {}, fallback = '5m') {
  .sort((a, b) => kind === 'resistance' ? Number(a.price || 0) - Number(b.price || 0) : Number(b.price || 0) - Number(a.price || 0));
  }
 
- function mapChartTfToKeyLevelTf(chartTimeframe = '5m') {
+ function mapChartTfToKeyLevelTf(chartTimeframe = '15m') {
  const tf = normalizeTimeframe(chartTimeframe);
  if (tf === '1d') return '1D';
  if (['4h', '1h'].includes(tf)) return '1D';
  return '15m';
  }
 
- function collectVisibleKeyZones(keyLevels = null, settings = {}, referencePrice = 0, chartTimeframe = '5m') {
+ function collectVisibleKeyZones(keyLevels = null, settings = {}, referencePrice = 0, chartTimeframe = '15m') {
  if (!keyLevels || typeof keyLevels !== 'object') return [];
  const smartSettings = { ...settings, chartTimeframe };
  const brokerZones = [

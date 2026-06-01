@@ -74,11 +74,10 @@
  const openedAt = normalizeTsMs(trade.openedAt || trade.entryTs || trade.entryTime);
  const closedAt = normalizeTsMs(trade.closedAt || trade.exitTs || trade.exitTime);
  const durationMs = Math.max(0, closedAt - openedAt);
- if (durationMs <= 8 * 60 * 60 * 1000) return '5m';
  if (durationMs <= 3 * 24 * 60 * 60 * 1000) return '15m';
- if (durationMs <= 14 * 24 * 60 * 60 * 1000) return '1h';
+ if (durationMs <= 14 * 24 * 60 * 60 * 1000) return '4h';
  return '4h';
- }
+}
 
  function buildReplaySeedFromTrade(trade = {}) {
  const entryTs = normalizeTsMs(trade.openedAt || trade.entryTs || trade.entryTime);
@@ -117,7 +116,7 @@
  });
  }
 
- function buildAxisLabels(candles = [], timeframe = '5m', startIndex = 0) {
+ function buildAxisLabels(candles = [], timeframe = '15m', startIndex = 0) {
  const labels = [];
  const verticals = [];
  if (!candles.length) return { labels, verticals };
@@ -137,14 +136,14 @@
  ) : false;
  const yearChanged = prev ? date.getUTCFullYear() !== prev.getUTCFullYear() : false;
  let label = '';
- if (['1m', '5m', '15m'].includes(timeframe)) {
+ if (timeframe === '15m') {
  if (dayChanged) {
  label = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
  verticals.push({ leftPct, label });
  } else if (index % every === 0 || index === candles.length - 1) {
  label = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
  }
- } else if (['1h', '4h'].includes(timeframe)) {
+ } else if (timeframe === '4h') {
  if (monthChanged || index % every === 0 || index === candles.length - 1) {
  label = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
  }
@@ -175,7 +174,7 @@
  }
 
  function formatIntelMetric(metric = {}) {
- if (metric.format === 'price') return `$${formatPrice(metric.value)}`;
+ if (metric.format === 'price') return `Rs ${formatPrice(metric.value)}`;
  return String(metric.value == null ? '-' : metric.value);
  }
 
@@ -378,7 +377,7 @@ function buildChartDraftLines(draft = null) {
  const amount = unitMove * (size > 0 ? size : 1);
  const percent = entry > 0 ? (unitMove / entry) * 100 : 0;
  const sign = amount >= 0 ? '+' : '-';
- const money = `${sign}$${Math.abs(amount).toFixed(2)}`;
+ const money = `${sign}Rs ${Math.abs(amount).toFixed(2)}`;
  const pct = `${percent >= 0 ? '+' : '-'}${Math.abs(percent).toFixed(2)}%`;
  return size > 0 ? `${money} / ${pct}` : `${money} est / ${pct}`;
  }
@@ -436,7 +435,7 @@ function buildChartDraftLines(draft = null) {
 function buildChartTradeButtons(state = {}, model = null) {
  if (isFwdIndexSymbol(state.symbol || '')) {
  return `<div class="live-order-chart-timeframes ds-chart-trade-controls">
- <span class="account-inline-note">FWD-100 is a market index. Use it for regime and scanner context, not order placement.</span>
+ <span class="account-inline-note">Nifty 50 is a market index. Use it for regime and scanner context, not order placement.</span>
  </div>`;
  }
  const mode = normalizeChartTradingMode(state.chartTradingMode);
@@ -531,7 +530,7 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  ${panel.levels.map(level => `
  <div class="ds-trade-read-row ${escapeHtml(level.tone || '')}">
  <span>${escapeHtml(level.label || '')}</span>
- <strong>$${escapeHtml(formatPrice(level.value))}${level.meta ? ` <em>${escapeHtml(level.meta)}</em>` : ''}</strong>
+ <strong>Rs ${escapeHtml(formatPrice(level.value))}${level.meta ? ` <em>${escapeHtml(level.meta)}</em>` : ''}</strong>
  </div>`).join('')}
  </div>` : ''}
  <div class="ds-trade-read-block">
@@ -641,8 +640,8 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  ].filter(Boolean), 'No setup context yet')}</div>`;
  }
  if (activeTab === 'levels') {
- return `<div class="ds-context-section"><h4>Nearest Levels</h4>${levels.length ? levels.map(level => `<div class="ds-trade-read-row ${escapeHtml(level.tone || '')}"><span>${escapeHtml(level.label || '')}</span><strong>$${escapeHtml(formatPrice(level.value))}${level.meta ? ` <em>${escapeHtml(level.meta)}</em>` : ''}</strong></div>`).join('') : '<div class="ds-context-empty">No level data yet.</div>'}</div>
- <div class="ds-context-section"><h4>Order Context</h4>${(Array.isArray(state.orderContext?.lines) && state.orderContext.lines.length) ? state.orderContext.lines.map(line => `<div class="ds-trade-read-row ${escapeHtml(line.tone || '')}"><span>${escapeHtml(line.label || line.role || 'Line')}</span><strong>$${escapeHtml(formatPrice(line.price))}</strong></div>`).join('') : '<div class="ds-context-empty">No order lines active.</div>'}</div>`;
+ return `<div class="ds-context-section"><h4>Nearest Levels</h4>${levels.length ? levels.map(level => `<div class="ds-trade-read-row ${escapeHtml(level.tone || '')}"><span>${escapeHtml(level.label || '')}</span><strong>Rs ${escapeHtml(formatPrice(level.value))}${level.meta ? ` <em>${escapeHtml(level.meta)}</em>` : ''}</strong></div>`).join('') : '<div class="ds-context-empty">No level data yet.</div>'}</div>
+ <div class="ds-context-section"><h4>Order Context</h4>${(Array.isArray(state.orderContext?.lines) && state.orderContext.lines.length) ? state.orderContext.lines.map(line => `<div class="ds-trade-read-row ${escapeHtml(line.tone || '')}"><span>${escapeHtml(line.label || line.role || 'Line')}</span><strong>Rs ${escapeHtml(formatPrice(line.price))}</strong></div>`).join('') : '<div class="ds-context-empty">No order lines active.</div>'}</div>`;
  }
  return `<div class="ds-trade-read-grid">${metrics.map(metric => `<div class="ds-trade-read-metric"><span>${escapeHtml(metric.label || '')}</span><strong>${escapeHtml(formatIntelMetric(metric))}</strong></div>`).join('')}</div>
  <div class="ds-context-section"><h4>Market Regime</h4><p>${escapeHtml(String(signal?.marketRegime || marketIndex?.regime || 'Unknown').replace(/_/g, ' '))}</p></div>
@@ -668,19 +667,20 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  }
 
  function buildDeskChartPanel(panelKey, title, panelState = {}, dataset = {}, model = null, intelligence = null, state = {}, calculatedIndicators = {}) {
- const tf = normalizeTimeframe(panelState.timeframe || state.timeframe || '5m');
+ const tf = normalizeTimeframe(panelState.timeframe || state.timeframe || '15m');
  const isFwdIndex = dataset?.syntheticIndex === true;
  const panelResolutions = isFwdIndex ? ['1d'] : RESOLUTIONS;
  const statusText = !panelState.symbol
  ? 'Choose a symbol'
  : dataset?.ok
  ? (dataset?.syntheticIndex
- ? `Equal-weight benchmark | ${model?.totalCount || dataset?.candles?.length || 0} bars`
+ ? `${dataset?.displayName || fwdIndexSyntheticDisplayName(dataset?.symbol || panelState.symbol)} | ${model?.totalCount || dataset?.candles?.length || 0} ${dataset?.syntheticMetric ? 'points' : 'bars'}`
  : `${RESOLUTION_LABELS[tf]} | ${model?.visibleCount || 0}/${model?.totalCount || 0}`)
  : (dataset?.error || 'Chart unavailable');
  const chartId = `${state.chartViewMode || 'tab'}-${panelKey}`;
+ const thinCandleCount = !model && dataset?.ok && Array.isArray(dataset?.candles) ? dataset.candles.length : 0;
  const chartMarkup = !model
- ? `<div class="empty compact"><div class="ei">--</div><div class="eh">${escapeHtml(dataset?.ok ? 'No visible candles' : 'Chart unavailable')}</div><div class="es">${escapeHtml(dataset?.error || 'Public candles will appear here once a symbol is available.')}</div></div>`
+ ? `<div class="empty compact"><div class="ei">--</div><div class="eh">${escapeHtml(thinCandleCount > 0 ? 'Limited candle history' : dataset?.ok ? 'No visible candles' : 'Chart unavailable')}</div><div class="es">${escapeHtml(thinCandleCount > 0 ? `${thinCandleCount} candle${thinCandleCount === 1 ? '' : 's'} loaded. The chart can still render, but indicators need more history.` : dataset?.error || 'Public candles will appear here once a symbol is available.')}</div></div>`
  : `<div class="live-order-chart-shell ds-chart-shell ds-lwc-shell" data-ds-chart-shell="${chartId}">
  ${buildChartIndicatorLegend(panelState, getPresetMeta(panelState.preset || state.preset), calculatedIndicators, model)}
  <div class="ds-lwc-chart" data-ds-lwc-chart="${chartId}" role="img" aria-label="${escapeHtml(`${panelState.symbol || 'Symbol'} ${title}`)}"></div>
@@ -701,8 +701,33 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  </div>
  </div>
  ${buildNearestKeyLevelStrip(model)}
+ ${buildFwdIndexMetricGuide(dataset)}
  ${chartMarkup}
  </section>`;
+ }
+
+ function buildFwdIndexMetricGuide(dataset = {}) {
+ if (!dataset?.syntheticMetric || !dataset?.metricGuide) return '';
+ const guide = dataset.metricGuide || {};
+ const zones = Array.isArray(guide.zones) ? guide.zones : [];
+ const cap = Number(dataset.metricDisplayCap || 0);
+ const capLabel = cap > 0 ? `Display cap ${cap}` : '';
+ const title = String(guide.title || dataset.displayName || 'Metric').trim();
+ const text = String(guide.text || '').trim();
+ const carrySnapshot = dataset?.syntheticMetric === 'carryAnnualPct' ? (dataset?.metricSnapshot || null) : null;
+ const dynamicZones = carrySnapshot
+ ? [
+ `Usable ${Number(carrySnapshot.carryUsableRows || 0)}`,
+ `Executable ${Number(carrySnapshot.carryExecutableRows || 0)}`,
+ String(carrySnapshot.carrySource || '') === 'executable_depth' ? 'Depth based' : 'Indicative only',
+ ]
+ : [];
+ const tooltip = [title, text, ...zones, ...dynamicZones, capLabel].filter(Boolean).join(' | ');
+ return `<div class="ds-chart-meta-row ds-metric-guide-row" title="${escapeHtml(tooltip)}">
+ <span class="ds-metric-guide-main"><strong>${escapeHtml(title)}</strong>${text ? `<em>${escapeHtml(text)}</em>` : ''}</span>
+ <span class="ds-metric-guide-zones">${[...dynamicZones, ...zones].slice(0, 5).map(zone => `<em>${escapeHtml(zone)}</em>`).join('')}</span>
+ ${capLabel ? `<span class="ds-metric-guide-cap">${escapeHtml(capLabel)}</span>` : ''}
+ </div>`;
  }
 
  function buildExecutionPulse(intelligence = null) {
@@ -722,6 +747,87 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  <span>${escapeHtml(`${Math.round(Number(decision.confidence || 0))}% confidence`)}</span>
  <span>${escapeHtml(decision.reason || '')}</span>
  </div>`;
+ }
+
+ function clampMarketDecisionScore(value = 0, min = -100, max = 100) {
+ const numeric = Number(value);
+ if (!Number.isFinite(numeric)) return 0;
+ return Math.max(min, Math.min(max, numeric));
+ }
+
+ function marketDecisionRiskLabel(fundingCrowding = 0) {
+ const value = Number(fundingCrowding || 0);
+ if (value >= 75) return { label: 'Extreme', tone: 'danger' };
+ if (value >= 60) return { label: 'Squeeze risk', tone: 'danger' };
+ if (value >= 40) return { label: 'Crowded', tone: 'watch' };
+ if (value >= 20) return { label: 'Watch', tone: 'watch' };
+ return { label: 'Calm', tone: 'good' };
+ }
+
+ function buildMarketDecision(marketIndex = null) {
+ if (!marketIndex?.sentiment) return null;
+ const sentiment = marketIndex.sentiment || {};
+ const indexMove = Number(marketIndex.indexChangePct || 0);
+ const breadth = Number(sentiment.breadthPct ?? 50);
+ const advancingVolume = Number(sentiment.advancingVolumePct ?? breadth);
+ const indexLeadership = Number(sentiment.indexLeadership || sentiment.breadthPct || 50);
+ const fundingCrowding = Number(sentiment.fundingCrowdingIndex ?? sentiment.fundingStressPct ?? 0);
+ const fundingBias = String(sentiment.fundingCrowdingBias || 'balanced');
+ const fundingShock = Number(sentiment.fundingCrowdingShock || 0);
+ const trendScore = clampMarketDecisionScore(indexMove * 16, -24, 24);
+ const breadthScore = clampMarketDecisionScore((breadth - 50) * 0.85, -24, 24);
+ const volumeScore = clampMarketDecisionScore((advancingVolume - 50) * 0.38, -14, 14);
+ const leadershipScore = indexLeadership >= 58 ? 8 : indexLeadership <= 42 ? -8 : 0;
+ const rawBiasScore = trendScore + breadthScore + volumeScore + leadershipScore;
+ const risk = marketDecisionRiskLabel(fundingCrowding);
+ let bias = Math.abs(rawBiasScore) < 14 ? 'Neutral' : rawBiasScore > 0 ? 'Long' : 'Short';
+ let action = bias === 'Long' ? 'Prefer long scanner setups' : bias === 'Short' ? 'Prefer short scanner setups' : 'Wait for scanner confirmation';
+ if (fundingCrowding >= 60 && fundingBias === 'longs_crowded' && rawBiasScore > 8) {
+ bias = 'Contrarian';
+ action = 'Do not chase longs';
+ } else if (fundingCrowding >= 60 && fundingBias === 'shorts_crowded' && rawBiasScore < -8) {
+ bias = 'Contrarian';
+ action = 'Do not chase shorts';
+ } else if (fundingShock >= 18) {
+ action = 'Reduce size until crowding cools';
+ }
+ const confirmationBonus = Math.min(16, Math.abs(rawBiasScore) * 0.28);
+ const riskPenalty = fundingCrowding >= 75 ? 24 : fundingCrowding >= 60 ? 16 : fundingCrowding >= 40 ? 8 : 0;
+ const confidence = Math.round(clampMarketDecisionScore(42 + confirmationBonus + Math.abs(rawBiasScore) * 0.42 - riskPenalty, 20, 92));
+ const tone = bias === 'Long'
+ ? 'long'
+ : bias === 'Short'
+ ? 'short'
+ : bias === 'Contrarian'
+ ? 'contrarian'
+ : 'neutral';
+ const reasons = [
+ indexMove >= 0.35 ? `FWD trend +${indexMove.toFixed(2)}%` : indexMove <= -0.35 ? `FWD trend ${indexMove.toFixed(2)}%` : 'FWD trend flat',
+ breadth >= 55 ? `Breadth ${breadth.toFixed(1)}% rising support` : breadth <= 45 ? `Breadth ${breadth.toFixed(1)}% weak` : `Breadth ${breadth.toFixed(1)}% neutral`,
+ advancingVolume >= 55 ? `Advancing volume ${advancingVolume.toFixed(1)}%` : advancingVolume <= 45 ? `Advancing volume ${advancingVolume.toFixed(1)}% weak` : `Advancing volume ${advancingVolume.toFixed(1)}% mixed`,
+ fundingCrowding >= 40 ? `Activity ${fundingCrowding.toFixed(1)}/100 ${String(fundingBias).replace(/_/g, ' ')}` : `Activity ${fundingCrowding.toFixed(1)}/100 calm`,
+ fundingShock >= 10 ? `Shock +${fundingShock.toFixed(1)}` : '',
+ ].filter(Boolean).slice(0, 4);
+ return { bias, confidence, risk, action, tone, reasons };
+ }
+
+ function buildMarketDecisionPanel(marketIndex = null) {
+ const decision = buildMarketDecision(marketIndex);
+ if (!decision) return '';
+ return `<section class="ds-market-decision-strip ${escapeHtml(decision.tone)}" title="${escapeHtml(decision.reasons.join(' | '))}">
+ <div class="ds-market-decision-main">
+ <span>Market Bias</span>
+ <strong>${escapeHtml(decision.bias)}</strong>
+ <em>${escapeHtml(decision.action)}</em>
+ </div>
+ <div class="ds-market-decision-metrics">
+ <span><em>Confidence</em><strong>${escapeHtml(`${decision.confidence}%`)}</strong></span>
+ <span class="${escapeHtml(decision.risk.tone)}"><em>Risk</em><strong>${escapeHtml(decision.risk.label)}</strong></span>
+ </div>
+ <div class="ds-market-decision-reasons">
+ ${decision.reasons.map(reason => `<span>${escapeHtml(reason)}</span>`).join('')}
+ </div>
+ </section>`;
  }
 
 function buildIntelligenceOverlay(model = null, intelligence = null, state = {}) {
@@ -829,7 +935,7 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  function buildChartModel(dataset = {}, state = {}, strategy = {}, orderContext = null) {
  const candles = Array.isArray(dataset.candles) ? dataset.candles : [];
  if (!candles.length) return null;
- const timeframe = normalizeTimeframe(state.timeframe || dataset.timeframe || '5m');
+ const timeframe = normalizeTimeframe(state.timeframe || dataset.timeframe || '15m');
  const eventCandleTimes = getEventCandleTimes(candles, state);
  const chartCandles = eventCandleTimes.size
  ? candles.filter(candle => !eventCandleTimes.has(Number(candle.time || 0)))
@@ -1089,7 +1195,7 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  const priceAxis = gridLines.map((line, index) => ({
  key: `price_axis_${index}`,
  topPct: ((line.y - chartTop) / Math.max(1, chartHeight)) * 100,
- label: `$${formatPrice(line.value)}`,
+ label: `Rs ${formatPrice(line.value)}`,
  }));
  const axis = buildAxisLabels(visibleCandles, timeframe, visibleWindow.startIndex);
  const draftForAmounts = normalizeChartTradingDraft(state.chartTradingDraft);
@@ -1200,7 +1306,7 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
   const activeReviewId = String(state.activeChartReviewTabId || '').trim();
   const activeReviewTab = reviewTabs.find(tab => tab.id === activeReviewId) || reviewTabs[0] || null;
   const closeTitle = state.chartReviewOverlayOpen ? 'Close chart review' : 'Close chart and return to Strategy Lab';
-  const tfButton = (tf, label) => `<button class="bsm ds-chart-review-tf ${currentTf === tf ? 'active' : ''}" type="button" data-ds-chart-tf="${escapeHtml(tf)}" data-ds-chart-all-candles="1">${escapeHtml(label)}</button>`;
+  const tfButton = (tf, label) => `<button class="bsm ds-chart-review-tf ${currentTf === tf ? 'active' : ''}" type="button" data-ds-chart-tf="${escapeHtml(tf)}">${escapeHtml(label)}</button>`;
   const navButton = (action, label, title) => `<button class="bsm ds-chart-review-nav" type="button" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}" data-ds-chart-nav="${escapeHtml(action)}" data-ds-chart-nav-target="${SURFACE_REVIEW}">${escapeHtml(label)}</button>`;
   const closeButton = activeReviewTab
   ? `<button class="bsm ds-chart-review-close" type="button" title="${escapeHtml(closeTitle)}" aria-label="${escapeHtml(closeTitle)}" data-ds-review-tab-close="${escapeHtml(activeReviewTab.id)}">Close Review</button>`
@@ -1210,6 +1316,7 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  ${tfButton('15m', '15m')}
  ${tfButton('4h', '4H')}
  ${tfButton('1d', '1D')}
+ ${tfButton('1w', '1W')}
  </div>
  <div class="ds-chart-review-navs" aria-label="Quick View navigation">
  ${navButton('zoom-out', '-', 'Zoom out')}
@@ -1238,6 +1345,7 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  <div class="ds-chart-settings-options">
  <button class="bsm ${chartType === 'bars' ? 'active' : ''}" type="button" data-ds-chart-setting="chartType" data-ds-chart-setting-value="bars">Bars</button>
  <button class="bsm ${chartType === 'candles' ? 'active' : ''}" type="button" data-ds-chart-setting="chartType" data-ds-chart-setting-value="candles">Candles</button>
+ <button class="bsm ${chartType === 'line' ? 'active' : ''}" type="button" data-ds-chart-setting="chartType" data-ds-chart-setting-value="line">Line</button>
  </div>
  </div>
  <div class="ds-chart-settings-section">
@@ -1272,11 +1380,11 @@ function buildChartTabPicker(state = {}, options = {}) {
  if (state.chartReviewOverlayOpen) return reviewClose;
  if (compact) {
  return `<details class="ds-symbol-menu ds-chart-tab-picker ${state.symbol ? 'is-loaded' : ''} is-compact">
- <summary class="bsm ds-symbol-summary">${escapeHtml(state.symbol || 'Coin')}</summary>
+ <summary class="bsm ds-symbol-summary">${escapeHtml(state.symbol || 'Stock')}</summary>
  <div class="ds-symbol-menu-panel">
  <form class="ds-chart-symbol-form" data-ds-chart-symbol-form>
- <label>Coin</label>
- <input class="si" type="search" data-ds-chart-symbol-input list="dsChartSymbolList" placeholder="Search coin or index..." autocomplete="off" value="${escapeHtml(state.symbol || '')}" />
+ <label>Stock</label>
+ <input class="si" type="search" data-ds-chart-symbol-input list="dsChartSymbolList" placeholder="Search stock or index..." autocomplete="off" value="${escapeHtml(state.symbol || '')}" />
  <datalist id="dsChartSymbolList" data-ds-chart-symbol-list></datalist>
  <button class="bsm primary" type="submit">Load</button>
  </form>
@@ -1286,7 +1394,7 @@ function buildChartTabPicker(state = {}, options = {}) {
  }
  return `<div class="ds-chart-tab-picker ${state.symbol ? 'is-loaded' : ''} ${compact ? 'is-compact' : ''}">
  <form class="ds-chart-symbol-form" data-ds-chart-symbol-form>
- <input class="si" type="search" data-ds-chart-symbol-input list="dsChartSymbolList" placeholder="Search coin or index, e.g. FWD100, BTC, ETH..." autocomplete="off" value="${escapeHtml(state.symbol || '')}" />
+ <input class="si" type="search" data-ds-chart-symbol-input list="dsChartSymbolList" placeholder="Search stock or index, e.g. NIFTY, RELIANCE, TCS..." autocomplete="off" value="${escapeHtml(state.symbol || '')}" />
  <datalist id="dsChartSymbolList" data-ds-chart-symbol-list></datalist>
  <button class="bsm primary" type="submit">Search</button>
  </form>
@@ -1304,15 +1412,20 @@ function buildChartTabPicker(state = {}, options = {}) {
  ? ''
  : '<button type="button" class="bsm" data-ds-desk-collapse="context">Show Context</button>';
  return `<div class="ds-chart-command-strip ${state.chartFullscreen ? 'is-fullscreen' : ''}">
+ <div class="ds-chart-command-group ds-chart-command-group-symbol">
  ${symbolPicker}
  ${contextButton}
+ </div>
+ <div class="ds-chart-command-group ds-chart-command-group-view">
  <div class="live-order-chart-timeframes ds-chart-command-presets">
  ${buildPresetMenu(state)}
  </div>
-  <div class="live-order-chart-timeframes ds-fullscreen-control-group">
-  <button class="bsm ds-fullscreen-toggle ${state.chartFullscreen ? 'active' : ''}" type="button" data-ds-chart-fullscreen="1">${state.chartFullscreen ? 'Exit Full Screen' : 'Full Screen'}</button>
-  <button class="bsm ${state.deskLayoutMode !== 'single' && normalizeTimeframe(state.primaryTimeframe || '') === '1d' && normalizeTimeframe(state.executionTimeframe || '') === '15m' ? 'active' : ''}" type="button" title="Compare daily structure with the 15 minute execution chart" data-ds-desk-compare="1d-15m">1D + 15m</button>
-  </div>
+ <div class="live-order-chart-timeframes ds-fullscreen-control-group">
+ <button class="bsm ds-fullscreen-toggle ${state.chartFullscreen ? 'active' : ''}" type="button" data-ds-chart-fullscreen="1">${state.chartFullscreen ? 'Exit Full Screen' : 'Full Screen'}</button>
+ <button class="bsm ${state.deskLayoutMode !== 'single' && normalizeTimeframe(state.primaryTimeframe || '') === '1d' && normalizeTimeframe(state.executionTimeframe || '') === '15m' ? 'active' : ''}" type="button" title="Compare daily structure with the 15 minute execution chart" data-ds-desk-compare="1d-15m">1D + 15m</button>
+ </div>
+ </div>
+ <div class="ds-chart-command-group ds-chart-command-group-tools">
  <div class="live-order-chart-timeframes ds-chart-command-tools">
  ${buildChartSettingsMenu(state, strategy)}
  </div>
@@ -1320,15 +1433,16 @@ function buildChartTabPicker(state = {}, options = {}) {
  <div class="live-order-chart-timeframes ds-chart-command-tools">
  ${buildChartIndicatorMenu(state)}
  </div>
- ${reviewClose}
  <button class="bsm ds-chart-refresh-compact" type="button" data-ds-chart-refresh="1">Refresh</button>
+ ${reviewClose}
+ </div>
  </div>`;
  }
 
  function resolveChartInstrumentDescription(symbol = '') {
  const normalized = String(symbol || '').trim().toUpperCase();
  if (!normalized) return '';
- if (isFwdIndexSymbol(normalized)) return 'FWD-100 Equal-Weight Index';
+ if (isFwdIndexSymbol(normalized)) return fwdIndexSyntheticDisplayName(normalized);
  const cached = Array.isArray(chartMarketSymbolsCache) ? chartMarketSymbolsCache : [];
  const product = cached.find(item => String(item?.symbol || '').trim().toUpperCase() === normalized) || null;
  const description = product?.instrumentDescription || product?.description || product?.name || '';
@@ -1343,7 +1457,7 @@ function buildChartTabPicker(state = {}, options = {}) {
  if (!indexCorrelation || !Number.isFinite(Number(indexCorrelation.primary))) return '';
  const tone = String(indexCorrelation.tone || 'neutral').replace(/[^a-z0-9_-]/gi, '') || 'neutral';
  return `<div class="ds-chart-meta-row ds-index-correlation-row">
- <span class="${escapeHtml(tone)}"><strong>FWD-100 Correlation</strong> ${escapeHtml(formatCorrelationValue(indexCorrelation.primary))}</span>
+ <span class="${escapeHtml(tone)}"><strong>Nifty 50 Correlation</strong> ${escapeHtml(formatCorrelationValue(indexCorrelation.primary))}</span>
  <span>${escapeHtml(indexCorrelation.label || 'Index behavior')}</span>
  <span>30D ${escapeHtml(formatCorrelationValue(indexCorrelation.c30?.value))}</span>
  <span>90D ${escapeHtml(formatCorrelationValue(indexCorrelation.c90?.value))}</span>
@@ -1391,6 +1505,7 @@ function buildChartTabPicker(state = {}, options = {}) {
  </div>
  ${deskStatusBlock}
  ${deskInstrumentBlock}
+ ${buildMarketDecisionPanel(marketIndex || primaryPayload.dataset?.marketIndex || executionPayload.dataset?.marketIndex || null)}
  ${!primaryIndex ? buildIndexCorrelationStrip(primaryPayload.indexCorrelation || executionPayload.indexCorrelation) : ''}
  ${isSingleChart ? '' : buildDecisionBadges(executionPayload.intelligence || primaryPayload.intelligence)}
  ${collapsed.primary || (!isSingleChart && collapsed.execution) ? `<div class="ds-desk-collapsed-bar">
@@ -1422,15 +1537,15 @@ function buildChartTabPicker(state = {}, options = {}) {
  : dataset?.ok
  ? (dataset?.stale ? 'account-inline-note warn' : 'account-inline-note good')
  : 'account-inline-note bad';
- const chartInstrumentDescription = isFwdIndex ? (dataset?.displayName || fwdIndexDisplayName(dataset?.marketIndex || marketIndex || null)) : resolveChartInstrumentDescription(state.symbol || '');
- const chartInstrumentNote = '';
+ const chartInstrumentDescription = isFwdIndex ? (dataset?.displayName || fwdIndexSyntheticDisplayName(dataset?.symbol || state.symbol, dataset?.marketIndex || marketIndex || null)) : resolveChartInstrumentDescription(state.symbol || '');
+ const chartInstrumentNote = buildFwdIndexMetricGuide(dataset);
  const statusText = isReview
  ? ''
  : !state.symbol
  ? 'Choose a symbol to load the chart.'
  : dataset?.ok
  ? (dataset?.syntheticIndex
- ? `${FWD_INDEX_SYMBOL} | ${chartInstrumentDescription} | ${model?.totalCount || dataset?.candles?.length || 0} bars | ${String(dataset?.historyMode || 'daily index history').replace(/_/g, ' ')}${dataset?.marketIndex?.regime ? ` | ${String(dataset.marketIndex.regime).replace(/_/g, ' ')}` : ''}`
+ ? `${dataset?.symbol || FWD_INDEX_SYMBOL} | ${chartInstrumentDescription} | ${model?.totalCount || dataset?.candles?.length || 0} ${dataset?.syntheticMetric ? 'points' : 'bars'} | ${String(dataset?.historyMode || 'daily index history').replace(/_/g, ' ')}${dataset?.marketIndex?.regime ? ` | ${String(dataset.marketIndex.regime).replace(/_/g, ' ')}` : ''}`
  : `${RESOLUTION_LABELS[normalizeTimeframe(state.timeframe)]} | loaded ${model?.totalCount || 0} candles${dataset?.candles?.[0]?.time ? ` from ${formatChartDate(dataset.candles[0].time)}` : ''}${dataset?.candles?.length ? ` to ${formatChartDate(dataset.candles[dataset.candles.length - 1].time)}` : ''} | visible ${model?.visibleCount || 0}${dataset?.stale ? ' | using cached data' : ''}`)
  : (dataset?.error || 'Failed to load chart data.');
  const hasReplay = !!state.replaySeed || !!normalizeReplayMode(state.replayMode);
@@ -1499,16 +1614,17 @@ function buildChartTabPicker(state = {}, options = {}) {
  const studyLegend = !isFwdIndex && !isReview && !isJournalMode && model
  ? `
  <div class="live-order-study-legend">
- ${isIndicatorGroupActive(state, presetMeta, 'ema') ? model.studyLines.filter(line => line.key !== 'vwap').map(line => `<span class="live-order-study-pill ${escapeHtml(line.className)}"><strong>${escapeHtml(line.label)}</strong> $${escapeHtml(formatPrice(line.latestValue))}</span>`).join('') : ''}
- ${isIndicatorGroupActive(state, presetMeta, 'vwap') ? model.studyLines.filter(line => line.key === 'vwap').map(line => `<span class="live-order-study-pill vwap"><strong>VWAP</strong> $${escapeHtml(formatPrice(line.latestValue))}</span>`).join('') : ''}
+ ${isIndicatorGroupActive(state, presetMeta, 'ema') ? model.studyLines.filter(line => line.key !== 'vwap').map(line => `<span class="live-order-study-pill ${escapeHtml(line.className)}"><strong>${escapeHtml(line.label)}</strong> Rs ${escapeHtml(formatPrice(line.latestValue))}</span>`).join('') : ''}
+ ${isIndicatorGroupActive(state, presetMeta, 'vwap') ? model.studyLines.filter(line => line.key === 'vwap').map(line => `<span class="live-order-study-pill vwap"><strong>VWAP</strong> Rs ${escapeHtml(formatPrice(line.latestValue))}</span>`).join('') : ''}
  ${presetMeta.showKeyLevels ? model.keyZones.map(zone => `<span class="live-order-study-pill key"><strong>${escapeHtml(zone.tf)} ${zone.kind === 'resistance' ? 'R' : 'S'}</strong> <em>${escapeHtml(formatStrength(zone, keyLevelSettings.displayStrengthAs))}</em></span>`).join('') : ''}
  </div>`
  : '';
+ const thinCandleCount = !model && dataset?.ok && Array.isArray(dataset?.candles) ? dataset.candles.length : 0;
  const chartMarkup = !model
  ? `<div class="empty compact">
  <div class="ei">--</div>
- <div class="eh">${escapeHtml(dataset?.ok ? 'No visible candles' : 'Chart unavailable')}</div>
- <div class="es">${escapeHtml(dataset?.error || 'Public candles will appear here once a symbol is available.')}</div>
+ <div class="eh">${escapeHtml(thinCandleCount > 0 ? 'Limited candle history' : dataset?.ok ? 'No visible candles' : 'Chart unavailable')}</div>
+ <div class="es">${escapeHtml(thinCandleCount > 0 ? `${thinCandleCount} candle${thinCandleCount === 1 ? '' : 's'} loaded. The chart can still render, but indicators need more history.` : dataset?.error || 'Public candles will appear here once a symbol is available.')}</div>
  </div>`
  : `
  ${studyLegend}
@@ -1520,8 +1636,8 @@ function buildChartTabPicker(state = {}, options = {}) {
  ${presetMeta.showKeyLevels ? buildKeyLevelVisualLayer(model, keyLevelSettings) : ''}
  ${isReview ? '' : buildIntelligenceOverlay(model, intelligence, state)}
  <div class="live-order-chart-tags">
- ${isReview ? '' : model.orderTags.map(tag => `<div class="live-order-chart-tag ${escapeHtml(tag.tone)} ${escapeHtml(tag.source || '')}" data-ds-chart-line-role="${escapeHtml(tag.displayRole || tag.role || tag.kind || tag.tone || '')}" data-ds-chart-line-source="${escapeHtml(tag.source || '')}" data-ds-chart-line-order-id="${escapeHtml(tag.orderId || '')}" data-ds-chart-line-price="${escapeHtml(tag.price || '')}" data-ds-chart-line-top="${Math.max(0, Math.min(100, tag.topPct)).toFixed(2)}" title="${escapeHtml((tag.displayRole === 'stop' || tag.displayRole === 'target') ? (tag.source === 'linked' ? `Drag to modify ${tag.label || tag.displayRole || 'order'}` : `Drag to adjust ${tag.label || 'draft line'}`) : `${tag.label || 'Order line'} is read only on chart`)}" style="top:${Math.max(0, Math.min(100, tag.topPct)).toFixed(2)}%"><strong>${escapeHtml(tag.label)}</strong><em>$${escapeHtml(formatPrice(tag.price))}${tag.amountLabel ? ` | ${escapeHtml(tag.amountLabel)}` : ''}${tag.meta ? ` | ${escapeHtml(tag.meta)}` : ''}</em></div>`).join('')}
- ${!isReview && model.lastPrice ? `<div class="live-order-chart-tag ds-last-price-tag ${escapeHtml(model.lastPrice.tone)}" style="top:${Math.max(0, Math.min(100, model.lastPrice.topPct)).toFixed(2)}%"><strong>Last</strong><em>$${escapeHtml(formatPrice(model.lastPrice.price))}</em></div>` : ''}
+ ${isReview ? '' : model.orderTags.map(tag => `<div class="live-order-chart-tag ${escapeHtml(tag.tone)} ${escapeHtml(tag.source || '')}" data-ds-chart-line-role="${escapeHtml(tag.displayRole || tag.role || tag.kind || tag.tone || '')}" data-ds-chart-line-source="${escapeHtml(tag.source || '')}" data-ds-chart-line-order-id="${escapeHtml(tag.orderId || '')}" data-ds-chart-line-price="${escapeHtml(tag.price || '')}" data-ds-chart-line-top="${Math.max(0, Math.min(100, tag.topPct)).toFixed(2)}" title="${escapeHtml((tag.displayRole === 'stop' || tag.displayRole === 'target') ? (tag.source === 'linked' ? `Drag to modify ${tag.label || tag.displayRole || 'order'}` : `Drag to adjust ${tag.label || 'draft line'}`) : `${tag.label || 'Order line'} is read only on chart`)}" style="top:${Math.max(0, Math.min(100, tag.topPct)).toFixed(2)}%"><strong>${escapeHtml(tag.label)}</strong><em>Rs ${escapeHtml(formatPrice(tag.price))}${tag.amountLabel ? ` | ${escapeHtml(tag.amountLabel)}` : ''}${tag.meta ? ` | ${escapeHtml(tag.meta)}` : ''}</em></div>`).join('')}
+ ${!isReview && model.lastPrice ? `<div class="live-order-chart-tag ds-last-price-tag ${escapeHtml(model.lastPrice.tone)}" style="top:${Math.max(0, Math.min(100, model.lastPrice.topPct)).toFixed(2)}%"><strong>Last</strong><em>Rs ${escapeHtml(formatPrice(model.lastPrice.price))}</em></div>` : ''}
  ${model.replayCursor ? `<div class="live-order-chart-tag replay-cursor" style="top:4%"><strong>Replay Cursor</strong><em>${escapeHtml(new Date(model.replayCursor.time).toLocaleString())}</em></div>` : ''}
  </div>
  </div>`;
@@ -1536,8 +1652,8 @@ function buildChartTabPicker(state = {}, options = {}) {
  <div class="live-order-chart-card ${isDetached ? 'chart-only ds-chart-card-detached' : isReview ? 'chart-only ds-chart-card-tab ds-chart-card-review' : isTab ? 'chart-only ds-chart-card-tab' : 'ds-chart-card-preview'} ${isJournalMode ? 'ds-chart-card-journal' : ''}">
  <div class="live-order-chart-head">
  <div>
- <div class="mo-section">${isJournalMode ? 'TRADE REPLAY CHART' : (isDetached ? 'DETACHED DECISION CHART' : isReview ? `QUICK VIEW | ${state.symbol || 'CHART'}` : isTab ? 'ADVANCED DECISION CHART' : 'LIVE PRICE WORKSPACE')}</div>
- ${isReview ? '' : `<div class="live-order-chart-copy">${escapeHtml(
+ <div class="mo-section">${isJournalMode ? 'TRADE REPLAY CHART' : (isDetached ? 'DETACHED DECISION CHART' : isReview ? `QUICK VIEW | ${state.symbol || 'CHART'}` : isTab ? 'MARKETS CHART' : 'LIVE PRICE WORKSPACE')}</div>
+ ${isReview || isTab ? '' : `<div class="live-order-chart-copy">${escapeHtml(
  isDetached && !isJournalMode
  ? (hasReplay
  ? 'Detached workspace with setup context, key zones, order lines, replay controls, and storage sync.'

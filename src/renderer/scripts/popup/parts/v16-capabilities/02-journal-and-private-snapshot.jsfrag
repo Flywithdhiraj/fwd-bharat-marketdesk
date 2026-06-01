@@ -59,8 +59,8 @@ async function openV16JournalDetail(trade = {}) {
  <div class="live-journal-trade-story">${v16Esc(tradeStory)}</div>
  </div>
  <div class="live-order-preview-card">
- <div class="v16-section-title"><div class="mo-section">System Actions</div>${v16BuildInlineHelpHtml('System actions', 'Use this to separate what FWD TradeDesk Pro actually did from what you may want to change as the trader.')}</div>
- <div class="live-order-preview-copy">This is the clean engine story: what FWD TradeDesk Pro placed, adjusted, or closed, in plain language and IST time.</div>
+ <div class="v16-section-title"><div class="mo-section">System Actions</div>${v16BuildInlineHelpHtml('System actions', 'Use this to separate what FWD Bharat MarketDesk actually did from what you may want to change as the trader.')}</div>
+ <div class="live-order-preview-copy">This is the clean engine story: what FWD Bharat MarketDesk placed, adjusted, or closed, in plain language and IST time.</div>
  <div class="live-journal-system-actions">${v16BuildAutoTradeSystemActionsHtml(trade)}</div>
  <div class="live-notification-list">${v16BuildAutoTradeTimelineHtml(trade)}</div>
  <div class="live-journal-shift-audit">

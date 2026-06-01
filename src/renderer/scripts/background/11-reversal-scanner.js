@@ -2,8 +2,8 @@
 
 (function initReversalScanner(global) {
  const REVERSAL_DEFAULT_SETTINGS = Object.freeze({
-  maxCoins: 160,
-  outputLimit: 180,
+  maxCoins: 500,
+  outputLimit: 500,
   minUsdVolume24h: 100000,
   preferredIntradayCandles: 180,
   minIntradayCandles: 72,
@@ -15,7 +15,6 @@
   vwapStretchPct: 3.5,
   move24hExtremePct: 8,
   volumeClimaxRatio: 2.4,
-  fundingExtremePct: 0.05,
  });
 
  const LIVE_15M = Object.freeze({ closedOnly: false });
@@ -151,12 +150,15 @@
   });
  }
 
- async function reversalLoadSettings() {
-  const stored = await reversalLoadStored(['strategySettings.reversal']);
-  return {
+async function reversalLoadSettings() {
+ const stored = await reversalLoadStored(['strategySettings.reversal']);
+  const settings = {
    ...REVERSAL_DEFAULT_SETTINGS,
    ...(stored['strategySettings.reversal'] || {}),
   };
+  settings.maxCoins = Math.max(REVERSAL_DEFAULT_SETTINGS.maxCoins, Number(settings.maxCoins || 0));
+  settings.outputLimit = Math.max(REVERSAL_DEFAULT_SETTINGS.outputLimit, Number(settings.outputLimit || 0));
+  return settings;
  }
 
  function reversalBuildUniverse(tickerMap = {}, products = [], settings = REVERSAL_DEFAULT_SETTINGS) {
@@ -164,10 +166,10 @@
   return Object.entries(tickerMap || {})
   .filter(([symbol, ticker]) => {
    const sym = String(symbol || '').toUpperCase();
-   if (!sym || productSymbols.size && !productSymbols.has(sym)) return false;
-   if (!sym.endsWith('USD') && !sym.endsWith('USDT')) return false;
-   if (!(Number(ticker?.price || 0) > 0)) return false;
-   return Number(ticker?.usdVol24h || 0) >= Number(settings.minUsdVolume24h || 0);
+ if (!sym || productSymbols.size && !productSymbols.has(sym)) return false;
+ if (!(Number(ticker?.price || 0) > 0)) return false;
+   const turnover = Number(ticker?.inrTurnover24h || ticker?.turnover24h || ticker?.usdVol24h || 0);
+   return !(turnover > 0) || turnover >= Number(settings.minUsdVolume24h || 0);
   })
   .map(([symbol, ticker]) => ({ symbol: String(symbol || '').toUpperCase(), ticker }))
   .sort((a, b) => Number(b.ticker?.usdVol24h || 0) - Number(a.ticker?.usdVol24h || 0))
@@ -203,7 +205,6 @@
    ['VWAP stretch', Number(parts.vwap || 0)],
    ['Z-score', Number(parts.zScore || 0)],
    ['Volume climax', Number(parts.volume || 0)],
-   ['Funding crowding', Number(parts.funding || 0)],
    ['Reclaim trigger', Number(parts.reclaim || 0)],
    ['Liquidity penalty', Number(parts.liquidityPenalty || 0)],
    ['Trend penalty', Number(parts.trendPenalty || 0)],
@@ -258,7 +259,6 @@
   const move4h = reversalPctChange(price, prior4h);
   const dailyMove = Number(ticker?.change24h || 0) || (dailyCloses.length > 1 ? reversalPctChange(price, dailyCloses[dailyCloses.length - 2]) : 0);
   const vwapDistancePct = vwap > 0 && price > 0 ? ((price - vwap) / vwap) * 100 : 0;
-  const fundingRate = Number(ticker?.fundingRate || 0);
   const trendUp = ema20 > ema50 && ema50 > ema100;
   const trendDown = ema20 < ema50 && ema50 < ema100;
   const closeBackInsideHigh = levels.high > 0 && price < levels.high * 0.995 && Number(latest.high || 0) > levels.high * 1.004;
@@ -266,11 +266,11 @@
   const stretchedUp = price > 0 && (Number(rsi14 || 0) >= Number(settings.rsiExtremeHigh || 72) || zScore >= Number(settings.zScoreExtreme || 2.1) || vwapDistancePct >= Number(settings.vwapStretchPct || 3.5) || dailyMove >= Number(settings.move24hExtremePct || 8));
   const stretchedDown = price > 0 && (Number(rsi14 || 0) <= Number(settings.rsiExtremeLow || 28) || zScore <= -Number(settings.zScoreExtreme || 2.1) || vwapDistancePct <= -Number(settings.vwapStretchPct || 3.5) || dailyMove <= -Number(settings.move24hExtremePct || 8));
   const volumeClimax = volumeRatio >= Number(settings.volumeClimaxRatio || 2.4);
-  const fundingCrowdedLong = fundingRate >= Number(settings.fundingExtremePct || 0.05);
-  const fundingCrowdedShort = fundingRate <= -Number(settings.fundingExtremePct || 0.05);
-  const lowLiquidity = Number(ticker?.usdVol24h || latestQuoteVolume || 0) < Number(settings.minUsdVolume24h || 0);
-  const canFadeLong = stretchedDown && (closeBackInsideLow || volumeClimax || fundingCrowdedShort);
-  const canFadeShort = stretchedUp && (closeBackInsideHigh || volumeClimax || fundingCrowdedLong);
+  const tickerTurnover = Number(ticker?.inrTurnover24h || ticker?.turnover24h || ticker?.usdVol24h || 0);
+  const liquidityValue = tickerTurnover > 0 ? tickerTurnover : latestQuoteVolume;
+  const lowLiquidity = liquidityValue > 0 && liquidityValue < Number(settings.minUsdVolume24h || 0);
+  const canFadeLong = stretchedDown && (closeBackInsideLow || volumeClimax);
+  const canFadeShort = stretchedUp && (closeBackInsideHigh || volumeClimax);
   let eventType = 'review';
   let signal = 'IGNORE';
   let direction = 'watch';
@@ -313,7 +313,6 @@
   if (Math.abs(vwapDistancePct) >= Number(settings.vwapStretchPct || 3.5)) scoreParts.vwap = 14;
   if (Math.abs(zScore) >= Number(settings.zScoreExtreme || 2.1)) scoreParts.zScore = 13;
   if (volumeClimax) scoreParts.volume = 14;
-  if (fundingCrowdedLong || fundingCrowdedShort) scoreParts.funding = 8;
   if (closeBackInsideHigh || closeBackInsideLow) scoreParts.reclaim = 12;
   if (lowLiquidity) scoreParts.liquidityPenalty = -18;
   if ((signal === 'SELL' && trendUp && !closeBackInsideHigh) || (signal === 'BUY' && trendDown && !closeBackInsideLow)) scoreParts.trendPenalty = -8;
@@ -340,7 +339,6 @@
   const riskFlags = [
    lowLiquidity ? 'Thin volume' : '',
    Math.abs(vwapDistancePct) >= 8 ? 'Very far from VWAP' : '',
-   Math.abs(fundingRate) >= Number(settings.fundingExtremePct || 0.05) ? 'Crowded funding' : '',
    volumeClimax ? 'Climax volume' : '',
   ].filter(Boolean);
 
@@ -373,8 +371,6 @@
     closeBackInsideHigh,
     closeBackInsideLow,
     volumeClimax,
-    fundingCrowdedLong,
-    fundingCrowdedShort,
     lowLiquidity,
     trendUp,
     trendDown,
@@ -398,7 +394,6 @@
     move4h: reversalRound(move4h, 2),
     volumeRatio: reversalRound(volumeRatio, 2),
     latestQuoteVolume: reversalRound(latestQuoteVolume, 0),
-    fundingRate: reversalRound(fundingRate, 4),
     rangeHigh: reversalRound(levels.high, 8),
     rangeLow: reversalRound(levels.low, 8),
     rangeMid: reversalRound(levels.mid, 8),

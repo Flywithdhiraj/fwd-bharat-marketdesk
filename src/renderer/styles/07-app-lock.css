@@ -58,7 +58,7 @@ body.app-is-locked {
  top: 0;
  z-index: 4;
  display: grid;
- grid-template-columns: minmax(220px, 1fr) auto minmax(240px, 340px) auto auto;
+ grid-template-columns: minmax(220px, 1fr) auto;
  gap: 18px;
  align-items: center;
  min-height: 74px;

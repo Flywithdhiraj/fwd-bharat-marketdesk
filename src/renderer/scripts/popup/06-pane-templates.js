@@ -11,12 +11,18 @@ const PANE_TEMPLATES = {
  </div>
  </div>
  <div class="command-metric-grid">
- <div class="command-metric-card"><span>Today Open Risk</span><strong>--</strong><small>Waiting for workspace data</small></div>
- <div class="command-metric-card"><span>Active Positions</span><strong>--</strong><small>Waiting for account state</small></div>
- <div class="command-metric-card"><span>Pending Orders</span><strong>--</strong><small>Waiting for order state</small></div>
- <div class="command-metric-card"><span>Kill Switch</span><strong>--</strong><small>Waiting for safety state</small></div>
- <div class="command-metric-card"><span>API State</span><strong>--</strong><small>Waiting for profile state</small></div>
+ <div class="command-metric-card"><span>Manual Risk</span><strong>--</strong><small>Waiting for workspace data</small></div>
+ <div class="command-metric-card"><span>Watchlist Ideas</span><strong>--</strong><small>Waiting for scanner state</small></div>
+ <div class="command-metric-card"><span>Manual Tickets</span><strong>--</strong><small>Waiting for local plans</small></div>
+ <div class="command-metric-card"><span>Data Link</span><strong>--</strong><small>Waiting for connection state</small></div>
+ <div class="command-metric-card"><span>API State</span><strong>--</strong><small>Waiting for connection state</small></div>
  <div class="command-metric-card"><span>Scan Health</span><strong>--</strong><small>Waiting for scan state</small></div>
+ </div>
+ <div class="india-module-grid" aria-label="India market modules">
+ <div class="india-module-card"><span>Options Hub</span><strong>OI, PCR, IV, max pain</strong><small>Option-chain review for NIFTY, BANKNIFTY and FINNIFTY. Order placement stays manual.</small></div>
+ <div class="india-module-card"><span>Funda Scanner</span><strong>Quality and value queue</strong><small>Planned NSE/BSE ranking layer for ROCE, ROE, D/E, PE and improving fundamentals once a fundamentals source is connected.</small></div>
+ <div class="india-module-card"><span>Breakout Lab</span><strong>VCP, Darvas, volume</strong><small>Technical scanner family for consolidation, trend continuation, volume expansion and risk-qualified chart handoff.</small></div>
+ <div class="india-module-card"><span>Data Sources</span><strong>Primary feed, fallback ready</strong><small>Local encrypted credentials, instrument cache, quote batching and future fallback hooks.</small></div>
  </div>
  </div>
 `,
@@ -40,7 +46,6 @@ const PANE_TEMPLATES = {
  <option value="tq">Trade quality first</option>
  <option value="change">Largest 24h move</option>
  <option value="volume">Highest volume</option>
- <option value="fr">Funding Rate</option>
  <option value="alpha">A-Z</option>
  </select>
  <select class="fi" id="fSetup">
@@ -54,39 +59,36 @@ const PANE_TEMPLATES = {
  </select>
  <select class="fi" id="fSector">
  <option value="">All Sectors</option>
- <option value="Layer 1">Layer 1</option>
- <option value="Layer 2">Layer 2</option>
- <option value="DeFi">DeFi</option>
- <option value="AI / Data">AI / Data</option>
- <option value="Meme">Meme</option>
- <option value="Gaming">Gaming</option>
- <option value="Infra">Infra</option>
- <option value="Exchange">Exchange</option>
- <option value="Privacy">Privacy</option>
- <option value="RWA">RWA</option>
- <option value="Commodity">Commodity</option>
- <option value="Stock">Stock</option>
- <option value="New">New</option>
+ <option value="Index">Index</option>
+ <option value="Banking">Banking</option>
+ <option value="Financial Services">Financial Services</option>
+ <option value="IT">IT</option>
+ <option value="Auto">Auto</option>
+ <option value="Pharma">Pharma</option>
+ <option value="FMCG">FMCG</option>
+ <option value="Energy">Energy</option>
+ <option value="Metals">Metals</option>
+ <option value="Realty">Realty</option>
+ <option value="Capital Goods">Capital Goods</option>
  <option value="Other">Other</option>
  </select>
+ </div>
+ <div class="scanner-universe-row" id="scannerUniverseButtons" aria-label="Scanner universes">
+ <button class="scanner-universe-btn active" type="button" data-scan-universe="fno_stocks"><span>F&amp;O Scanner</span><small>Fast liquid set</small></button>
+ <button class="scanner-universe-btn" type="button" data-scan-universe="nifty500"><span>Nifty 500 Scanner</span><small>Core market</small></button>
+ <button class="scanner-universe-btn" type="button" data-scan-universe="midcap150"><span>Midcap 150</span><small>Growth basket</small></button>
+ <button class="scanner-universe-btn" type="button" data-scan-universe="smallcap250"><span>Smallcap 250</span><small>Higher breadth</small></button>
+ <button class="scanner-universe-btn" type="button" data-scan-universe="all_nse"><span>All NSE</span><small>Slow deep scan</small></button>
  </div>
  <div class="preset-row" id="scannerPresets">
  <button class="preset-btn active" data-preset="">All Flow</button>
  <button class="preset-btn" data-preset="trend">Trend</button>
  <button class="preset-btn" data-preset="reversal">Reversal</button>
- <button class="preset-btn" data-preset="crowding">Crowding</button>
+ <button class="preset-btn" data-preset="volume">Volume</button>
  <button class="preset-btn" data-preset="tracked">Tracked</button>
  <button class="preset-btn scanner-view-toggle" id="btnScannerView" data-view="cards" title="Scanner view: Cards" style="margin-left:auto">Cards</button>
  </div>
- <div class="preset-row" id="scannerSessions">
- <button class="preset-btn active" data-session="">All Sessions</button>
- <button class="preset-btn" data-session="asia">Asia</button>
- <button class="preset-btn" data-session="london">London</button>
- <button class="preset-btn" data-session="newyork">New York</button>
- <button class="preset-btn" data-session="closed">Late</button>
- </div>
  <div class="scanner-insights-shell" id="scannerInsightsRail"></div>
- <div class="native-straddle-scanner-rail" id="nativeStraddleScannerRail"></div>
  <div class="market-feed-strip" id="scannerFeedStatus"></div>
  <div class="trade-tape" id="tradeTape"></div>
  <div class="scanner-spotlight" id="scannerSpotlight"></div>
@@ -107,9 +109,9 @@ const PANE_TEMPLATES = {
  <div class="empty">
  <div class="ei">--</div>
  <div class="eh">No signals yet</div>
- <div class="es">Click <b>Scan Now</b> to scan all perpetual coins<br/>
+ <div class="es">Click <b>Scan Now</b> to scan liquid NSE/BSE symbols<br/>
  EMA 9/30/100 + OBV + RSI + MACD + VWAP + Volume Profile<br/>
- Multi-timeframe | AI-enhanced scoring | Tiered alerts
+ NSE/BSE equities, indices, and F&amp;O | Market data only | Manual execution
  </div>
  </div>
  </div>
@@ -161,15 +163,15 @@ const PANE_TEMPLATES = {
  'watchlist': ` <div class="phdr">
  <div>
  <span>My Watchlist</span>
- <small class="phdr-sub">Pinned coins always appear at top of scanner</small>
+ <small class="phdr-sub">Pinned symbols always appear at top of scanner</small>
  </div>
  <div class="phdr-btns">
  <button class="bsm" id="btnNewCustomAlert" style="background:var(--accent-2,#19c7b2);color:#000;font-weight:700">+ Alert</button>
- <button class="bsm" id="btnRefreshWatchlist">Refresh Coin</button>
+ <button class="bsm" id="btnRefreshWatchlist">Refresh symbol</button>
  <button class="bsm red" id="btnClearWatchlist">Clear All</button>
  </div>
  </div>
- <div class="wl-tip">Star any coin in the Scanner tab to pin it here.</div>
+ <div class="wl-tip">Star any symbol in the Scanner tab to pin it here.</div>
  <div class="custom-alerts-section" id="customAlertsSection" style="display:none">
  <div style="padding:8px 14px 4px;font-size:9px;font-weight:700;color:var(--accent-2,#19c7b2);text-transform:uppercase;letter-spacing:.08em">Custom Price Alerts</div>
  <div class="custom-alerts-list" id="customAlertsList"></div>
@@ -177,7 +179,7 @@ const PANE_TEMPLATES = {
  <div class="clist" id="watchlistCards">
  <div class="empty">
  <div class="ei">+</div>
- <div class="eh">No coins pinned yet</div>
+ <div class="eh">No symbols pinned yet</div>
  <div class="es">Go to Scanner - click + on any card to add it here</div>
  </div>
  </div>
@@ -203,7 +205,7 @@ const PANE_TEMPLATES = {
  <div class="reports-health-item is-waiting"><span>Closed</span><strong>0</strong><small>Waiting for trades</small></div>
  <div class="reports-health-item is-waiting"><span>Export</span><strong>Ready</strong><small>CSV/report actions</small></div>
  </div>
- <div class="live-account-status" id="liveAnalyticsStatus">Load a Trade Enabled or Read Only profile with session secrets to fetch private Delta account analytics.</div>
+ <div class="live-account-status" id="liveAnalyticsStatus">Connect market data to load read-only analytics.</div>
  <div class="live-analytics-toolbar" id="liveAnalyticsToolbar">
  <div class="live-analytics-filter-group">
  <span class="live-analytics-filter-label">Range</span>
@@ -239,7 +241,7 @@ const PANE_TEMPLATES = {
  <div class="live-analytics-kpi-grid" id="liveAnalyticsKpis">
  <div class="live-analytics-kpi-card">
  <span>REALIZED P&amp;L</span>
- <strong>$0.00</strong>
+ <strong>Rs 0.00</strong>
  <small>Closed live trades in the selected range.</small>
  </div>
  </div>
@@ -309,7 +311,7 @@ const PANE_TEMPLATES = {
  'tradecheck': ` <div class="phdr positions-pane-header analytics-pane-header trade-check-pane-header">
  <div>
  <span>Trade Check &amp; Paper Lab</span>
- <small class="phdr-sub">Search a coin, compare scanner agreement, and review paper-trade learning without loading live reports.</small>
+ <small class="phdr-sub">Search a symbol, compare scanner agreement, and review paper-trade learning without loading live reports.</small>
  </div>
  <div class="phdr-btns">
  <button class="bsm" id="btnTradeCheckRefresh">Refresh Check</button>
@@ -320,13 +322,13 @@ const PANE_TEMPLATES = {
  <section class="live-analytics-trade-check trade-check-standalone" id="liveAnalyticsTradeCheck">
  <div class="live-card-head">
  <div>
- <div class="live-card-kicker">COIN TRADE CHECK</div>
+ <div class="live-card-kicker">symbol TRADE CHECK</div>
  <div class="live-card-title">Manual Trade Read</div>
  </div>
- <div class="live-card-meta" id="liveAnalyticsTradeCheckMeta">Search a coin before taking a manual trade.</div>
+ <div class="live-card-meta" id="liveAnalyticsTradeCheckMeta">Search a symbol before taking a manual trade.</div>
  </div>
  <div class="live-analytics-trade-form">
- <label class="account-field"><span>Coin</span><input class="si" type="search" id="liveAnalyticsTradeSymbol" placeholder="BTCUSD or BTC" autocomplete="off"/></label>
+ <label class="account-field"><span>symbol</span><input class="si" type="search" id="liveAnalyticsTradeSymbol" placeholder="RELIANCE or NIFTY" autocomplete="off"/></label>
  <label class="account-field"><span>Side</span><select class="si" id="liveAnalyticsTradeSide"><option value="long">Long / Buy</option><option value="short">Short / Sell</option></select></label>
  <label class="account-field"><span>Entry</span><input class="si" type="number" step="any" id="liveAnalyticsTradeEntry" placeholder="optional"/></label>
  <label class="account-field"><span>Stop</span><input class="si" type="number" step="any" id="liveAnalyticsTradeStop" placeholder="optional"/></label>
@@ -337,7 +339,7 @@ const PANE_TEMPLATES = {
  </div>
  </div>
  <div class="live-analytics-trade-result" id="liveAnalyticsTradeCheckResult">
- <div class="account-inline-note">Enter a coin to compare scanner signals, paper history, and closed journal results.</div>
+ <div class="account-inline-note">Enter a symbol to compare scanner signals, paper history, and closed journal results.</div>
  </div>
  </section>
  <div id="liveAnalyticsReliabilityPanel"></div>
@@ -358,7 +360,7 @@ const PANE_TEMPLATES = {
  </div>
  </div>
  <div class="live-funds-shell">
- <div class="live-account-status" id="liveFundsStatus">Load a Trade Enabled or Read Only profile with session secrets to fetch private Delta fund data.</div>
+ <div class="live-account-status" id="liveFundsStatus">Connect market data to load fund data.</div>
  <div class="trading-ui-toolbar">
  <div class="trading-toolbar-copy"><strong>Wallet command view</strong><span>Primary balance, margin capacity, and cash movement only.</span></div>
  <div class="trading-toolbar-actions">
@@ -374,10 +376,10 @@ const PANE_TEMPLATES = {
  </div>
  </div>
  <div class="funds-hero-grid" id="liveFundsHero">
- <div class="funds-hero-card"><span>Total Wallet</span><strong>$0.00</strong><small>Waiting for Delta balance.</small></div>
- <div class="funds-hero-card"><span>Available</span><strong>$0.00</strong><small>Withdrawable / free margin estimate.</small></div>
- <div class="funds-hero-card"><span>Margin Used</span><strong>$0.00</strong><small>Open position margin.</small></div>
- <div class="funds-hero-card"><span>Net Today</span><strong>$0.00</strong><small>Realized, fees, funding, and UPNL.</small></div>
+ <div class="funds-hero-card"><span>Total Wallet</span><strong>Rs 0.00</strong><small>Waiting for balance.</small></div>
+ <div class="funds-hero-card"><span>Available</span><strong>Rs 0.00</strong><small>Withdrawable / free margin estimate.</small></div>
+ <div class="funds-hero-card"><span>Margin Used</span><strong>Rs 0.00</strong><small>Open position margin.</small></div>
+ <div class="funds-hero-card"><span>Net Today</span><strong>Rs 0.00</strong><small>Realized, fees, funding, and UPNL.</small></div>
  </div>
  <div class="funds-layout">
  <article class="funds-card">
@@ -411,7 +413,7 @@ const PANE_TEMPLATES = {
  <div class="live-card-meta" id="liveFundsLedgerMeta">Waiting for wallet transactions.</div>
  </div>
  <div class="funds-ledger-list" id="liveFundsLedgerList">
- <div class="empty"><div class="ei">--</div><div class="eh">No fund ledger loaded</div><div class="es">Refresh after adding Delta API credentials.</div></div>
+ <div class="empty"><div class="ei">--</div><div class="eh">No fund ledger loaded</div><div class="es">Refresh after adding market-data credentials.</div></div>
  </div>
  </article>
  </div>
@@ -431,7 +433,7 @@ const PANE_TEMPLATES = {
  </div>
  </div>
  <div class="live-positions-shell">
- <div class="live-account-status" id="liveAccountStatus">Load a Trade Enabled or Read Only profile with session secrets to fetch private Delta account data.</div>
+ <div class="live-account-status" id="liveAccountStatus">Connect market data to load read-only positions.</div>
  <div class="trading-ui-toolbar">
  <div class="trading-toolbar-copy"><strong>Position command view</strong><span>Risk first, exposure second, journal after action.</span></div>
  <div class="trading-toolbar-actions">
@@ -445,7 +447,7 @@ const PANE_TEMPLATES = {
  <div class="live-session-grid" id="liveSessionGrid">
  <div class="live-session-card">
  <span>TODAY P&amp;L</span>
- <strong>$0.00</strong>
+ <strong>Rs 0.00</strong>
  <small>Realized + unrealized will appear here.</small>
  </div>
  <button class="live-session-card" data-live-journal-filter="all">
@@ -460,7 +462,7 @@ const PANE_TEMPLATES = {
  </div>
  <div class="live-session-card">
  <span>EXPECTANCY</span>
- <strong>$0.00</strong>
+ <strong>Rs 0.00</strong>
  <small>Average per closed trade today.</small>
  </div>
  </div>
@@ -510,7 +512,7 @@ const PANE_TEMPLATES = {
  <button class="bsm pos-filter" data-positions-filter="short">Short</button>
  <button class="bsm pos-filter" data-positions-filter="straddles">Straddles</button>
  </div>
- <input class="si pos-search-input" id="positionsSearchInput" type="text" placeholder="Search coin..."/>
+ <input class="si pos-search-input" id="positionsSearchInput" type="text" placeholder="Search symbol..."/>
  <select class="pos-sort-select" id="positionsSortSelect">
  <option value="default">Sort: Default</option>
  <option value="upnl_desc">UPNL &#9660;</option>
@@ -525,7 +527,7 @@ const PANE_TEMPLATES = {
  <div class="empty">
  <div class="ei">--</div>
  <div class="eh">No open positions loaded</div>
- <div class="es">Add your Delta API key and secret in Settings, then refresh this desk.</div>
+ <div class="es">Add your market-data credentials in Settings, then refresh this desk.</div>
  </div>
  </div>
  </article>
@@ -551,7 +553,7 @@ const PANE_TEMPLATES = {
  <div class="empty">
  <div class="ei">--</div>
  <div class="eh">No journal trades yet</div>
- <div class="es">Closed positions detected from Delta history will appear here.</div>
+ <div class="es">Closed positions detected from history will appear here.</div>
  </div>
  </div>
  </article>
@@ -562,7 +564,7 @@ const PANE_TEMPLATES = {
 
  'orders': ` <div class="phdr positions-pane-header orders-pane-header">
  <div class="research-pane-copy">
- <span>Delta Orders Desk</span>
+ <span>Manual Trade Plan Desk</span>
  <small class="phdr-sub">Working orders, protection controls, and live exchange order activity.</small>
  </div>
  <div class="phdr-btns research-pane-actions">
@@ -573,7 +575,7 @@ const PANE_TEMPLATES = {
  </div>
  </div>
  <div class="live-orders-shell">
- <div class="live-account-status" id="liveOrdersStatus">Load a Trade Enabled or Read Only profile with session secrets to fetch private Delta account data.</div>
+ <div class="live-account-status" id="liveOrdersStatus">Connect market data to load read-only order data.</div>
  <div class="trading-ui-toolbar">
  <div class="trading-toolbar-copy"><strong>Order management desk</strong><span>Pending entries, stops, targets, and attention items grouped by purpose.</span></div>
  <div class="trading-toolbar-actions">
@@ -608,7 +610,7 @@ const PANE_TEMPLATES = {
  </div>
  </div>
  <div class="live-open-orders-rows" id="liveOpenOrdersRows">
- <div class="empty"><div class="ei">--</div><div class="eh">No open orders loaded</div><div class="es">Refresh live data to inspect, edit, or cancel live Delta orders.</div></div>
+ <div class="empty"><div class="ei">--</div><div class="eh">No open orders loaded</div><div class="es">Refresh live data to inspect current orders.</div></div>
  </div>
  </article>
 
@@ -631,10 +633,10 @@ const PANE_TEMPLATES = {
  <div class="live-card-kicker">EXCHANGE FEED</div>
  <div class="live-card-title">Trade History</div>
  </div>
- <div class="live-card-meta" id="liveTradeHistoryMeta">Waiting for Delta order history.</div>
+ <div class="live-card-meta" id="liveTradeHistoryMeta">Waiting for order history.</div>
  </div>
  <div class="live-trade-history-rows" id="liveTradeHistoryRows">
- <div class="empty"><div class="ei">--</div><div class="eh">No trade activity loaded</div><div class="es">Refresh live data to load fills and order history from Delta Exchange.</div></div>
+ <div class="empty"><div class="ei">--</div><div class="eh">No trade activity loaded</div><div class="es">Refresh live data to load fills and order history.</div></div>
  </div>
  </article>
  </section>
@@ -649,7 +651,7 @@ const PANE_TEMPLATES = {
  <div class="live-card-meta" id="livePositionProtectionMeta">Waiting for live protection controls.</div>
  </div>
  <div class="live-positions-rows live-position-control-rows" id="livePositionProtectionRows">
- <div class="empty"><div class="ei">--</div><div class="eh">No protection controls loaded</div><div class="es">Refresh live data to manage stops, targets, and linked Delta orders.</div></div>
+ <div class="empty"><div class="ei">--</div><div class="eh">No protection controls loaded</div><div class="es">Refresh live data to manage stops, targets, and linked orders.</div></div>
  </div>
  </article>
  </section>
@@ -710,7 +712,7 @@ const PANE_TEMPLATES = {
  <small class="phdr-sub">Red (+FR) = longs crowded. Green (-FR) = shorts crowded. Annual view is a stress run-rate, not fixed interest.</small>
  </div>
  <div class="funding-toolbar">
- <input class="si funding-search-input" type="search" id="fundingSearchInput" placeholder="Search funding..." aria-label="Search funding coins"/>
+ <input class="si funding-search-input" type="search" id="fundingSearchInput" placeholder="Search funding..." aria-label="Search funding symbols"/>
  <button class="bsm funding-annual-toggle" type="button" id="fundingAnnualToggle" aria-pressed="false">8h Rate</button>
  </div>
  </div>
@@ -787,7 +789,7 @@ const PANE_TEMPLATES = {
  </div>
  </div>
  <div class="arb-guide">
- <b>Guide:</b> +FR = crowded longs, -FR = crowded shorts, filtered by minimum USD volume.
+ <b>Guide:</b> +FR = crowded longs, -FR = crowded shorts, filtered by minimum INR turnover.
  </div>
  </div>
 `,
@@ -841,11 +843,11 @@ const PANE_TEMPLATES = {
  </div>
  </div>
  <div class="risk-auto-strip" id="riskAutomationStrip">
- <div class="risk-auto-status is-waiting"><span>Profile</span><strong>Loading</strong><small>Waiting for account profile</small></div>
+ <div class="risk-auto-status is-waiting"><span>Workspace</span><strong>Loading</strong><small>Waiting for local settings</small></div>
  <div class="risk-auto-status is-waiting"><span>API</span><strong>Loading</strong><small>Waiting for credential state</small></div>
  <div class="risk-auto-status is-waiting"><span>Risk</span><strong>Loading</strong><small>Waiting for VAR state</small></div>
  <div class="risk-auto-status is-waiting"><span>Automation</span><strong>Loading</strong><small>Waiting for rules</small></div>
- <div class="risk-auto-status is-waiting"><span>Kill Switch</span><strong>Loading</strong><small>Waiting for guard state</small></div>
+ <div class="risk-auto-status is-waiting"><span>Manual Only</span><strong>On</strong><small>Orders are disabled</small></div>
  </div>
  <div class="risk-auto-tabs" role="tablist" aria-label="Risk and automation cockpit modes">
  <button class="risk-auto-tab active" type="button" data-risk-auto-tab="cockpit" role="tab" aria-selected="true">Risk Cockpit</button>
@@ -918,7 +920,7 @@ const PANE_TEMPLATES = {
  <div class="rc-mr-sub" id="rcContractsSub">contracts</div>
  </div>
  <div class="rc-grid">
- <div class="rc-cell"><div class="rc-cl">$ at Risk</div><div class="rc-cv red" id="rcDollarRisk">-</div></div>
+ <div class="rc-cell"><div class="rc-cl">INR at Risk</div><div class="rc-cv red" id="rcDollarRisk">-</div></div>
  <div class="rc-cell"><div class="rc-cl">Position Value</div><div class="rc-cv" id="rcPosValue">-</div></div>
  <div class="rc-cell"><div class="rc-cl">Required Margin</div><div class="rc-cv" id="rcMargin">-</div></div>
  <div class="rc-cell"><div class="rc-cl">SL Distance</div><div class="rc-cv" id="rcSlDist">-</div></div>
@@ -1041,77 +1043,34 @@ const PANE_TEMPLATES = {
  </label>
  <div class="settings-rail-group">
  <div class="settings-rail-group-title">Basic scanner settings</div>
- <button class="settings-rail-item active" type="button" data-settings-target="display"><span>Display</span><small>Currency and symbols</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="scanner-rules"><span>Scanner</span><small>Signals, filters, FWD-100</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="strategy-profiles"><span>Profiles</span><small>Risk and scan presets</small></button>
+ <button class="settings-rail-item active" type="button" data-settings-target="scanner-rules"><span>Scanner</span><small>Signals, filters, Nifty benchmark</small></button>
+ <button class="settings-rail-item" type="button" data-settings-target="strategy-profiles"><span>Profiles</span><small>Scanner and chart presets</small></button>
  <button class="settings-rail-item" type="button" data-settings-target="charts"><span>Charts</span><small>Default view and levels</small></button>
  </div>
  <div class="settings-rail-group">
- <div class="settings-rail-group-title">Live trading profile</div>
- <button class="settings-rail-item" type="button" data-settings-target="profile"><span>Profile</span><small>User, venue, and mode</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="paper-mode"><span>Paper</span><small>Forward test ledger</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="api-keys"><span>API Keys</span><small>Credentials and kill switch</small></button>
+ <div class="settings-rail-group-title">Market data</div>
+ <button class="settings-rail-item" type="button" data-settings-target="api-keys"><span>API Keys</span><small>Connection credentials</small></button>
  <button class="settings-rail-item" type="button" data-settings-target="connection"><span>Connection</span><small>Market-data readiness</small></button>
  <button class="settings-rail-item" type="button" data-settings-target="security"><span>Security</span><small>Password and Authenticator</small></button>
  </div>
  <div class="settings-rail-group">
- <div class="settings-rail-group-title">Risk rules</div>
- <button class="settings-rail-item" type="button" data-settings-target="risk"><span>Risk</span><small>Balance and day loss</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="guards"><span>Guards</span><small>Order size and blocks</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="var"><span>VaR</span><small>Slots and drawdown cycle</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="risk-templates"><span>Templates</span><small>ATR stop and target R:R</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="futures-auto"><span>Futures</span><small>Live execution gates</small></button>
- </div>
- <div class="settings-rail-group">
- <div class="settings-rail-group-title">Integrations</div>
- <button class="settings-rail-item" type="button" data-settings-tab="webhooks"><span>Webhooks</span><small>External alerts and POSTs</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="backup"><span>Backup</span><small>Alerts and archive</small></button>
- </div>
- <div class="settings-rail-group">
- <div class="settings-rail-group-title">Developer/debug</div>
+ <div class="settings-rail-group-title">App support</div>
  <button class="settings-rail-item" type="button" data-settings-target="recovery"><span>Recovery</span><small>Fix blocked runtime state</small></button>
  <button class="settings-rail-item" type="button" data-settings-target="api"><span>API Health</span><small>Quota and candle cache</small></button>
- <button class="settings-rail-item" type="button" data-settings-tab="debug"><span>Debug</span><small>Raw scan diagnostics</small></button>
  </div>
- <details class="settings-rail-more">
- <summary>Advanced automation</summary>
- <button class="settings-rail-item" type="button" data-settings-target="dca"><span>DCA Bot</span><small>Live order schedule</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="options-auto"><span>Options Auto-Trade</span><small>Theta desk rules</small></button>
- <button class="settings-rail-item" type="button" data-settings-target="straddle-auto"><span>Short Straddle</span><small>Expiry and re-entry</small></button>
- </details>
  </nav>
  </div>
  <div class="account-profile-editor">
  <input type="hidden" id="accountProfileId"/>
  <input type="hidden" id="accountProfileCapability" value="Public"/>
- <section class="settings-health-card settings-panel-card" data-settings-panel="display">
- <div class="settings-health-head">
- <strong>Display &amp; Currency</strong>
- <span>Choose how report amounts are shown across the desk.</span>
- </div>
- <div class="account-editor-grid">
- <label class="account-field">
- <span>Report Currency</span>
- <select class="si" id="sReportDisplayCurrency">
- <option value="USD">US Dollar ($)</option>
- <option value="INR">Rupees (Rs)</option>
- </select>
- </label>
- <label class="account-field">
- <span>USD to INR Rate</span>
- <input class="si" id="sReportDisplayUsdInrRate" type="number" min="1" max="1000" step="0.0001" value="85"/>
- <small class="account-inline-note">Used only for display conversion in reports and desk summaries.</small>
- </label>
- </div>
- </section>
  <section class="settings-health-card settings-panel-card" data-settings-panel="paper-mode">
  <div class="settings-health-head">
- <strong>Paper Trading</strong>
- <span>Run the scanner and shadow ledger while live futures auto-trade stays off.</span>
+ <strong>Paper / Manual Tracking</strong>
+ <span>Run the scanner and shadow ledger while all trading stays manual.</span>
  </div>
  <div class="settings-health-grid" id="paperModeStatusGrid">
  <div class="settings-health-item"><span>Paper Tracking</span><strong>Loading</strong></div>
- <div class="settings-health-item"><span>Live Auto-Trade</span><strong>Loading</strong></div>
+ <div class="settings-health-item"><span>Orders</span><strong>Disabled</strong></div>
  <div class="settings-health-item"><span>Paper Open</span><strong>-</strong></div>
  <div class="settings-health-item"><span>Paper Closed</span><strong>-</strong></div>
  <div class="settings-health-item"><span>Last Update</span><strong>-</strong></div>
@@ -1128,13 +1087,13 @@ const PANE_TEMPLATES = {
  <section class="settings-health-card settings-panel-card" data-settings-panel="connection">
  <div class="settings-health-head">
  <strong>Connection Check</strong>
- <span>Public Delta market-data checks for scanner readiness. Trading API keys are not required.</span>
+ <span>NSE/BSE market-data checks for scanner readiness. Trading keys are not required.</span>
  </div>
  <div class="settings-health-grid">
  <div class="settings-health-item"><span>API Region</span><strong id="settingsApiRegion">Not checked</strong></div>
  <div class="settings-health-item"><span>Tickers</span><strong id="settingsApiTickers">-</strong></div>
  <div class="settings-health-item"><span>Products</span><strong id="settingsApiProducts">-</strong></div>
- <div class="settings-health-item"><span>BTC Candles</span><strong id="settingsApiCandles">-</strong></div>
+ <div class="settings-health-item"><span>NIFTY Candles</span><strong id="settingsApiCandles">-</strong></div>
  <div class="settings-health-item"><span>Last Scan</span><strong id="settingsApiLastScan">Not run</strong></div>
  <div class="settings-health-item"><span>Stored Signals</span><strong id="settingsApiSignalCount">0</strong></div>
  </div>
@@ -1144,16 +1103,16 @@ const PANE_TEMPLATES = {
  </div>
  <div class="account-inline-note" id="settingsApiCheckStatus">Run the market-data check first, then run a scan test to verify the scanner end to end.</div>
  </section>
- <div class="account-editor-section" data-settings-panel="profile">
+ <div class="account-editor-section" data-settings-panel="profile" hidden>
  <div class="account-editor-section-head">
- <strong>Profile</strong>
+ <strong>Workspace</strong>
  <span>User name, desk label, venue, and operating mode.</span>
  </div>
  <div class="account-editor-grid">
  <label class="account-field"><span>User Name</span><input type="text" class="si" id="accountUsername" placeholder="Dhiraj"/></label>
  <label class="account-field"><span>Profile Name</span><input type="text" class="si" id="accountProfileName" placeholder="Public Desk"/></label>
  <label class="account-field"><span>Desk Label</span><input type="text" class="si" id="accountProfileDesk" placeholder="Trade Desk"/></label>
- <label class="account-field"><span>Venue</span><input type="text" class="si" id="accountProfileVenue" placeholder="Delta Exchange"/></label>
+ <label class="account-field"><span>Venue</span><input type="text" class="si" id="accountProfileVenue" placeholder="NSE/BSE"/></label>
  <div class="account-field">
  <span>Mode</span>
  <div class="account-inline-note">Choose what the desk can read or execute.</div>
@@ -1162,29 +1121,29 @@ const PANE_TEMPLATES = {
  <div class="account-capability-choices">
  <button class="account-capability-choice active" type="button" data-account-capability-choice="Public">Public</button>
  <button class="account-capability-choice" type="button" data-account-capability-choice="ReadOnly">Read Only</button>
- <button class="account-capability-choice" type="button" data-account-capability-choice="TradeEnabled">Trade Enabled</button>
+ <button class="account-capability-choice" type="button" data-account-capability-choice="TradeEnabled" disabled title="Order placement is disabled in this app.">Manual Only</button>
  </div>
  </div>
 
  <div class="account-editor-section" data-settings-panel="guards">
  <div class="account-editor-section-head">
- <strong>Live Guards</strong>
- <span>Limits for new futures entries and blocked symbols.</span>
+ <strong>Manual Guards</strong>
+ <span>Limits for planned entries and blocked symbols.</span>
  </div>
  <div class="account-editor-grid">
- <label class="account-field"><span>Max Order Size (USD)</span><input type="number" class="si" id="accountMaxOrderSize" min="1" max="100000" step="1" placeholder="60" title="Hard cap on USD notional for new trade entries. Orders above this value will be blocked."/></label>
+ <label class="account-field"><span>Max Planned Value (INR)</span><input type="number" class="si" id="accountMaxOrderSize" min="1" max="100000000" step="1" placeholder="5000" title="Advisory cap for new manual trade plans."/></label>
  <div class="account-field">
  <span>Coverage</span>
  <div class="account-inline-note">Exit orders are not blocked by these entry limits.</div>
  </div>
  </div>
- <label class="account-field account-field-full"><span>Blocked Symbols</span><input type="text" class="si" id="accountBlockedSymbols" placeholder="Comma-separated symbols like MEMEUSD, MONUSD"/></label>
+ <label class="account-field account-field-full"><span>Blocked Symbols</span><input type="text" class="si" id="accountBlockedSymbols" placeholder="Comma-separated symbols like RELIANCE, NIFTY"/></label>
  </div>
 
  <div class="account-editor-section" data-settings-panel="api">
  <div class="account-editor-section-head">
  <strong>API Health</strong>
- <span>Request quota, cooldown, and candle-cache status.</span>
+ <span>Request quota and connection cooldown status.</span>
  </div>
  <div class="account-editor-grid">
  <div class="account-field">
@@ -1192,7 +1151,7 @@ const PANE_TEMPLATES = {
  <div class="account-inline-note" id="sApiQuotaHealth">Loading runtime health...</div>
  </div>
  <div class="account-field">
- <span>Candle Cache Health</span>
+ <span>History Cache Health</span>
  <div class="account-inline-note" id="sCandleCacheHealth">Loading cache status...</div>
  </div>
  </div>
@@ -1200,32 +1159,7 @@ const PANE_TEMPLATES = {
  <button class="bsm" type="button" id="btnRefreshRuntimeHealth">Refresh Runtime Health</button>
  <button class="btn secondary" type="button" id="btnClearCandleCache">Clear Candle Cache</button>
  </div>
- <div class="account-inline-note">When Delta rate-limits requests, the app pauses extra refreshes and uses cached data where available.</div>
- </div>
-
- <div class="account-editor-section" data-settings-panel="dca">
- <div class="account-editor-section-head">
- <strong>DCA Bot (Live Orders)</strong>
- <span>Repeated futures entries controlled by schedule, price step, profile caps, and kill switch.</span>
- </div>
- <div class="account-editor-grid">
- <label class="account-field account-field-full"><span>Enable</span><span class="scheck"><label><input type="checkbox" id="sDcaBotEnabled"/> Enable DCA bot <span style="color:#ff8080;font-weight:700;">(places real orders!)</span></label></span></label>
- <label class="account-field"><span>Symbol</span><input type="text" class="si" id="sDcaBotSymbol" value="BTCUSD" placeholder="BTCUSD"/></label>
- <label class="account-field"><span>Direction</span><select class="si" id="sDcaBotSide"><option value="long">Long accumulation</option><option value="short">Short accumulation</option></select></label>
- <label class="account-field"><span>Order Size (USD)</span><input type="number" class="si" id="sDcaBotOrderSizeUSD" value="5" min="1" max="100000" step="1"/></label>
- <label class="account-field"><span>Max Orders / Cycle</span><input type="number" class="si" id="sDcaBotMaxOrders" value="5" min="1" max="100" step="1"/></label>
- <label class="account-field"><span>Max Daily DCA Spend (USD)</span><input type="number" class="si" id="sDcaBotMaxDailyUSD" value="25" min="1" max="1000000" step="1"/></label>
- <label class="account-field"><span>Minimum Interval (minutes)</span><input type="number" class="si" id="sDcaBotIntervalMinutes" value="60" min="1" max="10080" step="1"/></label>
- <label class="account-field"><span>Price Step Against Position (%)</span><input type="number" class="si" id="sDcaBotPriceStepPct" value="1.5" min="0" max="100" step="0.1" title="After the first order, long DCA waits for price to fall by this amount. Short DCA waits for price to rise by this amount. Set 0 for time-only DCA."/></label>
- <label class="account-field"><span>Take Profit per Order (%)</span><input type="number" class="si" id="sDcaBotTakeProfitPct" value="1.2" min="0.1" max="100" step="0.1"/></label>
- <label class="account-field"><span>Stop Loss per Order (%)</span><input type="number" class="si" id="sDcaBotStopLossPct" value="8" min="0.1" max="100" step="0.1"/></label>
- <label class="account-field"><span>Entry Mode</span><select class="si" id="sDcaBotEntryMode"><option value="maker_only">Maker Only (Zero Fee)</option><option value="maker_preferred">Maker Preferred (fallback to limit)</option><option value="limit">Limit</option><option value="market">Market</option></select></label>
- <label class="account-field account-field-full"><span>Notifications</span><span class="scheck"><label><input type="checkbox" id="sDcaBotNotifyBrowser" checked/> Notify browser on DCA orders</label></span><span class="scheck"><label><input type="checkbox" id="sDcaBotNotifyTelegram" checked/> Notify Telegram on DCA orders</label></span></label>
- <div class="account-field account-field-full"><span>DCA Status</span><div class="account-inline-note" id="sDcaBotStatus">DCA bot is not loaded yet.</div></div>
- </div>
- <div class="account-editor-actions">
- <button class="btn secondary" type="button" id="btnResetDcaBotCycle">Reset DCA Cycle</button>
- </div>
+ <div class="account-inline-note">When the data service limits requests, the app pauses extra refreshes and uses cached data where available.</div>
  </div>
 
  <div class="account-editor-section" data-settings-panel="risk">
@@ -1249,7 +1183,7 @@ const PANE_TEMPLATES = {
  <div class="account-editor-grid">
  <label class="account-field"><span>Max Drawdown %</span><input type="number" class="si" id="accountVarMaxDD" min="1" max="100" step="1" placeholder="40" title="Maximum total drawdown as % of Total Capital before kill switch triggers."/></label>
  <label class="account-field"><span>Cycle Count</span><input type="number" class="si" id="accountVarCycles" min="1" max="20" step="1" placeholder="4" title="Divide max drawdown into N cycles. Each cycle gets equal capital variance budget."/></label>
- <label class="account-field"><span>Max Loss per Trade (USD)</span><input type="number" class="si" id="accountVarMaxLossTrade" min="0" max="1000000" step="1" placeholder="20" title="Fixed dollar cap on loss for any single trade entry."/></label>
+ <label class="account-field"><span>Max Loss per Trade (INR)</span><input type="number" class="si" id="accountVarMaxLossTrade" min="0" max="100000000" step="1" placeholder="1000" title="Fixed rupee cap on loss for any manual trade plan."/></label>
  <label class="account-field"><span>Max Trades per Sector</span><input type="number" class="si" id="accountVarMaxPerSector" min="1" max="20" step="1" placeholder="2" title="Maximum simultaneous open positions in any one sector."/></label>
  </div>
  <div class="account-editor-grid" style="margin-top:6px">
@@ -1303,7 +1237,7 @@ const PANE_TEMPLATES = {
  <button class="bsm" type="button" data-settings-recovery-action="security">Open Login Security</button>
  <button class="btn secondary" type="button" data-settings-recovery-action="runtime">Refresh Runtime Health</button>
  </div>
- <div class="account-inline-note" id="settingsRecoveryStatus">Use this when scanner, live data, or execution readiness looks blocked.</div>
+ <div class="account-inline-note" id="settingsRecoveryStatus">Use this when scanner, market data, or manual-review readiness looks blocked.</div>
  </section>
 
  <details class="account-advanced-panel settings-panel-card" data-settings-panel="api-keys" open>
@@ -1312,35 +1246,37 @@ const PANE_TEMPLATES = {
  <label class="account-field account-field-full"><span>Notes</span><textarea class="si account-notes" id="accountProfileNotes" placeholder="Desk notes, routing assumptions, or analyst context."></textarea></label>
  <div class="account-secret-box">
  <div class="account-secret-head">
- <strong>API Keys</strong>
- <span>Add your Delta Exchange API key and secret to enable live positions and account data.</span>
+ <strong>Market Data API</strong>
+ <span>Credentials are used only for NSE/BSE market data. Order placement is disabled; use your broker app for manual trading.</span>
  </div>
+ <div class="account-inline-note">Enter both values: your Client ID and the full Access Token generated in your market-data account. Do not paste a shortened token.</div>
  <div class="account-editor-grid">
- <label class="account-field"><span>Secret Label</span><input type="text" class="si" id="accountSecretLabel" placeholder="Optional key name"/></label>
- <label class="account-field"><span>Trading Key</span><input type="password" class="si" id="accountTradingKey" placeholder="Required for live account data" autocomplete="off"/></label>
- <label class="account-field account-field-full"><span>Trading Secret</span><input type="password" class="si" id="accountTradingSecret" placeholder="Required for live account data" autocomplete="off"/></label>
+ <label class="account-field"><span>Secret Label</span><input type="text" class="si" id="accountSecretLabel" placeholder="Market data key"/></label>
+ <label class="account-field"><span>Client ID</span><input type="password" class="si" id="accountTradingKey" placeholder="Enter in app only" autocomplete="off"/></label>
+ <label class="account-field account-field-full"><span>Access Token</span><input type="password" class="si" id="accountTradingSecret" placeholder="Enter in app only" autocomplete="off"/></label>
  </div>
- <div class="account-inline-note" id="accountCredentialModeNote">Checking secure credential storage...</div>
+ <div class="account-inline-note good" id="accountCredentialModeNote">Market Data Only | Manual Trading Only</div>
  </div>
- <div class="account-kill-switch-box">
+ <div class="account-kill-switch-box" hidden>
  <div class="account-secret-head">
- <strong>Kill Switch</strong>
- <span>Global execution guard for TradeEnabled preview state.</span>
+ <strong>Manual Trading Guard</strong>
+ <span>Order placement is blocked in this app.</span>
  </div>
  <div class="account-kill-switch-row">
  <input type="text" class="si" id="accountKillSwitchReason" placeholder="Reason for locking execution"/>
- <button class="bsm red" type="button" id="btnAccountKillSwitchToggle">Toggle Kill Switch</button>
+ <button class="bsm red" type="button" id="btnAccountKillSwitchToggle">Toggle Order Lock</button>
  </div>
  <div class="account-inline-note" id="accountKillSwitchStatus"></div>
  </div>
  <div class="account-editor-actions">
- <button class="bsm" type="button" id="btnTestPrivateApi">Test API Key</button>
+ <button class="bsm" type="button" id="btnSaveDhanCredentials">Save Credentials</button>
+ <button class="bsm" type="button" id="btnTestPrivateApi">Test Market Data API</button>
  </div>
  <div class="account-inline-note" id="accountApiTestResult"></div>
  </div>
  </details>
 
- <div class="account-editor-actions" data-settings-panel="profile">
+ <div class="account-editor-actions" data-settings-panel="profile" hidden>
  <button class="bsm" type="button" id="btnAccountProfileSave">Save Profile</button>
  <button class="btn-save" type="button" id="btnAccountProfileSetActive">Save User Profile</button>
  </div>
@@ -1352,7 +1288,7 @@ const PANE_TEMPLATES = {
  <div class="settings-stage-head">
  <div class="settings-stage-kicker">SCANNER RULES</div>
  <div class="settings-stage-title">Scanner Rules</div>
- <div class="settings-stage-copy">Signal filters, automation defaults, chart settings, and backup controls.</div>
+ <div class="settings-stage-copy">Signal filters, scan universe, chart settings, and market-data defaults.</div>
  </div>
  <div class="settings-panel-tabs" data-settings-panel-tabs="scanner-rules">
  <button type="button" class="active" data-settings-subfilter="all">All</button>
@@ -1360,7 +1296,7 @@ const PANE_TEMPLATES = {
  <button type="button" data-settings-subfilter="timeframes">Timeframes</button>
  <button type="button" data-settings-subfilter="universe">Universe</button>
  <button type="button" data-settings-subfilter="data">Data</button>
- <button type="button" data-settings-subfilter="index">FWD-100</button>
+ <button type="button" data-settings-subfilter="index">Index Tape</button>
  </div>
  <div class="sform">
  <div class="settings-stage-divider" data-settings-panel="scanner-rules">
@@ -1378,25 +1314,44 @@ const PANE_TEMPLATES = {
  <div class="srow"><label>OBV SMA Period</label><input type="number" class="si" id="sOBV" value="50"/></div>
  <div class="srow"><label>Primary TF</label>
  <select class="si" id="sTF1">
+ <option value="15m">15 Min</option>
+ <option value="4h">4 Hours</option>
  <option value="1d" selected>1 Day</option>
- <option value="1h">1 Hour</option>
+ <option value="1w">Weekly</option>
  </select>
  </div>
  <div class="srow"><label>Confirm TF</label>
  <select class="si" id="sTF2">
  <option value="15m" selected>15 Min</option>
- <option value="5m">5 Min</option>
- <option value="1h">1 Hour</option>
+ <option value="4h">4 Hours</option>
+ <option value="1d">1 Day</option>
+ <option value="1w">Weekly</option>
  </select>
  </div>
  </div>
  <div class="sg sg-core" data-settings-panel="scanner-rules" data-settings-subsection="signals universe">
  <div class="sgt">Scan Filters</div>
- <div class="srow"><label>Min Display Score</label><input type="number" class="si" id="sMinScore" value="15" min="0" max="100"/></div>
+ <div class="srow"><label>Scanner Universe</label>
+ <select class="si" id="sScanUniverse">
+  <option value="fno_stocks">F&amp;O Stocks Scanner</option>
+  <option value="nifty500">Nifty 500 Scanner</option>
+  <option value="midcap150">Midcap 150 Scanner</option>
+  <option value="smallcap250">Smallcap 250 Scanner</option>
+  <option value="all_nse">All NSE Equity Scanner</option>
+  </select>
+  </div>
+  <div class="srow"><label>Scanner Type</label>
+  <select class="si" id="sScanMode">
+  <option value="standard">Standard Deep Scan</option>
+  <option value="penny_awakening">Penny Volume Awakening</option>
+  </select>
+  </div>
+  <div class="srow"><label>Min Display Score</label><input type="number" class="si" id="sMinScore" value="15" min="0" max="100"/></div>
  <div class="srow"><label>Alert Threshold</label><input type="number" class="si" id="sAlertScore" value="65" min="0" max="100"/></div>
- <div class="srow"><label>Max Coins to Scan</label><input type="number" class="si" id="sMaxCoins" value="500" min="5" max="999"/></div>
- <div class="srow"><label>Min Volume Filter ($)</label><input type="number" class="si" id="sMinVol" value="0" min="0"/></div>
- <div class="srow"><label>Funding Min Volume ($)</label><input type="number" class="si" id="sFundingMinVol" value="100000" min="0" step="1000"/></div>
+ <div class="srow"><label>Max symbols to Scan</label><input type="number" class="si" id="sMaxCoins" value="500" min="5" max="3500"/></div>
+ <div class="srow"><label>Min Turnover Filter (INR)</label><input type="number" class="si" id="sMinVol" value="0" min="0"/></div>
+ <div class="srow"><label>Activity Min Turnover (INR)</label><input type="number" class="si" id="sFundingMinVol" value="100000" min="0" step="1000"/></div>
+ <div class="account-inline-note">All NSE can cover 3000 symbols through quote batches, then deep history analysis runs on the best ranked symbols to protect API limits.</div>
  </div>
  <div class="sg sg-core" data-settings-panel="scanner-rules" data-settings-subsection="data">
  <div class="sgt">Auto-Scan</div>
@@ -1411,8 +1366,8 @@ const PANE_TEMPLATES = {
  </select>
  </div>
  <div class="scheck"><label><input type="checkbox" id="sAutoScan"/> Enable auto-scan on startup</label></div>
- <div class="scheck"><label><input type="checkbox" id="sLiveAccountSync" checked/> Enable live Delta account sync for Positions and Analytics auto-refresh</label></div>
- <div class="scheck"><label><input type="checkbox" id="sLiveOrderPreviewChart" checked/> Enable chart in live order preview</label></div>
+ <div class="scheck"><label><input type="checkbox" id="sLiveAccountSync" disabled/> Account sync disabled in this read-only build</label></div>
+ <div class="scheck"><label><input type="checkbox" id="sLiveOrderPreviewChart" checked/> Enable chart in manual review ticket</label></div>
  <div class="srow">
  <label>Market Data Mode</label>
  <select class="si" id="sMarketDataMode">
@@ -1423,149 +1378,26 @@ const PANE_TEMPLATES = {
  </div>
  </div>
  <div class="sg sg-core" data-settings-panel="scanner-rules" data-settings-subsection="index universe">
- <div class="sgt">FWD-100 Basket</div>
-<div class="srow"><label>Index Max Coins</label><input type="number" class="si" id="sMarketIndexMaxConstituents" value="100" min="3" max="100" step="1" title="House FWD-100 uses the top liquid names up to this count."/></div>
- <div class="srow"><label>Rebalance Days</label><input type="number" class="si" id="sMarketIndexRebalanceDays" value="7" min="1" max="90" step="1" title="How often FWD-100 restores equal weights and refreshes the retained liquid basket."/></div>
- <div class="srow"><label>Exclude Coins</label><input type="text" class="si" id="sMarketIndexExcludedSymbols" value="" placeholder="BTCUSD, ETHUSD" title="Comma-separated symbols to remove from the FWD-100 basket."/></div>
- <button type="button" class="bsm" id="sMarketIndexRebuildNow" title="Force FWD-100 to rebuild and rebalance on the next scan.">Rebuild FWD-100 Next Scan</button>
- <div class="account-inline-note">FWD-100 is a cumulative equal-weight index. Sentiment tape stays separate for market mood.</div>
- </div>
- <div class="settings-stage-divider settings-stage-divider-danger" data-settings-panel="futures-auto">
- <span>Live Automation Controls</span>
- <small>These sections can place real orders. Keep them visually separate from advisory scanner preferences.</small>
- </div>
- <div class="sg sg-danger" data-settings-panel="futures-auto">
- <div class="sgt">Coin Futures Auto-Trade (Live Orders)</div>
- <div class="srow" style="margin-bottom:6px;padding:6px 8px;background:rgba(255,80,80,.08);border:1px solid rgba(255,80,80,.25);border-radius:4px;font-size:10px;color:#ff8080;">
- &#9888; Futures auto-trade places REAL Delta Exchange orders. Keep this separate from options automation and only enable after profile, bracket, and risk checks are verified.
- </div>
- <div class="srow"><label>Min Trade Quality</label><input type="number" class="si" id="sAutoTradeMinScore" value="75" min="75" max="100" step="1" title="Only scanner TRADE NOW setups at or above this trade-quality score will auto-trade"/></div>
- <div class="srow"><label>Size per Trade (USD)</label><input type="number" class="si" id="sAutoTradeUSD" value="5" min="1" max="60" step="1" title="USD notional per auto-trade order"/></div>
- <div class="srow"><label>Min Liquidity ($)</label><input type="number" class="si" id="sAutoTradeMinLiquidityUSD" value="750000" min="0" step="1000" title="Skip live auto-trades when 24h liquidity is below this amount. Keep 750000 to preserve current behavior."/></div>
- <div class="srow"><label>Probation Min Liquidity ($)</label><input type="number" class="si" id="sAutoTradeProbationMinLiquidityUSD" value="1500000" min="0" step="1000" title="Probation symbols need more liquidity than validated symbols before live auto-trade is allowed."/></div>
- <div class="srow"><label>Validated Max Spread %</label><input type="number" class="si" id="sAutoTradeValidatedMaxSpreadPct" value="0.28" min="0.01" max="5" step="0.01" title="Block auto-trade when estimated spread is wider than this even for validated symbols."/></div>
- <div class="srow"><label>Probation Max Spread %</label><input type="number" class="si" id="sAutoTradeProbationMaxSpreadPct" value="0.18" min="0.01" max="5" step="0.01" title="Use a tighter spread ceiling for probation symbols."/></div>
-<div class="srow"><label>Probation Size (%)</label><input type="number" class="si" id="sAutoTradeProbationSizePct" value="90" min="85" max="100" step="1" title="Probation symbols use this % of your normal order size before they fully validate."/></div>
-<div class="account-inline-note">Low-history symbols are split into new, probation, and validated. New symbols can trade if they pass the live checks. Probation symbols use this size haircut and still respect your profile max-order cap.</div>
- <div class="srow"><label>Max Trades per Scan</label><input type="number" class="si" id="sAutoTradeMaxPerScan" value="2" min="1" max="5" step="1"/></div>
- <div class="srow"><label>Max Trades per Day (successful)</label><input type="number" class="si" id="sAutoTradeMaxPerDay" value="6" min="1" max="50" step="1"/></div>
- <div class="srow"><label>Max Concurrent Trades (current open exposure)</label><input type="number" class="si" id="sAutoTradeMaxConcurrent" value="5" min="1" max="5" step="1" title="Counts live positions plus pending/open entry orders on Delta. Reduce-only TP/SL exit orders do not count."/></div>
- <div class="account-inline-note">Current open exposure counts live positions plus pending/open entry orders. Reduce-only exit orders such as stop-loss and take-profit do not use this slot.</div>
- <div class="srow"><label>Adverse Funding Block (% / 8h)</label><input type="number" class="si" id="sAutoTradeMaxAdverseFundingRate" value="0.05" min="0" max="5" step="0.01" title="Skip new entries when funding strongly works against the trade side. Set 0 to disable."/></div>
- <div class="account-inline-note">Longs are blocked when funding is above this threshold. Shorts are blocked when funding is below the negative of this threshold. Set 0 to disable.</div>
- <div class="srow"><label>Close Before Adverse Funding (min)</label><input type="number" class="si" id="sAutoTradeFundingExitMinutes" value="0" min="0" max="120" step="5" title="For live auto-trades only: close before the next adverse funding settlement when the trade has been open long enough. Set 0 to disable."/></div>
- <div class="srow"><label>Min Hold Before Funding Exit (hours)</label><input type="number" class="si" id="sAutoTradeFundingMinHoldHours" value="12" min="0" max="168" step="1" title="Funding exit only applies after the position has been open at least this long."/></div>
- <div class="scheck"><label><input type="checkbox" id="sAutoTradeFundingExitOnlyProfit" checked/> Only auto-close before funding when the position is profitable</label></div>
- <div class="srow"><label>Daily Loss Limit (USD)</label><input type="number" class="si" id="sAutoTradeDailyLoss" value="8" min="1" max="10000" step="1" title="Auto-trade disables itself if daily loss exceeds this amount"/></div>
- <div class="srow">
- <label>Entry Mode</label>
- <select class="si" id="sAutoTradeEntryMode">
- <option value="maker_only">Maker Only (Zero Fee)</option>
- <option value="maker_preferred">Maker Preferred (fallback to limit)</option>
- <option value="limit">Limit</option>
- <option value="market">Market</option>
- </select>
- </div>
- <div class="scheck"><label><input type="checkbox" id="sAutoTradeReverseSignals"/> Reverse live execution side (buy signal sells, sell signal buys)</label></div>
- <div class="srow"><label>Symbol Cooldown (sec)</label><input type="number" class="si" id="sAutoTradeCooldown" value="90" min="30" max="600" step="10" title="Seconds before same symbol can be auto-traded again"/></div>
- <div class="account-inline-note">Scanner and signal qualification stay unchanged. Reverse mode only flips the live order side and mirrors the same stop-loss and target distances.</div>
- <div class="scheck"><label><input type="checkbox" id="sAutoTradePaperTracking" checked/> Track qualified paper/shadow trades</label></div>
- <div class="srow">
- <label>Entry Trigger</label>
- <select class="si" id="sAutoTradeEntryTriggerMode">
- <option value="balanced_confirm">Balanced Confirm</option>
- <option value="strict_retest">Strict Retest</option>
- <option value="loose_confirm">Loose Confirm</option>
- <option value="off">Off</option>
- </select>
- </div>
- <div class="scheck"><label><input type="checkbox" id="sAutoTradeEntryTriggerRequired" checked/> Require entry trigger before paper/live entry</label></div>
- <div class="srow"><label>Setup Edge Sample</label><input type="number" class="si" id="sAutoTradeSetupPerformanceMinSample" value="20" min="1" max="500" step="1" title="Minimum paper/live closed trades before a setup family is labelled Positive Edge or Weak Edge."/></div>
- <div class="scheck"><label><input type="checkbox" id="sAutoTradeRiskQualityRequired" checked/> Require risk quality before paper/live entry</label></div>
- <div class="srow"><label>Min Reward:Risk</label><input type="number" class="si" id="sAutoTradeRiskMinRewardRisk" value="1.15" min="0.2" max="10" step="0.05" title="Skip entries whose first target does not pay enough compared with stop distance."/></div>
- <div class="srow"><label>Max Stop Distance %</label><input type="number" class="si" id="sAutoTradeRiskMaxStopDistancePct" value="3.5" min="0.05" max="50" step="0.05" title="Skip entries where the stop is too far from entry."/></div>
- <div class="srow"><label>Max Entry Drift %</label><input type="number" class="si" id="sAutoTradeRiskMaxEntryDistancePct" value="1.8" min="0.05" max="50" step="0.05" title="Skip entries where current price has drifted too far from the planned entry."/></div>
- <div class="account-inline-note">Paper tracking never places orders. It records qualified forward signals after entry trigger and risk quality checks; setup performance stays advisory until you choose to use it manually.</div>
- <div class="scheck"><label><input type="checkbox" id="sAutoTradeNotifyBrowser" checked/> Notify browser on futures auto-trade events</label></div>
- <div class="scheck"><label><input type="checkbox" id="sAutoTradeNotifyTelegram" checked/> Notify Telegram on futures auto-trade events</label></div>
- <div class="scheck"><label><input type="checkbox" id="sAutoTradeEnabled"/> Enable futures auto-trade on startup <span style="color:#ff8080;font-weight:700;">(places real orders!)</span></label></div>
+ <div class="sgt">FWD Index Tape</div>
+<div class="srow"><label>F&O Breadth Limit</label><input type="number" class="si" id="sMarketIndexMaxConstituents" value="250" min="50" max="250" step="1" title="Scanner breadth is calculated from F&O stock underlyings."/></div>
+ <div class="srow"><label>Refresh Days</label><input type="number" class="si" id="sMarketIndexRebalanceDays" value="1" min="1" max="30" step="1" title="How often to refresh index and F&O breadth context."/></div>
+ <div class="srow"><label>Exclude symbols</label><input type="text" class="si" id="sMarketIndexExcludedSymbols" value="" placeholder="RELIANCE, TCS" title="Comma-separated F&O stock symbols to remove from breadth."/></div>
+ <button type="button" class="bsm" id="sMarketIndexRebuildNow" title="Force index context to refresh on the next scan.">Refresh Index Tape Next Scan</button>
+ <div class="account-inline-note">Nifty, Bank Nifty, Nifty IT, Fin Nifty, Midcap Nifty, and Nifty 500 are shown as FWD Index quotes. F&O stock breadth remains separate scanner context.</div>
  </div>
  <div class="settings-stage-divider" data-settings-panel="strategy-profiles">
  <span>Strategy Profiles</span>
- <small>Apply a complete preset to scanner, paper tracking, chart defaults, and risk-template fields. Review the values, then save.</small>
+ <small>Apply a complete preset to scanner, strategy, and chart defaults. Review the values, then save.</small>
  </div>
  <div class="sg" data-settings-panel="strategy-profiles">
  <div class="sgt">Profile Presets</div>
  <div class="strategy-preset-grid">
- <button class="strategy-preset-card" type="button" data-settings-profile-preset="manual_clean"><strong>Manual Clean</strong><span>Scanner only, paper tracking on, live automation off.</span><small>Score 65 | Key chart | 1.5 ATR / 2R</small></button>
- <button class="strategy-preset-card" type="button" data-settings-profile-preset="breakout_validation"><strong>Breakout Validation</strong><span>Higher score and trigger discipline for forward testing.</span><small>Score 78 | Trigger required | 1.3 ATR / 2.5R</small></button>
+ <button class="strategy-preset-card" type="button" data-settings-profile-preset="manual_clean"><strong>Manual Clean</strong><span>Scanner only, clean manual review mode.</span><small>Score 65 | Key chart | 1.5 ATR / 2R</small></button>
+ <button class="strategy-preset-card" type="button" data-settings-profile-preset="breakout_validation"><strong>Breakout Validation</strong><span>Higher score and trigger discipline for confirmed breakouts.</span><small>Score 78 | Trigger required | 1.3 ATR / 2.5R</small></button>
  <button class="strategy-preset-card" type="button" data-settings-profile-preset="trend_follow"><strong>Trend Follow</strong><span>Wider stop and larger sample gate for continuation trades.</span><small>Score 72 | 1.8 ATR / 2.4R</small></button>
- <button class="strategy-preset-card" type="button" data-settings-profile-preset="mean_reversion"><strong>Mean Reversion</strong><span>Smaller basket and tighter risk settings for reversal setups.</span><small>Score 76 | 1.1 ATR / 1.6R</small></button>
- <button class="strategy-preset-card" type="button" data-settings-profile-preset="paper_first"><strong>Paper First</strong><span>Turns on paper tracking and auto scan while keeping real orders off.</span><small>Auto scan 5m | Paper ledger | Live off</small></button>
+ <button class="strategy-preset-card" type="button" data-settings-profile-preset="mean_reversion"><strong>Mean Reversion</strong><span>Smaller basket and tighter confirmation settings for reversal setups.</span><small>Score 76 | 1.1 ATR / 1.6R</small></button>
  </div>
  <div class="account-inline-note" id="strategyProfilePresetStatus">Pick a preset to update the visible settings form. Use Save Strategy after review.</div>
- </div>
- <div class="sg sg-danger" data-settings-panel="options-auto">
- <div class="sgt">Options Auto-Trade (Theta Desk)</div>
- <div class="srow" style="margin-bottom:6px;padding:6px 8px;background:rgba(49,196,141,.08);border:1px solid rgba(49,196,141,.22);border-radius:4px;font-size:10px;color:#9ef2c9;">
- Defined-risk options automation is short-premium-first: bullish signals map to bull put spreads, bearish signals map to bear call spreads, and naked short automation stays off unless you explicitly override it.
- </div>
- <div class="scheck"><label><input type="checkbox" id="sOptionsAutoTradeEnabled"/> Enable options auto-trade on startup</label></div>
- <div class="srow"><label>Allowed Underlyings</label><input type="text" class="si" id="sOptionsAutoTradeUnderlyings" value="BTC, ETH" placeholder="BTC, ETH"/></div>
- <div class="srow"><label>Min Trade Quality</label><input type="number" class="si" id="sOptionsAutoTradeMinScore" value="72" min="0" max="100" step="1"/></div>
- <div class="srow"><label>Min DTE</label><input type="number" class="si" id="sOptionsAutoTradeMinDte" value="2" min="0" max="120" step="1"/></div>
- <div class="srow"><label>Max DTE</label><input type="number" class="si" id="sOptionsAutoTradeMaxDte" value="21" min="1" max="365" step="1"/></div>
- <div class="srow"><label>Short Strike Target Delta</label><input type="number" class="si" id="sOptionsAutoTradeTargetDelta" value="0.16" min="0.01" max="0.49" step="0.01"/></div>
- <div class="srow"><label>Delta Tolerance</label><input type="number" class="si" id="sOptionsAutoTradeDeltaTolerance" value="0.08" min="0.01" max="0.30" step="0.01"/></div>
- <div class="srow"><label>Min OI Contracts</label><input type="number" class="si" id="sOptionsAutoTradeMinOi" value="250" min="0" max="100000000" step="10"/></div>
- <div class="srow"><label>Max Bid/Ask Spread %</label><input type="number" class="si" id="sOptionsAutoTradeMaxSpread" value="0.18" min="0.01" max="2" step="0.01"/></div>
- <div class="srow"><label>Min Premium Score</label><input type="number" class="si" id="sOptionsAutoTradeMinPremiumScore" value="55" min="0" max="100" step="1"/></div>
- <div class="srow"><label>Max Strategies / Day</label><input type="number" class="si" id="sOptionsAutoTradeMaxPerDay" value="4" min="1" max="50" step="1"/></div>
- <div class="srow"><label>Max Concurrent Strategies</label><input type="number" class="si" id="sOptionsAutoTradeMaxConcurrent" value="2" min="1" max="20" step="1"/></div>
- <div class="srow"><label>Max Risk / Strategy (USD)</label><input type="number" class="si" id="sOptionsAutoTradeMaxRisk" value="120" min="1" max="1000000" step="1"/></div>
- <div class="srow">
- <label>Entry Mode</label>
- <select class="si" id="sOptionsAutoTradeEntryMode">
- <option value="maker_only">Maker Only</option>
- <option value="limit" selected>Limit</option>
- <option value="market">Market</option>
- </select>
- </div>
- <div class="scheck"><label><input type="checkbox" id="sOptionsAutoTradeAllowUndefinedRisk"/> Allow undefined-risk options automation</label></div>
- <div class="scheck"><label><input type="checkbox" id="sOptionsAutoTradeNotifyBrowser" checked/> Notify browser on options auto-trade events</label></div>
- <div class="scheck"><label><input type="checkbox" id="sOptionsAutoTradeNotifyTelegram" checked/> Notify Telegram on options auto-trade events</label></div>
- </div>
- <div class="sg sg-danger" data-settings-panel="straddle-auto">
- <div class="sgt">Short Straddle Auto-Trade</div>
- <div class="srow" style="margin-bottom:6px;padding:6px 8px;background:rgba(255,171,64,.07);border:1px solid rgba(255,171,64,.22);border-radius:4px;font-size:10px;color:#ffcc80;">
- Sells ATM call + put at market open. Each leg has its own stop-loss; re-entry triggers when premium reverts. Universal exit on time or P&amp;L target. <strong style="color:#ff8080;">Places real orders - use with care.</strong>
- </div>
- <div class="scheck"><label><input type="checkbox" id="sStraddleEnabled"/> Enable short straddle auto-trade <span style="color:#ff8080;font-weight:700;">(places real orders!)</span></label></div>
- <div class="srow"><label>Leg Stop-Loss %</label><input type="number" class="si" id="sStraddleLegStopLossPct" value="30" min="5" max="100" step="1" title="Close leg if premium rises this % above entry"/></div>
- <div class="srow"><label>Re-entry Threshold %</label><input type="number" class="si" id="sStraddleReentryThresholdPct" value="5" min="1" max="30" step="1" title="Re-enter when premium drops back within this % of original entry"/></div>
- <div class="srow"><label>Max Re-entries / Leg</label><input type="number" class="si" id="sStraddleMaxReentries" value="2" min="0" max="10" step="1"/></div>
- <div class="srow"><label>Profit Target (USD pts)</label><input type="number" class="si" id="sStraddleUniversalProfitTarget" value="300" min="0" max="100000" step="10" title="Close all positions when total P&L reaches this"/></div>
- <div class="srow"><label>Loss Limit (USD pts)</label><input type="number" class="si" id="sStraddleUniversalLossLimit" value="300" min="0" max="100000" step="10" title="Close all positions when total loss hits this"/></div>
- <div class="srow"><label>Close Before Expiry (min)</label><input type="number" class="si" id="sStraddleCloseMinutesBeforeExpiry" value="30" min="5" max="1440" step="5" title="Square off all legs this many minutes before expiry"/></div>
- <div class="srow">
- <label>Expiry Preference</label>
- <select class="si" id="sStraddleExpiryPreference">
- <option value="nearest" selected>Nearest Expiry</option>
- <option value="same_day">Same-Day Expiry Only</option>
- </select>
- </div>
- <div class="scheck"><label><input type="checkbox" id="sStraddleReentryEnabled" checked/> Enable re-entry after stop-loss</label></div>
- <div class="scheck"><label><input type="checkbox" id="sNativeStraddlePreferred" checked/> Prefer native MV- straddle products (single order, 50% lower fees)</label></div>
- <div class="srow" style="margin-top:8px;padding:4px 0;border-top:1px solid rgba(126,145,182,0.08);font-size:9px;color:var(--od-muted);text-transform:uppercase;letter-spacing:0.5px;">Entry Filters</div>
- <div class="srow"><label>Min Premium / Ct (USD)</label><input type="number" class="si" id="sStraddleMinPremiumPerContractUSD" value="0.25" min="0" max="10000" step="0.05" title="Reject native straddles whose credit per contract is too small"/></div>
- <div class="srow"><label>Min Theta / Margin %</label><input type="number" class="si" id="sStraddleMinThetaMarginRatioPct" value="0.35" min="0" max="100" step="0.05" title="Require daily theta yield to clear this % of estimated margin"/></div>
- <div class="srow"><label>Same-Day Min Score</label><input type="number" class="si" id="sStraddleSameDayMinScore" value="82" min="0" max="100" step="1" title="Require a higher score for same-day expiries"/></div>
- <div class="srow"><label>Same-Day Max Spread %</label><input type="number" class="si" id="sStraddleSameDayMaxSpreadPct" value="1.2" min="0.05" max="100" step="0.05" title="Reject same-day entries with wider spreads than this"/></div>
- <div class="srow"><label>Premium Capture Exit %</label><input type="number" class="si" id="sStraddlePremiumCapturePct" value="60" min="0" max="100" step="1" title="Close the straddle when this % of premium has been captured"/></div>
- <div class="srow"><label>Entry Order Max Age (min)</label><input type="number" class="si" id="sStraddleEntryOrderMaxAgeMinutes" value="5" min="1" max="240" step="1" title="Cancel stale maker/limit entry orders after this many minutes"/></div>
- <div class="srow" style="margin-top:8px;padding:4px 0;border-top:1px solid rgba(126,145,182,0.08);font-size:9px;color:var(--od-muted);text-transform:uppercase;letter-spacing:0.5px;">Auto Position Sizing</div>
- <div class="scheck"><label><input type="checkbox" id="sAutoSizeEnabled" checked/> Auto-calculate quantity from target profit</label></div>
- <div class="srow"><label>Target Profit (USD)</label><input type="number" class="si" id="sTargetProfitUSD" value="100" min="1" max="1000000" step="10" title="Auto-calculate contract quantity to target this profit from full premium capture"/></div>
  </div>
  <div class="settings-stage-divider" data-settings-panel="charts">
  <span>Charts, Templates &amp; Storage</span>
@@ -1610,7 +1442,7 @@ const PANE_TEMPLATES = {
  <div class="settings-structured-card">
  <div class="settings-structured-title">Per-symbol override</div>
  <div class="account-editor-grid">
- <label class="account-field"><span>Symbol</span><input type="text" class="si" id="sRiskOverrideSymbol" placeholder="BTCUSD"/></label>
+ <label class="account-field"><span>Symbol</span><input type="text" class="si" id="sRiskOverrideSymbol" placeholder="RELIANCE"/></label>
  <label class="account-field"><span>ATR Stop Multiplier</span><input type="number" class="si" id="sRiskOverrideAtrStopMultiplier" min="0.1" max="10" step="0.1" placeholder="1.2"/></label>
  <label class="account-field"><span>Target R:R</span><input type="number" class="si" id="sRiskOverrideTargetRR" min="0.1" max="10" step="0.1" placeholder="2.5"/></label>
  </div>
@@ -1648,21 +1480,14 @@ const PANE_TEMPLATES = {
  <button class="bsm primary" id="btnFullBackupDownload" style="flex:1">Download Full App Backup</button>
  <button class="bsm" id="btnFullBackupRestore" style="flex:1">Restore Full App Backup</button>
  </div>
- <div class="sgt">Candle History Store</div>
- <div class="srow" style="gap:6px">
- <button class="bsm primary" id="btnCandleHistoryStart" style="flex:1">Start 1D + 15M Backfill</button>
- <button class="bsm" id="btnCandleHistoryPause" style="flex:1">Pause</button>
- <button class="bsm" id="btnCandleHistoryRefresh" style="flex:1">Status</button>
- </div>
  <div class="srow" style="gap:6px">
  <button class="bsm" id="btnArchiveNow" style="width:100%">Archive Old Alerts Now</button>
  </div>
  <div class="es" style="font-size:8.5px;line-height:1.5">
- Select your preferred folder once (for example: <b>D:\\Office Work Backup\\dheeraj\\P\\Chrome Extesnion\\FWD TradeDesk Pro Data</b>).
+ Select your preferred folder once (for example: <b>D:\\Office Work Backup\\dheeraj\\P\\Chrome Extesnion\\FWD Bharat MarketDesk Data</b>).
  Browser security hides full path; folder name will be shown here.
- Use Download Full App Backup before uninstalling or moving to another PC. It includes local settings and candle history, but not machine-encrypted API keys.
+ Use Download Full App Backup before uninstalling or moving to another PC. It includes local settings, but not machine-encrypted API keys.
  </div>
- <div class="save-ok" id="candleHistoryStatus"></div>
  <div class="save-ok" id="backupSaveOK"></div>
  </div>
  <div class="settings-save-rail" data-settings-library-actions>
@@ -1701,7 +1526,7 @@ const PANE_TEMPLATES = {
  <div class="ei">--</div>
  <div class="eh">No webhooks configured</div>
  <div class="es">
- Add a webhook URL to send FWD TradeDesk Pro signals to your favorite apps.<br/>
+ Add a webhook URL to send FWD Bharat MarketDesk signals to your favorite apps.<br/>
  Works with <b>Voicenotes</b>, <b>Notion</b>, <b>Discord</b>, <b>Telegram bots</b>, <b>Slack</b>, <b>Zapier</b>, <b>Make</b>, and any service that accepts webhook POSTs.
  </div>
  </div>
@@ -1760,6 +1585,15 @@ const PANE_TEMPLATES = {
  </div>
  </div>
  <div class="debug-hint">Run a scan then click Refresh. OK | Error | Skipped</div>
+ <div class="debug-cache-card" id="debugCandleHealth">
+ <div class="debug-cache-head"><strong>Candle Store</strong><span>Loading cache health...</span></div>
+ <div class="debug-cache-grid">
+ <div><small>Last Scan Cache Hits</small><strong id="debugCandleHits">--</strong></div>
+ <div><small>Last Scan API Fetches</small><strong id="debugCandleFetches">--</strong></div>
+ <div><small>Stored Sets</small><strong id="debugCandleEntries">--</strong></div>
+ <div><small>Latest Write</small><strong id="debugCandleLatest">--</strong></div>
+ </div>
+ </div>
  <div class="diagnostics-export-card">
  <div>
  <strong>Release Diagnostics</strong>
@@ -1792,3 +1626,4 @@ ensurePaneRendered('strategies');
 // (inside a chrome.storage callback that fires during DOMContentLoaded).
 ensurePaneRendered('strategy');
 ensurePaneRendered('webhooks');
+

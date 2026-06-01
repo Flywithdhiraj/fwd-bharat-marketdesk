@@ -81,11 +81,12 @@
  function recordCandles(context, symbol = '', resolution = '', rows = []) {
   if (!context || !(context.candles instanceof Map)) return;
   const safeSymbol = normalizeSymbol(symbol);
-  const safeResolution = normalizeResolution(resolution);
-  if (!safeSymbol || !safeResolution || !Array.isArray(rows) || !rows.length) return;
-  const current = context.candles.get(safeSymbol) || {};
-  current[safeResolution] = rows.slice();
-  context.candles.set(safeSymbol, current);
+ const safeResolution = normalizeResolution(resolution);
+ if (!safeSymbol || !safeResolution || !Array.isArray(rows) || !rows.length) return;
+ const current = context.candles.get(safeSymbol) || {};
+  const maxRows = safeResolution === '1d' || safeResolution === '1w' ? 260 : 320;
+  current[safeResolution] = rows.slice(-maxRows);
+ context.candles.set(safeSymbol, current);
  }
 
  function getCandles(context, symbol = '', resolution = '', limit = 0) {
@@ -147,7 +148,7 @@
   await setUnifiedStatus('Run main scan first - no fresh shared scan context', { active: false, ok: false });
   return { ok: false, error: 'No fresh shared scan context' };
  }
- await global.FWDTradeDeskBackgroundLazyModules?.ensureStrategyLabScannersLoaded?.({ includeNative: options.includeNative !== false });
+ await global.FWDTradeDeskBackgroundLazyModules?.ensureStrategyLabScannersLoaded?.({ includeNative: false, includeCryptoOnly: false });
  await setUnifiedStatus('Deriving Strategy Lab scanners from main scan context', { active: true, scanId: context.scanId });
  const tasks = [
    ['wizard', () => global.FWDTradeDeskWizardScanner?.runWizardScanFromContext?.(context)],
@@ -156,15 +157,10 @@
    ['reversal', () => global.FWDTradeDeskReversalScanner?.runReversalScanFromContext?.(context)],
    ['darvas', () => global.FWDTradeDeskDarvasScanner?.runDarvasScanFromContext?.(context)],
    ['pullback', () => global.FWDTradeDeskPullbackScanner?.runPullbackScanFromContext?.(context)],
-   ['native_straddle', () => global.FWDTradeDeskNativeStraddleScanner?.runNativeStraddleScan?.({ force: false })],
   ];
   const derived = {};
   for (const [id, runner] of tasks) {
    try {
-    if (id === 'native_straddle' && options.includeNative === false) {
-     derived[id] = { ok: true, skipped: true, count: 0 };
-     continue;
-    }
     const fn = runner;
     const result = typeof fn === 'function' ? await fn() : null;
     if (Array.isArray(result)) derived[id] = { ok: true, count: result.length };

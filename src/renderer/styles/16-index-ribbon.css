@@ -1,0 +1,140 @@
+/* Compact terminal-style index quote ribbon. */
+body.desktop-mode .d10-ribbon,
+.d10-ribbon {
+ display: grid !important;
+ grid-template-columns: 72px minmax(0, 1fr) auto auto !important;
+ align-items: center;
+ min-height: 42px;
+ height: 42px;
+ padding: 0 10px;
+ gap: 0;
+ border-radius: 6px;
+ border-color: rgba(214, 225, 205, .12);
+ background: rgba(8, 12, 10, .96);
+ overflow: hidden;
+}
+
+.d10-ribbon .d10-left {
+ display: flex;
+ flex-direction: column;
+ justify-content: center;
+ gap: 1px;
+ padding-right: 12px;
+ border-right: 1px solid rgba(214, 225, 205, .11);
+}
+
+.d10-ribbon .d10-name {
+ font-size: 9px;
+ line-height: 1;
+ letter-spacing: .13em;
+ color: #93a097;
+}
+
+.d10-ribbon .d10-sub {
+ font-size: 8px;
+ line-height: 1;
+ letter-spacing: .08em;
+ color: #00c78d;
+}
+
+body.desktop-mode .d10-ribbon .d10-benchmarks,
+.d10-ribbon .d10-benchmarks {
+ display: flex;
+ grid-column: 2;
+ align-items: stretch;
+ min-width: 0;
+ max-height: none;
+ height: 100%;
+ gap: 0;
+ overflow-x: auto;
+ scrollbar-width: none;
+}
+
+.d10-ribbon .d10-benchmarks::-webkit-scrollbar {
+ display: none;
+}
+
+.d10-ribbon-quote {
+ display: inline-flex;
+ align-items: center;
+ flex: 0 0 auto;
+ gap: 7px;
+ min-width: 0;
+ min-height: 0;
+ padding: 0 17px;
+ border-left: 1px solid rgba(214, 225, 205, .10);
+ white-space: nowrap;
+ background: transparent;
+}
+
+.d10-ribbon-quote:first-child {
+ border-left: 0;
+}
+
+.d10-ribbon-quote .d10-benchmark-label {
+ font-size: 10px;
+ color: #97a399;
+ letter-spacing: 0;
+ text-transform: none;
+}
+
+.d10-ribbon-quote .d10-benchmark-value {
+ font-size: 11px;
+ line-height: 1;
+ color: #e6ede8;
+ font-variant-numeric: tabular-nums;
+}
+
+.d10-ribbon-quote .d10-benchmark-copy {
+ font-size: 10px;
+ line-height: 1;
+ font-variant-numeric: tabular-nums;
+}
+
+.d10-ribbon-quote.good .d10-benchmark-copy {
+ color: #39d47a;
+}
+
+.d10-ribbon-quote.bad .d10-benchmark-copy {
+ color: #f25a64;
+}
+
+.d10-ribbon-quote.warn .d10-benchmark-copy {
+ color: #d8aa62;
+}
+
+.d10-ribbon .d10-summary,
+.d10-ribbon .d10-symbols {
+ display: none;
+}
+
+.d10-ribbon .d10-detail-btn {
+ min-height: 26px;
+ margin-left: 6px;
+ padding: 4px 9px;
+ border-radius: 5px;
+ font-size: 10px;
+}
+
+body.desktop-mode .d10-ribbon #d10chart {
+ grid-column: 3;
+}
+
+body.desktop-mode .d10-ribbon #d10detail {
+ grid-column: 4;
+}
+
+@media (max-width: 980px) {
+ body.desktop-mode .d10-ribbon,
+ .d10-ribbon {
+  grid-template-columns: 64px minmax(0, 1fr) auto !important;
+ }
+
+ .d10-ribbon #d10detail {
+  display: none;
+ }
+
+ body.desktop-mode .d10-ribbon #d10chart {
+  grid-column: 3;
+ }
+}
