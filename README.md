@@ -2,6 +2,8 @@
 
 Windows Electron desktop app for read-only Dhan market data, NSE/BSE scanning, option-chain analytics, chart review, manual trade planning, and local journals.
 
+This project is open source under the MIT License. It is intended for research, market review, and manual planning workflows; it does not place broker orders.
+
 ## Current Status
 
 - Framework: Electron desktop shell with Chrome-compatible renderer/runtime shims.
@@ -17,12 +19,19 @@ Windows Electron desktop app for read-only Dhan market data, NSE/BSE scanning, o
 ## Commands
 
 ```powershell
-npm install
+npm ci
 npm start
 npm run check
 npm run pack
 npm run dist
 ```
+
+## Open Source Maintenance
+
+- Public repository: https://github.com/Flywithdhiraj/fwd-bharat-marketdesk
+- Current release tag: `v0.1.0`
+- Maintainer focus: safe read-only broker-data workflows, India market scanner quality, and transparent desktop packaging.
+- Contributions are welcome for reliability, testing, accessibility, and documentation improvements.
 
 ## Architecture Notes
 
