@@ -26,6 +26,8 @@ yarn-error.log*
 # Tool caches
 .cache/
 .eslintcache
+dhan-instruments-cache.json
+scripts/dhan-instruments-cache.json
 
 # OS/editor noise
 Thumbs.db
