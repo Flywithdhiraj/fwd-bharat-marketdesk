@@ -4,6 +4,27 @@
   "private": true,
   "author": "Dhiraj Jha",
   "description": "FWD Bharat MarketDesk read-only NSE/BSE market-data desktop shell.",
+  "license": "MIT",
+  "homepage": "https://github.com/Flywithdhiraj/fwd-bharat-marketdesk#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Flywithdhiraj/fwd-bharat-marketdesk.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Flywithdhiraj/fwd-bharat-marketdesk/issues"
+  },
+  "keywords": [
+    "electron",
+    "dhan",
+    "nse",
+    "bse",
+    "market-data",
+    "trading-tools",
+    "options-analytics",
+    "india-markets",
+    "read-only",
+    "desktop"
+  ],
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
