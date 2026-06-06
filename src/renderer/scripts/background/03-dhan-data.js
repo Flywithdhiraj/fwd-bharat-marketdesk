@@ -26,6 +26,17 @@ const DHAN_SCANNER_UNIVERSE_LABELS = Object.freeze({
  midcap150: 'Midcap 150',
  smallcap250: 'Smallcap 250',
  all_nse: 'All NSE Equity',
+ nse_rest: 'NSE Rest',
+ nse_af: 'NSE A-F',
+ nse_gl: 'NSE G-L',
+ nse_mr: 'NSE M-R',
+ nse_sz: 'NSE S-Z',
+ all_bse: 'All BSE Equity',
+ bse_only: 'BSE Only',
+ bse_af: 'BSE A-F',
+ bse_gl: 'BSE G-L',
+ bse_mr: 'BSE M-R',
+ bse_sz: 'BSE S-Z',
 });
 
 function normalizeDhanScannerUniverse(value = '') {
@@ -36,6 +47,17 @@ function normalizeDhanScannerUniverse(value = '') {
  if (['midcap', 'midcap150', 'midcap_150'].includes(raw)) return 'midcap150';
  if (['smallcap', 'smallcap250', 'smallcap_250'].includes(raw)) return 'smallcap250';
  if (['all', 'all_nse', 'all_equity', 'nse'].includes(raw)) return 'all_nse';
+ if (['nse_rest', 'nse_remaining', 'nse_uncovered', 'nse_ex_overlap', 'nse_ex_core'].includes(raw)) return 'nse_rest';
+ if (['all_bse', 'bse', 'bse_equity', 'all_bse_equity'].includes(raw)) return 'all_bse';
+ if (['bse_only', 'bse_unique', 'bse_ex_nse', 'bse_not_nse'].includes(raw)) return 'bse_only';
+ if (['nse_a_f', 'nse_af', 'nse_1', 'nse_chunk_1'].includes(raw)) return 'nse_af';
+ if (['nse_g_l', 'nse_gl', 'nse_2', 'nse_chunk_2'].includes(raw)) return 'nse_gl';
+ if (['nse_m_r', 'nse_mr', 'nse_3', 'nse_chunk_3'].includes(raw)) return 'nse_mr';
+ if (['nse_s_z', 'nse_sz', 'nse_4', 'nse_chunk_4'].includes(raw)) return 'nse_sz';
+ if (['bse_a_f', 'bse_af', 'bse_1', 'bse_chunk_1'].includes(raw)) return 'bse_af';
+ if (['bse_g_l', 'bse_gl', 'bse_2', 'bse_chunk_2'].includes(raw)) return 'bse_gl';
+ if (['bse_m_r', 'bse_mr', 'bse_3', 'bse_chunk_3'].includes(raw)) return 'bse_mr';
+ if (['bse_s_z', 'bse_sz', 'bse_4', 'bse_chunk_4'].includes(raw)) return 'bse_sz';
  return raw || 'fno_stocks';
 }
 
@@ -50,7 +72,7 @@ async function dhanNative(action, payload = {}) {
    globalThis.fwdRecordDhanNativeApiMetric?.(action, missingBridge, startedAt);
    return missingBridge;
   }
-  const response = await bridge.sendNativeMessage({ type: 'dhan_data', action, ...payload });
+  const response = await bridge.sendNativeMessage({ ...payload, type: 'dhan_data', action });
   globalThis.fwdRecordDhanNativeApiMetric?.(action, response, startedAt);
   return response;
  } catch (error) {
@@ -172,7 +194,7 @@ function dhanInstrumentToProduct(item = {}) {
   createdAt: '',
   updatedAt: '',
    tags: ['Market Data Only', 'Manual Trading Only', universeLabel, item.fnoStock ? 'F&O Stock' : '', isIndex ? 'Index' : ''].filter(Boolean),
-  sector: isIndex ? 'Benchmark Index' : (item.exchangeSegment || item.exchange || 'NSE/BSE'),
+  sector: isIndex ? 'Benchmark Index' : (item.sector || globalThis.FWDTradeDeskShared?.getSector?.(symbol) || item.exchangeSegment || item.exchange || 'NSE/BSE'),
   assetClass: isIndex ? 'indian_index' : 'indian_equity',
    assetLabel: isIndex ? 'NSE Index' : universeLabel,
    assetBadge: isIndex ? 'Index' : universeLabel,
@@ -299,10 +321,10 @@ async function dhanFetchTickerMapForRenderer(options = {}) {
  const universe = normalizeDhanScannerUniverse(options.universe || 'fno_stocks');
  const limit = Math.max(1, Number(options.limit || 1500));
  const subscribeLiveFeed = options.subscribeLiveFeed !== false && options.autoSubscribeLiveFeed !== false;
- const broadUniverse = ['nifty500', 'midcap150', 'smallcap250', 'all_nse'].includes(universe);
+ const broadUniverse = ['nifty500', 'midcap150', 'smallcap250', 'all_nse', 'nse_rest', 'all_bse', 'bse_only', 'nse_af', 'nse_gl', 'nse_mr', 'nse_sz', 'bse_af', 'bse_gl', 'bse_mr', 'bse_sz'].includes(universe);
  const quoteAction = String(options.quoteAction || options.marketFeedAction || (broadUniverse ? 'ohlc' : 'quotes')).trim().toLowerCase();
- const quoteBatchSize = universe === 'all_nse' ? 1000 : universe === 'nifty500' ? 500 : 500;
- const quotePaceMs = universe === 'all_nse' ? 1300 : universe === 'nifty500' ? 1200 : 1100;
+ const quoteBatchSize = universe === 'all_nse' || universe === 'all_bse' ? 1000 : 500;
+ const quotePaceMs = universe === 'all_nse' || universe === 'all_bse' ? 1300 : universe === 'nifty500' ? 1200 : 1100;
  const [fnoProducts, benchmarkProducts] = await Promise.all([
   dhanFetchProductsForRenderer({ limit, universe }),
   dhanNative('instruments', { universe: 'indices', limit: 200 })
@@ -366,6 +388,7 @@ async function dhanFetchCandlesForRenderer(symbol, resolution, startSec, endSec,
   end: endSec,
   timeoutMs: Math.max(3000, Number(options.timeoutMs || 15000)),
   paceMs: Math.max(0, Number(options.paceMs || 0)),
+  failFastOnRateLimit: options.failFastOnRateLimit === true,
  });
  if (!response?.ok) throw new Error(response?.error || 'Market candles unavailable.');
  const rows = (Array.isArray(response.rows) ? response.rows : []).sort((a, b) => a.time - b.time);

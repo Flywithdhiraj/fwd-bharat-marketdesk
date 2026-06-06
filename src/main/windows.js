@@ -56,6 +56,9 @@ function bindCommonWindowEvents(win) {
    errorJournal?.append?.('renderer:gone', new Error(details.reason || 'renderer gone'), details);
    scheduleRendererReload('renderer process gone', details);
   });
+  win.webContents.on('did-finish-load', () => {
+   rendererReloads = 0;
+  });
   win.webContents.on('destroyed', () => auth.forgetWebContents(win.webContents.id));
  }
 
@@ -96,7 +99,6 @@ function bindCommonWindowEvents(win) {
    win.show();
   });
   win.webContents.on('did-finish-load', () => {
-   rendererReloads = 0;
    setTimeout(() => {
     win.webContents.executeJavaScript(`
  Promise.race([

@@ -375,7 +375,7 @@
  const candidates = [
  { key: '1d', label: '1D', source: signal.daily || signal.day || signal.mtf?.['1d'] || signal.mtf?.['1D'] },
  { key: '4h', label: '4H', source: signal.h4 || signal.fourHour || signal.mtf?.['4h'] || signal.mtf?.['4H'] },
- { key: '15m', label: '15M', source: signal.m15 || signal.fifteenMin || signal.mtf?.['15m'] || signal.mtf?.['15M'] },
+ { key: '4h', label: '4H', source: signal.m4h || signal.fourHour || signal.mtf?.['4h'] || signal.mtf?.['4H'] },
  ];
  return candidates.map(item => {
  const source = item.source && typeof item.source === 'object' ? item.source : {};

@@ -38,6 +38,7 @@ function assertCriticalSurfaces() {
  const panes = read('src/renderer/scripts/popup/06-pane-templates.js');
  const chartWorkspace = read('src/renderer/scripts/popup/07-chart-workspace.js');
  const commandCore = read('src/renderer/scripts/popup/00-core.js');
+ const scannerAnalytics = read('src/renderer/scripts/popup/02-scanner-analytics.js');
  const popupBoot = read('src/renderer/popup.js');
  const mainWindows = read('src/main/windows.js');
  const shell = read('src/renderer/scripts/popup/01-shell.js');
@@ -81,13 +82,20 @@ function assertCriticalSurfaces() {
  assert(appLock.includes('.app-lock-product-rail'), 'Homepage product rail CSS is missing.');
  assert(appLock.includes('@keyframes appLockFloat') && appLock.includes('@keyframes appLockBars'), 'Homepage animation CSS is missing.');
  assert(chartWorkspace.includes('data-ds-chart-trading-close') && chartWorkspace.includes('chartTradingToolsOpen'), 'Trading Mode must have an explicit restore/hide path.');
- assert(chartWorkspace.includes("const isCompareLayout = state.deskLayoutMode !== 'single'") && chartWorkspace.includes('void setNativeChartFullscreen(nextFullscreen)'), '1D + 15m fullscreen must keep comparison layout and avoid blocking on native fullscreen.');
+ assert(chartWorkspace.includes('const MAX_4H_HISTORY_CANDLES = 3000;'), '4H chart history limit must be defined before chart coverage is calculated.');
+ assert(chartWorkspace.includes("const isCompareLayout = state.deskLayoutMode !== 'single'") && chartWorkspace.includes('void setNativeChartFullscreen(nextFullscreen)'), '1D + 4H fullscreen must keep comparison layout and avoid blocking on native fullscreen.');
  assert(chartWorkspace.includes("presets: ['clean', 'decision', 'ema_obv']") && chartWorkspace.includes("label: 'EMA + OBV'"), 'Chart preset menu must include Clean and use the short EMA + OBV label.');
  assert(!chartWorkspace.includes("['recent', defaultVisibleCount(tf), 'Recent']") && chartWorkspace.includes('data-ds-chart-range="${escapeHtml(key)}"') && chartWorkspace.includes('Chart Range'), 'Chart range controls must move out of the main toolbar into Settings without a Recent button.');
  assert(!chartWorkspace.includes('DETACHED TRADING DESK') && !chartWorkspace.includes('Primary chart, execution chart, and tabbed context.') && !chartWorkspace.includes('event candle hidden'), 'Detached chart header must stay compact for chart space.');
  assert(commandCore.includes('command-next-card') && commandCore.includes('Decision-first cockpit'), 'Command Center must lead with the decision-first next-action card.');
  assert(commandCore.includes('Getting started state') && commandCore.includes('data-scan-now="1"'), 'Command Center must include a composed first-scan empty state.');
  assert(shell.includes('scheduleWorkspaceTabRender') && shell.includes('requestAnimationFrame') && commandCore.includes('renderActiveWorkspaceTab(tab, preloaded = null)'), 'Workspace renders must be coalesced through the rAF scheduler.');
+ assert(commandCore.includes('return !!data.scanActive && !failedStatus && !completedStatus;'), 'Scanner UI should trust background-owned active state during long data waits.');
+ assert(panes.includes('data-preset="breakout"') && panes.includes('data-preset="ema_obv"') && panes.includes('data-preset="sector_leaders"'), 'Scanner saved screen presets must include breakout, EMA + OBV, and sector leaders.');
+ assert(panes.includes('data-scan-universe="nse_rest"') && panes.includes('data-scan-universe="bse_only"'), 'Scanner universe cards must expose overlap-safe NSE Rest and BSE Only coverage.');
+ assert(scannerAnalytics.includes('Candle Cache') && scannerAnalytics.includes('Incremental') && scannerAnalytics.includes('incrementalRequests'), 'Scanner status strip must expose candle cache and incremental fetch stats.');
+ assert(!shell.includes('lastScanRecoveryAt'), 'Popup shell must not overwrite background scan state from a heartbeat heuristic.');
+ assert(shell.includes('const breadthPct = Number(mi.sentiment?.breadthPct ?? 0);'), 'Index detail modal must define its breadth value before rendering.');
  assert(finalTheme.includes('Final command-desk polish') && finalTheme.includes("--font-ui: 'Aptos'") && finalTheme.includes('.command-next-card'), 'Final theme polish must define calm tokens, typography, and decision-card styling.');
  assert(styles.includes("styles/11-bharat-marketdesk-theme.css") && bharatTheme.includes('FWD Bharat MarketDesk') && bharatTheme.includes('.india-module-card'), 'Bharat MarketDesk theme and module styling must be loaded.');
  assert(popupBoot.includes('installRendererBootRecovery') && popupBoot.includes('FWDRecoverBlankChartMode') && popupBoot.includes('Chart startup recovered'), 'Renderer must recover from blank chart-mode startup instead of leaving a dark window.');
@@ -95,7 +103,7 @@ function assertCriticalSurfaces() {
  assert(!popupBoot.includes('setTimeout(() => {\\n   recoverBlankChartMode'), 'Detached chart recovery must not use a fixed startup timer that can interrupt slow chart renders.');
  assert(chartWorkspace.includes('__fwdDetachedChartRenderComplete = true'), 'Detached chart startup must mark successful chart render completion.');
  assert(!popupBoot.includes("document.body?.classList.remove('chart-mode'"), 'Renderer recovery must not tear down a valid chart session for generic errors.');
- assert(mainWindows.includes('scheduleRendererReload') && mainWindows.includes('reloadIgnoringCache') && mainWindows.includes('renderer:reload-scheduled') && mainWindows.includes('rendererReloads = 0'), 'Main process must reload after renderer load/process failure and reset the retry budget after success.');
+ assert(mainWindows.includes('scheduleRendererReload') && mainWindows.includes('reloadIgnoringCache') && mainWindows.includes('renderer:reload-scheduled') && mainWindows.includes("win.webContents.on('did-finish-load'") && mainWindows.includes('rendererReloads = 0;'), 'Main process must reload after renderer load/process failure and reset the retry budget inside the owning scope.');
 }
 
 function assertRendererPartsExist() {

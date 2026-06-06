@@ -1,6 +1,8 @@
 const STALE_SCAN_HEARTBEAT_MS = 10 * 60 * 1000;
 const SCAN_HARD_DEADLINE_MS = 50 * 60 * 1000; // Full Nifty 500 scans are deliberately paced to avoid broker chart limits.
+const FULL_EQUITY_SCAN_HARD_DEADLINE_MS = 90 * 60 * 1000;
 let strategyLabAutoScanPromise = null;
+let scanExecutionPromise = null;
 globalThis.scanAbortRequested = false;
 
 async function resumeMarketLiveFeedAfterScan() {
@@ -23,18 +25,32 @@ async function markScanStoppedWithPartialFallback(defaultStatus = 'Scan stopped 
  }
 }
 
-function runScanWithDeadline() {
+async function resolveScanHardDeadlineMs() {
+ const data = await new Promise(resolve => chrome.storage.local.get(['strategy'], resolve)).catch(() => ({}));
+ const universe = sanitizeScanUniverseId(data?.strategy?.scanUniverse);
+ return ['all_nse', 'all_bse'].includes(universe)
+ ? FULL_EQUITY_SCAN_HARD_DEADLINE_MS
+ : SCAN_HARD_DEADLINE_MS;
+}
+
+async function runScanWithDeadline() {
+ if (scanExecutionPromise) return scanExecutionPromise;
+ const deadlineMs = await resolveScanHardDeadlineMs();
  let settled = false;
  return new Promise((resolve, reject) => {
  const timer = setTimeout(() => {
  if (settled) return;
  settled = true;
+ globalThis.scanAbortRequested = true;
  markScanStoppedWithPartialFallback('Scan timed out - restarting next cycle')
  .then(() => resumeMarketLiveFeedAfterScan())
  .catch(() => {})
  .finally(() => reject(new Error('Scan exceeded hard deadline')));
- }, SCAN_HARD_DEADLINE_MS);
- runScan()
+ }, deadlineMs);
+ scanExecutionPromise = runScan().finally(() => {
+  scanExecutionPromise = null;
+ });
+ scanExecutionPromise
  .then(r => { if (!settled) { settled = true; clearTimeout(timer); resolve(r); } })
  .catch(e => {
   resumeMarketLiveFeedAfterScan().finally(() => {
@@ -141,16 +157,9 @@ chrome.alarms.onAlarm.addListener(alarm => {
  if (chrome.runtime.lastError) return;
  const age = Date.now() - Number(data?.scanHeartbeat || 0);
  if (age > STALE_SCAN_HEARTBEAT_MS) {
- dlog(`Auto-scan: stale lock detected (${Math.round(age / 1000)}s old) - force-releasing and restarting`);
- scanRunPromise = null;
- await markScanStopped('Ready - stale scan recovered', 0);
- scanRunPromise = runScanWithDeadline()
- .then(() => runStrategyLabAutoScans())
- .catch(async e => {
- await markScanStoppedWithPartialFallback();
- dlog('Auto-scan err (recovered): ' + e.message);
- })
- .finally(() => { scanRunPromise = null; });
+ dlog(`Auto-scan: stale lock detected (${Math.round(age / 1000)}s old) - requesting cancellation`);
+ globalThis.scanAbortRequested = true;
+ await markScanStoppedWithPartialFallback('Scan stalled - cancellation requested; next auto-scan cycle will retry');
  } else {
  dlog(`Auto-scan skipped: scan already running (heartbeat ${Math.round(age / 1000)}s ago)`);
  }

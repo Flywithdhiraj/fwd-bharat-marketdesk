@@ -446,7 +446,7 @@ const SYMBOL_REFRESH_TTL_MS = 15000;
 const V17_CANDLE_CACHE_DB_NAME = 'FWDTradeDeskCandleCacheV1';
 const V17_CANDLE_CACHE_DB_VERSION = 1;
 const V17_CANDLE_CACHE_STORE = 'candles';
-const V17_NATIVE_CANDLE_RESOLUTIONS = new Set(['15m', '4h', '1d', '1w']);
+const V17_NATIVE_CANDLE_RESOLUTIONS = new Set(['4h', '1d', '1w']);
 const { sanitizeAutoScanInterval, sanitizeAlertTone } = globalThis.FWDTradeDeskShared;
 const FUNDING_INTERVAL_SEC = 8 * 60 * 60;
 const WEBHOOK_FAILURE_THRESHOLD = 3;
@@ -1236,10 +1236,10 @@ async function markWebhookFailure(hookId, hookName, ts, errorMessage) {
  type: 'basic',
  iconUrl: 'icons/icon48.png',
  title: 'Webhook paused after repeated failures',
- message: `${nextHook.name} is paused for 15 minutes.`,
+ message: `${nextHook.name} is paused temporarily.`,
  priority: 1,
  });
- dlog(`Link Webhook "${nextHook.name}" paused for 15m after repeated failures`);
+ dlog(`Link Webhook "${nextHook.name}" paused after repeated failures`);
  }
 
  return { hook: nextHook, cooldownTriggered, cooldownUntil };
@@ -1432,9 +1432,9 @@ async function saveAlertsWithLimit(alerts) {
  resistance: compactLevels(a.keyLevels?.byTimeframe?.['1D']?.resistance),
  support: compactLevels(a.keyLevels?.byTimeframe?.['1D']?.support),
  },
- '15m': {
- resistance: compactLevels(a.keyLevels?.byTimeframe?.['15m']?.resistance),
- support: compactLevels(a.keyLevels?.byTimeframe?.['15m']?.support),
+ '4h': {
+ resistance: compactLevels(a.keyLevels?.byTimeframe?.['4h']?.resistance),
+ support: compactLevels(a.keyLevels?.byTimeframe?.['4h']?.support),
  },
  },
  } : null;

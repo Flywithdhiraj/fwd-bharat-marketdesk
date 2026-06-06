@@ -25,8 +25,8 @@
   minIntradayClosePosition: 0.62,
  });
 
- const LIVE_15M = Object.freeze({ closedOnly: false });
- const CLOSED_DAILY = Object.freeze({ closedOnly: true });
+ const CLOSED_4H = Object.freeze({ closedOnly: true, timeoutMs: 30000, paceMs: 1800 });
+ const CLOSED_DAILY = Object.freeze({ closedOnly: true, timeoutMs: 30000, paceMs: 1800 });
 
  function pullbackNow() { return Date.now(); }
 
@@ -187,12 +187,12 @@
   const isShort = context.direction === 'short';
   if (rows.length < Number(settings.minIntradayCandles || 24)) {
    return {
-    state: 'no_15m',
-    label: 'No 15m timing',
+    state: 'no_4h',
+    label: 'No 4H timing',
     ready: false,
     scoreDelta: -8,
     confirmations: [],
-    blockers: ['Not enough 15m candles for entry timing'],
+    blockers: ['Not enough 4H candles for entry timing'],
    };
   }
   const last = rows[rows.length - 1];
@@ -225,15 +225,15 @@
   const structureOk = isShort ? lowerHigh : higherLow;
   const ready = !!(emaAligned && vwapAligned && triggerCandle && (structureOk || reclaimOrReject));
   const confirmations = [
-   emaAligned ? (isShort ? '15m below 9 EMA' : '15m above 9 EMA') : '',
-   vwapAligned ? (isShort ? '15m below VWAP' : '15m above VWAP') : '',
-   triggerCandle ? (isShort ? 'Clean 15m rejection candle' : 'Clean 15m reclaim candle') : '',
+   emaAligned ? (isShort ? '4H below 9 EMA' : '4H above 9 EMA') : '',
+   vwapAligned ? (isShort ? '4H below VWAP' : '4H above VWAP') : '',
+   triggerCandle ? (isShort ? 'Clean 4H rejection candle' : 'Clean 4H reclaim candle') : '',
    structureOk ? (isShort ? 'Lower-high structure' : 'Higher-low structure') : '',
   ].filter(Boolean);
   const blockers = [
-   !emaAligned ? (isShort ? '15m not below 9 EMA yet' : '15m not above 9 EMA yet') : '',
-   !vwapAligned ? (isShort ? '15m not below VWAP yet' : '15m not above VWAP yet') : '',
-   !triggerCandle ? (isShort ? 'Need clean 15m rejection candle' : 'Need clean 15m reclaim candle') : '',
+   !emaAligned ? (isShort ? '4H not below 9 EMA yet' : '4H not above 9 EMA yet') : '',
+   !vwapAligned ? (isShort ? '4H not below VWAP yet' : '4H not above VWAP yet') : '',
+   !triggerCandle ? (isShort ? 'Need clean 4H rejection candle' : 'Need clean 4H reclaim candle') : '',
    !structureOk && !reclaimOrReject ? (isShort ? 'Need lower-high or breakdown proof' : 'Need higher-low or breakout proof') : '',
   ].filter(Boolean);
   const trigger = isShort
@@ -241,7 +241,7 @@
    : Math.max(Number(last.high || close), ema9 || close, vwap || close);
   return {
    state: ready ? 'entry_ready' : 'setup_wait_trigger',
-   label: ready ? (isShort ? '15m short trigger ready' : '15m long trigger ready') : 'Wait 15m trigger',
+   label: ready ? (isShort ? '4H short trigger ready' : '4H long trigger ready') : 'Wait 4H trigger',
    ready,
    scoreDelta: ready ? 12 : -4,
    confirmations,
@@ -394,7 +394,7 @@ async function pullbackLoadSettings() {
    ['9 EMA touch', Number(parts.touch || 0)],
    ['Reclaim/reject proof', Number(parts.reclaim || 0)],
    ['Daily candle proof', Number(parts.candleProof || 0)],
-   ['15m timing trigger', Number(parts.intradayTiming || 0)],
+   ['4H timing trigger', Number(parts.intradayTiming || 0)],
    ['Market regime', Number(parts.marketRegime || 0)],
    ['OBV confirmation', Number(parts.obv || 0)],
    ['Risk reward', Number(parts.riskReward || 0)],
@@ -539,7 +539,7 @@ async function pullbackLoadSettings() {
   if (dailyProof.clean) { scoreParts.candleProof = 10; reasons.push(dailyProof.label); }
   else if (touchedRecently) blockers.push(shortBias ? 'Daily rejection candle is not clean yet' : 'Daily reclaim candle is not clean yet');
   if (timingRead.ready) { scoreParts.intradayTiming = 12; reasons.push(timingRead.label); }
-  else if (touchedRecently) blockers.push(timingRead.blockers[0] || 'Wait for 15m timing trigger');
+  else if (touchedRecently) blockers.push(timingRead.blockers[0] || 'Wait for 4H timing trigger');
   if (marketRead.supportive) { scoreParts.marketRegime = 6; reasons.push(marketRead.confirmations[0] || 'Market regime supports pullback side'); }
   if (!marketRead.fit) { scoreParts.marketPenalty = -18; blockers.push(marketRead.blockers[0] || 'Market regime is against this setup'); }
   if (!entryFresh && touchedRecently) blockers.push(`${shortBias ? 'Short' : 'Long'} entry is not close to the 9 EMA sweet spot`);
@@ -579,7 +579,7 @@ async function pullbackLoadSettings() {
     ? 'Market against - wait'
     : timingRead.ready
     ? 'Setup valid - review manually'
-    : 'Daily setup - wait 15m trigger';
+    : 'Daily setup - wait 4H trigger';
    priorityLabel = !marketRead.fit ? 'Blocked by market' : 'Setup valid';
   } else if (rawDailySetup && touchedRecently && !lowLiquidity) {
    eventType = shortBias ? 'ema_pullback_short' : 'ema_pullback';
@@ -623,7 +623,7 @@ async function pullbackLoadSettings() {
    !(shortBias || trendUp) ? 'Trend not clean' : '',
    shortBias && !reject && touchedRecently ? 'Needs clean 9 EMA rejection candle' : '',
    !shortBias && !reclaim && touchedRecently ? 'Needs clean reclaim candle' : '',
-   dailySetup && !timingRead.ready ? '15m trigger not ready' : '',
+   dailySetup && !timingRead.ready ? '4H trigger not ready' : '',
    !marketRead.fit ? 'Market regime against setup' : '',
    lateEntry ? (shortBias ? 'Late below 9 EMA' : 'Late above 9 EMA') : '',
    rrToTarget1 > 0 && rrToTarget1 < 1.4 ? 'Weak reward from current price' : '',
@@ -656,10 +656,10 @@ async function pullbackLoadSettings() {
    label: workflowLabel,
    entryCommand: entryReady
     ? shortBias
-     ? `Sell below ${pullbackRound(timingRead.triggerPrice || entry, 8)} after 15m rejection`
-     : `Buy above ${pullbackRound(timingRead.triggerPrice || entry, 8)} after 15m reclaim`
+     ? `Sell below ${pullbackRound(timingRead.triggerPrice || entry, 8)} after 4H rejection`
+     : `Buy above ${pullbackRound(timingRead.triggerPrice || entry, 8)} after 4H reclaim`
     : dailySetup
-    ? shortBias ? 'Daily short setup valid - wait for 15m trigger' : 'Daily long setup valid - wait for 15m trigger'
+    ? shortBias ? 'Daily short setup valid - wait for 4H trigger' : 'Daily long setup valid - wait for 4H trigger'
     : eventType === 'avoid_chase'
     ? shortBias ? 'Do not short here; wait for a fresh 9 EMA rally' : 'Do not buy here; wait for a fresh 9 EMA pullback'
     : actionLabel,
@@ -748,7 +748,7 @@ async function pullbackLoadSettings() {
     volumeRatio: pullbackRound(volumeRatio, 2),
     latestQuoteVolume: pullbackRound(latestQuoteVolume, 0),
     change24h: pullbackRound(Number(ticker?.change24h || pullbackPct(Number(last.close || price), Number(prev.close || 0)) || 0), 2),
-    candleCount15m: intraday.length,
+    candleCount4h: intraday.length,
     candleCount1d: daily.length,
     dailyProof,
     timing: timingRead,
@@ -812,7 +812,7 @@ async function pullbackLoadSettings() {
      skipped.insufficientHistory += 1;
      continue;
     }
-    const intraday = await fetchCandles(item.symbol, '15m', settings.preferredIntradayCandles, LIVE_15M).catch(() => []);
+    const intraday = await fetchCandles(item.symbol, '4h', settings.preferredIntradayCandles, CLOSED_4H).catch(() => []);
     const result = pullbackAnalyzeSymbol(item.symbol, daily, Array.isArray(intraday) ? intraday : [], item.ticker, { settings, marketIndex });
     if (result.eventType === 'review') skipped.reviewOnly += 1;
     results.push(result);
@@ -876,7 +876,7 @@ async function pullbackLoadSettings() {
      if (!daily.length) skipped.noContextCandles += 1;
      continue;
     }
-    const intraday = getContextCandles?.(context, item.symbol, '15m', settings.preferredIntradayCandles) || [];
+    const intraday = getContextCandles?.(context, item.symbol, '4h', settings.preferredIntradayCandles) || [];
     const result = pullbackAnalyzeSymbol(item.symbol, daily, intraday, item.ticker, { settings, marketIndex });
     if (result.eventType === 'review') skipped.reviewOnly += 1;
     results.push(result);

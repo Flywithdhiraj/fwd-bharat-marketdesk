@@ -22,8 +22,8 @@ const requiredChartTokens = [
   'openV16ProtectionOrderPreview',
   'Limited candle history',
   'The chart can still render, but indicators need more history.',
-  'MAX_15M_HISTORY_DAYS = 90',
-  "timeframe === '15m' ? MAX_15M_HISTORY_CANDLES : MAX_RENDER_CANDLES",
+  'MAX_RENDER_CANDLES = 20000',
+  'Limited candle history',
 ];
 
 const requiredV16Tokens = [

@@ -4,7 +4,7 @@ const { readJsonFile, writeJsonFile, removeFileIfExists, listJsonFiles } = requi
 
 const MAX_CANDLE_FILES = 2500;
 const MAX_CANDLE_BYTES = 2 * 1024 * 1024 * 1024;
-const NATIVE_CANDLE_RESOLUTIONS = new Set(['1d', '15m']);
+const NATIVE_CANDLE_RESOLUTIONS = new Set(['1d', '4h', '1w']);
 
 function candleCacheKey(symbol = '', resolution = '') {
  const safeSymbol = String(symbol || '').trim().toUpperCase().replace(/[^A-Z0-9._-]/g, '_').slice(0, 80);
@@ -100,7 +100,7 @@ function createCandleCache({ app, errorJournal } = {}) {
  }
 
  async function put({ symbol, resolution, rows, updatedAt }, mode = 'merge') {
-  if (!isNativeCandleResolution(resolution)) return { ok: false, error: 'Native candle-store supports only 1d and 15m candles.' };
+  if (!isNativeCandleResolution(resolution)) return { ok: false, error: 'Native candle-store supports only 1d, 4h and 1w candles.' };
   const filePath = filePathFor(symbol, resolution);
   if (!filePath) return { ok: false, error: 'Symbol and resolution are required.' };
   const current = mode === 'replace' ? {} : await readJsonFile(filePath, {});
@@ -127,7 +127,7 @@ function createCandleCache({ app, errorJournal } = {}) {
     resolution: String(resolution || '').trim().toLowerCase(),
     rows: [],
     updatedAt: 0,
-    error: 'Native candle-store supports only 1d and 15m candles.',
+    error: 'Native candle-store supports only 1d, 4h and 1w candles.',
    };
   }
   const filePath = filePathFor(symbol, resolution);

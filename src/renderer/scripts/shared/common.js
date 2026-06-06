@@ -52,6 +52,44 @@
  'Other': [],
  };
 
+ function normalizeIndianEquitySymbol(value = '') {
+ const raw = String(value || '').trim().toUpperCase();
+ return raw
+ .replace(/\.(NS|BO|BSE|NSE)$/i, '')
+ .replace(/-(EQ|BE|BZ|SM|ST|X|XT|A|B|T)$/i, '')
+ .replace(/_(EQ|NSE|BSE)$/i, '')
+ .replace(/\s+/g, '');
+ }
+
+ function getIndianEquitySector(value = '') {
+ const raw = normalizeIndianEquitySymbol(value);
+ if (!raw) return '';
+ const aliases = new Set([raw]);
+ aliases.add(raw.replace(/&/g, 'AND'));
+ aliases.add(raw.replace(/AND/g, '&'));
+ const extra = {
+  'Banking & Finance': ['CANBK', 'FEDERALBNK', 'IDFCFIRSTB', 'RBLBANK', 'BANDHANBNK', 'UNIONBANK', 'IOB', 'INDIANB', 'LICHSGFIN', 'RECLTD', 'PFC', 'IRFC', 'IEX', 'CDSL', 'BSE', 'MCX', 'ANGELONE', '360ONE', 'JIOFIN', 'LICI', 'ICICIGI', 'ICICIPRULI', 'HDFCAMC', 'ABCAPITAL'],
+  'IT Services': ['TATAELXSI', 'KPITTECH', 'OFSS', 'CYIENT', 'SONATSOFTW', 'BSOFT', 'LTTS', 'INTELLECT', 'HAPPSTMNDS', 'NEWGEN'],
+  'Energy & Utilities': ['OIL', 'PETRONET', 'GAIL', 'IGL', 'MGL', 'GSPL', 'SJVN', 'NHPC', 'JSWENERGY', 'TORNTPOWER', 'ADANIPOWER', 'INOXWIND', 'SUZLON'],
+  'Consumer': ['TITAN', 'TRENT', 'NYKAA', 'PAGEIND', 'JUBLFOOD', 'DEVYANI', 'UBL', 'UNITDSPR', 'COLPAL', 'GODREJCP', 'EMAMILTD', 'PATANJALI', 'VOLTAS', 'CROMPTON', 'BLUESTARCO', 'KALYANKJIL'],
+  'Auto': ['BOSCHLTD', 'MOTHERSON', 'BHARATFORG', 'MRF', 'BALKRISIND', 'APOLLOTYRE', 'EXIDEIND', 'AMARAJABAT', 'ESCORTS', 'SONACOMS', 'UNOMINDA', 'TIINDIA', 'OLECTRA'],
+  'Pharma & Healthcare': ['MAXHEALTH', 'FORTIS', 'MEDANTA', 'ALKEM', 'MANKIND', 'LAURUSLABS', 'IPCALAB', 'ABBOTINDIA', 'AJANTPHARM', 'NATCOPHARM', 'SYNGENE', 'GRANULES', 'METROPOLIS', 'LALPATHLAB'],
+  'Metals & Materials': ['SAIL', 'NMDC', 'APLAPOLLO', 'RATNAMANI', 'HINDCOPPER', 'HINDZINC', 'CENTURYPLY', 'ACC', 'AMBUJACEM', 'DALBHARAT', 'RAMCOCEM', 'JKCEMENT', 'JKLAKSHMI', 'AIAENG'],
+  'Capital Goods': ['CGPOWER', 'THERMAX', 'VOLTAMP', 'HAVELLS', 'KEI', 'KAYNES', 'DIXON', 'BDL', 'MAZDOCK', 'COCHINSHIP', 'RVNL', 'IRCON', 'NBCC', 'ENGINERSIN', 'KPRMILL'],
+  'Telecom & Media': ['TATACOMM', 'HFCL', 'DISHTV', 'PVRINOX', 'SAREGAMA', 'NETWORK18', 'ZEEL'],
+  'Realty & Infra': ['PHOENIXLTD', 'PRESTIGE', 'BRIGADE', 'SOBHA', 'MAHLIFE', 'NBCC', 'PNCINFRA', 'KNRCON', 'NCC', 'JWL', 'GPPL'],
+  'Chemicals': ['PIDILITIND', 'UPL', 'SRF', 'AARTIIND', 'DEEPAKNTR', 'TATACHEM', 'NAVINFLUOR', 'ATUL', 'ALKYLAMINE', 'FLUOROCHEM', 'CLEAN', 'BALAMINES'],
+  'Textiles': ['VARDHMAN', 'TRIDENT', 'WELSPUNLIV', 'RAYMOND', 'ARVIND', 'GARFIBRES'],
+ };
+ for (const [label, symbols] of Object.entries(SECTORS)) {
+  if ((symbols || []).some(symbol => aliases.has(normalizeIndianEquitySymbol(symbol)))) return label;
+ }
+ for (const [label, symbols] of Object.entries(extra)) {
+  if ((symbols || []).some(symbol => aliases.has(normalizeIndianEquitySymbol(symbol)))) return label;
+ }
+ return '';
+ }
+
  const RWA_ASSET_TYPES = Object.freeze({
  tokenized_stock: Object.freeze({
  label: 'Tokenized Stock',
@@ -1173,7 +1211,7 @@
  const stopLoss = Math.max(0, Number(signal?.sl || signal?.stopLoss || 0));
  const takeProfit = Math.max(0, Number(signal?.tp1 || signal?.tp || signal?.takeProfit || 0));
  const setupFamily = sanitizeSetupFamilyKey(signal?.setupFamily || signal?.setupFamilyLabel || 'mixed') || 'mixed';
- const timeframe = sanitizeText(signal?.lower?.label || signal?.tf2 || signal?.timeframe || '15m', '15m', 16);
+ const timeframe = sanitizeText(signal?.lower?.label || signal?.tf2 || signal?.timeframe || '4h', '4h', 16);
  const marketRegime = sanitizeMarketRegime(signal?.marketRegime || 'UNKNOWN');
  const idSeed = [
  symbol,
@@ -1275,7 +1313,7 @@
  const closedAt = Number(trade?.closedAt || trade?.ts || 0);
  if (!(closedAt > 0)) return;
  const familyKey = sanitizeSetupFamilyKey(trade?.setupFamilyKey || trade?.setupFamily || trade?.setupFamilyLabel || 'untagged') || 'untagged';
- const timeframe = sanitizeText(trade?.timeframe || trade?.tf2 || '15m', '15m', 16);
+ const timeframe = sanitizeText(trade?.timeframe || trade?.tf2 || '4h', '4h', 16);
  const marketRegime = sanitizeMarketRegime(trade?.marketRegime || 'UNKNOWN');
  const key = `${familyKey}|${timeframe}|${marketRegime}`;
  const row = rows.get(key) || {
@@ -2055,6 +2093,8 @@
 
  function getSector(sym) {
  const raw = String(sym || '').toUpperCase();
+ const indianSector = getIndianEquitySector(raw);
+ if (indianSector) return indianSector;
  const base = normalizeBaseSymbol(raw);
  const assetInfo = inferRwaAssetInfo(raw);
  if (assetInfo?.sector) return assetInfo.sector;
@@ -2317,6 +2357,8 @@
  getSetupFamilyMeta,
  formatThresholdSummary,
  normalizeBaseSymbol,
+ normalizeIndianEquitySymbol,
+ getIndianEquitySector,
  inferRwaAssetInfo,
  resolveTokenizedStockMeta,
  classifyDeltaInstrument,

@@ -74,16 +74,16 @@
  .sort((a, b) => scoreSignalForChart(b) - scoreSignalForChart(a))[0] || null;
  }
 
-function signalTimeframe(signal = {}, fallback = '15m') {
+function signalTimeframe(signal = {}, fallback = '4h') {
  const lowerLabel = String(signal?.lower?.label || '').trim().toLowerCase();
- return normalizeTimeframe(lowerLabel || signal?.timeframe || signal?.raw?.timeframe || fallback || '15m');
+ return normalizeTimeframe(lowerLabel || signal?.timeframe || signal?.raw?.timeframe || fallback || '4h');
 }
 
  async function setChartSymbolFromSignal(signal = {}, options = {}) {
  const symbol = String(signal?.symbol || options.symbol || '').trim().toUpperCase();
  if (!symbol) return null;
  const current = await getChartState();
- const timeframe = normalizeTimeframe(options.timeframe || signalTimeframe(signal, current.timeframe || '15m'));
+ const timeframe = normalizeTimeframe(options.timeframe || signalTimeframe(signal, current.timeframe || '4h'));
  const hasOption = key => Object.prototype.hasOwnProperty.call(options, key);
  const providedDraft = normalizeChartTradingDraft(options.chartTradingDraft || signal.chartTradingDraft);
  const stageMetrics = signal?.raw?.stageMetrics && typeof signal.raw.stageMetrics === 'object' ? signal.raw.stageMetrics : null;
@@ -115,6 +115,7 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  return setChartState({
  symbol,
  timeframe,
+ commoditySpread: signal.commoditySpread && typeof signal.commoditySpread === 'object' ? signal.commoditySpread : null,
  visibleCandleCount: hasOption('visibleCandleCount') ? Math.max(24, Math.min(MAX_RENDER_CANDLES, Number(options.visibleCandleCount || 0) || defaultVisibleCount(timeframe))) : (current.visibleCandleCount || defaultVisibleCount(timeframe)),
  preset: normalizePreset(options.preset || current.preset || 'key'),
  showOrders: hasOption('showOrders') ? !!options.showOrders : !!current.showOrders,
@@ -249,7 +250,7 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  }, {
  chartViewMode: 'tab',
  preset: current.preset || 'clean',
- timeframe: current.timeframe || '15m',
+ timeframe: current.timeframe || '4h',
  chartTradingDraft: tab.chartTradingDraft || null,
  chartTradingToolsOpen: !!tab.chartTradingDraft,
  showOrders: current.showOrders,
@@ -258,7 +259,7 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  intelligenceOverlays: current.intelligenceOverlays,
  deskLayoutMode: current.deskLayoutMode || 'single',
  overlayDensity: current.overlayDensity || 'minimal',
- primaryTimeframe: current.primaryTimeframe || current.timeframe || '15m',
+ primaryTimeframe: current.primaryTimeframe || current.timeframe || '4h',
  });
  const latest = await getChartState();
  return setChartState({
@@ -310,8 +311,8 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  if (!best) return current;
  return setChartSymbolFromSignal(best, {
  preset: 'key',
- timeframe: '15m',
- primaryTimeframe: '15m',
+ timeframe: '4h',
+ primaryTimeframe: '4h',
  chartViewMode: 'tab',
  showOrders: false,
  showVwap: false,
@@ -347,7 +348,7 @@ function signalTimeframe(signal = {}, fallback = '15m') {
 
  function resolutionCoverageRequirement(state = {}) {
  const timeframe = normalizeTimeframe(state.timeframe);
- const maxHistoryCount = timeframe === '15m' ? MAX_15M_HISTORY_CANDLES : MAX_RENDER_CANDLES;
+ const maxHistoryCount = timeframe === '4h' ? MAX_4H_HISTORY_CANDLES : MAX_RENDER_CANDLES;
  const baseVisible = state.replaySeed?.baselineVisibleCount || defaultVisibleCount(timeframe);
  const visible = Math.max(baseVisible, Math.round(Number(state.visibleCandleCount || baseVisible) || baseVisible));
  const paddedCount = Math.min(maxHistoryCount, Math.max(80, visible + (FETCH_BUFFER_COUNTS[timeframe] || 80)));
@@ -394,7 +395,7 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  nextCache[cacheKey] = payload;
  Object.keys(nextCache).forEach(key => {
  const entry = nextCache[key];
- const timeframe = normalizeTimeframe(key.split(':')[1] || '15m');
+ const timeframe = normalizeTimeframe(key.split(':')[1] || '4h');
  const ttl = (TTL_MS[timeframe] || 60000) * 4;
  if ((Date.now() - Number(entry?.fetchedAt || 0)) > ttl) delete nextCache[key];
  });
@@ -403,7 +404,7 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  .slice(0, 8));
  }
 
- function cacheEntryFresh(entry = null, timeframe = '15m') {
+ function cacheEntryFresh(entry = null, timeframe = '4h') {
  if (!entry || typeof entry !== 'object') return false;
  return (Date.now() - Number(entry.fetchedAt || 0)) < ((TTL_MS[normalizeTimeframe(timeframe)] || 60000) * 4);
  }
@@ -1206,7 +1207,7 @@ function signalTimeframe(signal = {}, fallback = '15m') {
 
  async function loadChartDataset(state = {}, strategy = {}, options = {}) {
  const symbol = String(state.symbol || '').trim().toUpperCase();
- const timeframe = normalizeTimeframe(state.timeframe || '15m');
+ const timeframe = normalizeTimeframe(state.timeframe || '4h');
  if (!symbol) {
  return {
  ok: false,
@@ -1219,6 +1220,43 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  }
  if (isFwdIndexSymbol(symbol)) {
  return loadFwdIndexChartDataset({ ...state, symbol: normalizeFwdIndexSyntheticSymbol(symbol) || FWD_INDEX_SYMBOL, timeframe: '1d' }, strategy);
+ }
+ if (state.commoditySpread && symbol.startsWith('MCX-SPREAD:')) {
+ const requirement = resolutionCoverageRequirement(state);
+ const bridge = globalThis.fwdDesktopNative;
+ const response = bridge?.sendNativeMessage
+ ? await bridge.sendNativeMessage({
+ ...state.commoditySpread,
+ resolution: timeframe,
+ start: requirement.startMs || undefined,
+ end: requirement.endMs || undefined,
+ force: options.force === true,
+ type: 'dhan_data',
+ action: 'commodity_spread_chart',
+ })
+ : { ok: false, error: 'Desktop market-data bridge is not available.' };
+ if (!response?.ok) {
+ return {
+ ok: false,
+ error: response?.error || 'Failed to load synthetic commodity spread candles.',
+ candles: [],
+ studies: {},
+ keyLevels: null,
+ fetchedAt: 0,
+ };
+ }
+ return {
+ ok: true,
+ symbol,
+ displayName: response.displayName || state.commoditySpread.label || symbol,
+ timeframe,
+ candles: (Array.isArray(response.candles) ? response.candles : []).map(normalizeCandle).filter(candle => candle.time > 0),
+ studies: {},
+ keyLevels: null,
+ fetchedAt: Date.now(),
+ commoditySpread: response.pair || state.commoditySpread,
+ spreadAnalysis: response.analysis || null,
+ };
  }
  const requirement = resolutionCoverageRequirement(state);
  const cacheKey = `${symbol}:${timeframe}`;
@@ -1875,7 +1913,7 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  };
  }
 
- function rankSahiKeyZones(zones = [], settings = {}, referencePrice = 0, chartTimeframe = '15m') {
+ function rankSahiKeyZones(zones = [], settings = {}, referencePrice = 0, chartTimeframe = '4h') {
  const limit = 4;
  const byKind = ['resistance', 'support'].flatMap(kind => {
  return mergeNearbyKeyZones(
@@ -1940,14 +1978,14 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  .sort((a, b) => kind === 'resistance' ? Number(a.price || 0) - Number(b.price || 0) : Number(b.price || 0) - Number(a.price || 0));
  }
 
- function mapChartTfToKeyLevelTf(chartTimeframe = '15m') {
+ function mapChartTfToKeyLevelTf(chartTimeframe = '4h') {
  const tf = normalizeTimeframe(chartTimeframe);
  if (tf === '1d') return '1D';
  if (['4h', '1h'].includes(tf)) return '1D';
- return '15m';
+ return '4h';
  }
 
- function collectVisibleKeyZones(keyLevels = null, settings = {}, referencePrice = 0, chartTimeframe = '15m') {
+ function collectVisibleKeyZones(keyLevels = null, settings = {}, referencePrice = 0, chartTimeframe = '4h') {
  if (!keyLevels || typeof keyLevels !== 'object') return [];
  const smartSettings = { ...settings, chartTimeframe };
  const brokerZones = [

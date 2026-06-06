@@ -54,8 +54,18 @@
   spreadStatus: 'idle',
   spreadError: '',
   spreadAnalysis: null,
+  spreadDeskStatus: 'idle',
+  spreadDeskError: '',
+  spreadRows: [],
+  spreadSummary: null,
+  spreadDeskType: 'all',
+  selectedSpreadKey: '',
+  spreadDeskProgress: null,
+  spreadDeskRunId: 0,
+  spreadDeskStopRequested: false,
  };
  let livePollTimer = null;
+ let spreadQuoteTimer = null;
 
  function esc(value) {
   return String(value == null ? '' : value)
@@ -96,10 +106,30 @@
   return date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
  }
 
+ function dateInputValue(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+ }
+
+ function lastCompletedMarketDate(now = new Date()) {
+  const date = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  date.setDate(date.getDate() - 1);
+  while (date.getDay() === 0 || date.getDay() === 6) date.setDate(date.getDate() - 1);
+  return dateInputValue(date);
+ }
+
  async function marketData(action, payload = {}) {
   const bridge = global.fwdDesktopNative;
   if (!bridge?.sendNativeMessage) return { ok: false, error: 'Desktop market-data bridge is not available.' };
-  return bridge.sendNativeMessage({ type: 'dhan_data', action, ...payload });
+  return bridge.sendNativeMessage({ ...payload, type: 'dhan_data', action });
+ }
+
+ async function notifySpread(title = '', body = '') {
+  const bridge = global.fwdDesktopNative;
+  if (!bridge?.sendNativeMessage) return;
+  await bridge.sendNativeMessage({ type: 'desktop_notification', title, body, urgency: 'high' }).catch(() => {});
  }
 
  function matchingRows() {
@@ -140,6 +170,103 @@
     liveAt: Math.max(Number(near?.updatedAt || 0), Number(next?.updatedAt || 0)),
    };
   });
+  state.spreadRows = state.spreadRows.map(row => {
+   const first = ticks.get(String(row.firstInstrument?.securityId || ''));
+   const second = ticks.get(String(row.secondInstrument?.securityId || ''));
+   const firstPrice = Number(first?.lastPrice || row.firstPrice || 0);
+   const secondPrice = Number(second?.lastPrice || row.secondPrice || 0);
+   return {
+    ...row,
+    firstPrice,
+    secondPrice,
+    spread: firstPrice > 0 && secondPrice > 0 ? secondPrice - firstPrice : row.spread,
+   };
+  });
+  checkSpreadAlerts();
+ }
+
+ function mergeSpreadQuotes(response = {}) {
+  const updates = new Map((Array.isArray(response.rows) ? response.rows : []).map(row => [String(row.key || ''), row]));
+  if (!updates.size) return;
+  state.spreadRows = state.spreadRows.map(row => {
+   const update = updates.get(String(row.key || ''));
+   if (!update) return row;
+   const analysis = row.analysis || {};
+   const targetMove = analysis.direction === 'widening'
+    ? Number(analysis.targetSpread || 0) - Number(update.spread || 0)
+    : analysis.direction === 'narrowing'
+     ? Number(update.spread || 0) - Number(analysis.targetSpread || 0)
+     : 0;
+   const slippagePoints = analysis.direction === 'widening'
+    ? Number(update.costs?.wideningSlippagePoints || 0)
+    : analysis.direction === 'narrowing'
+     ? Number(update.costs?.narrowingSlippagePoints || 0)
+     : 0;
+   const costRequiredMove = Number(update.costs?.brokerageBreakevenPoints || 0) + slippagePoints;
+   const costEdgeAvailable = targetMove > costRequiredMove;
+   const blockers = [
+    ...(update.safeguards?.warnings || []),
+    ...(analysis.direction === 'range' ? ['Three EMA and OBV are not aligned.'] : []),
+    ...(!costEdgeAvailable && analysis.direction !== 'range' ? ['Target move does not clear fixed brokerage and visible entry slippage.'] : []),
+   ];
+   return {
+    ...row,
+    ...update,
+    analysis: {
+     ...analysis,
+     blockers,
+     targetMove,
+     costRequiredMove,
+     costEdgeAvailable,
+     tradeAllowed: update.safeguards?.tradeAllowed === true && analysis.direction !== 'range' && costEdgeAvailable,
+    },
+   };
+  });
+  checkSpreadAlerts();
+ }
+
+ function checkSpreadAlerts() {
+  let changed = false;
+  state.plans = state.plans.map(plan => {
+   if (plan.scope !== 'spread') return plan;
+   const row = state.spreadRows.find(item => item.key === plan.spreadKey);
+   if (!row) return plan;
+   const current = Number(row.spread);
+   if (!Number.isFinite(current)) return plan;
+   const next = { ...plan };
+   const targetHit = plan.direction === 'widening'
+    ? current >= Number(plan.targetSpread)
+    : plan.direction === 'narrowing' && current <= Number(plan.targetSpread);
+   const stopHit = plan.direction === 'widening'
+    ? current <= Number(plan.stopSpread)
+    : plan.direction === 'narrowing' && current >= Number(plan.stopSpread);
+   const directionChanged = row.analysis?.direction && row.analysis.direction !== 'range' && row.analysis.direction !== plan.direction;
+   const entryHit = plan.direction === 'widening'
+    ? current >= Number(plan.entryTrigger)
+    : plan.direction === 'narrowing' && current <= Number(plan.entryTrigger);
+   if (entryHit && !plan.entryAlertedAt) {
+    next.entryAlertedAt = Date.now();
+    notifySpread(`${plan.symbol} entry trigger reached`, `Spread ${signed(current)} crossed trigger ${signed(plan.entryTrigger)}.`);
+    changed = true;
+   }
+   if (targetHit && !plan.targetAlertedAt) {
+    next.targetAlertedAt = Date.now();
+    notifySpread(`${plan.symbol} target reached`, `Spread ${signed(current)} crossed target ${signed(plan.targetSpread)}.`);
+    changed = true;
+   }
+   if (stopHit && !plan.stopAlertedAt) {
+    next.stopAlertedAt = Date.now();
+    notifySpread(`${plan.symbol} stop reached`, `Spread ${signed(current)} crossed stop ${signed(plan.stopSpread)}.`);
+    changed = true;
+   }
+   if (directionChanged && !plan.directionAlertedAt) {
+    next.directionAlertedAt = Date.now();
+    notifySpread(`${plan.symbol} direction changed`, `Saved ${plan.direction} watch is now ${row.analysis.direction}.`);
+    changed = true;
+   }
+   return next;
+  });
+  if (changed) writePlans(state.plans);
  }
 
  async function pollLive() {
@@ -151,13 +278,25 @@
   render();
  }
 
+ async function refreshSpreadQuotes() {
+  if (state.workspaceView !== 'spread' || !state.spreadRows.length) return;
+  const response = await marketData('commodity_spread_quotes', { pairs: state.spreadRows }).catch(() => null);
+  if (!response?.ok) return;
+  mergeSpreadQuotes(response);
+  render();
+ }
+
  function beginLivePoll() {
   if (livePollTimer) return;
   livePollTimer = global.setInterval(() => pollLive().catch(() => {}), 2500);
+  if (!spreadQuoteTimer) spreadQuoteTimer = global.setInterval(() => refreshSpreadQuotes().catch(() => {}), 5000);
  }
 
  async function subscribeLive() {
-  const instruments = state.rows.slice(0, 30).flatMap(row => [row.nearFuture, row.nextFuture].filter(Boolean));
+  const instruments = [
+   ...state.rows.slice(0, 30).flatMap(row => [row.nearFuture, row.nextFuture].filter(Boolean)),
+   ...state.spreadRows.slice(0, 30).flatMap(row => [row.firstInstrument, row.secondInstrument].filter(Boolean)),
+  ];
   if (!instruments.length) return;
   state.socket = await marketData('live_feed_subscribe', { symbols: instruments, mode: 'quote', owner: 'commodities' }).catch(() => null);
   beginLivePoll();
@@ -168,6 +307,10 @@
   if (livePollTimer) {
    global.clearInterval(livePollTimer);
    livePollTimer = null;
+  }
+  if (spreadQuoteTimer) {
+   global.clearInterval(spreadQuoteTimer);
+   spreadQuoteTimer = null;
   }
   render();
  }
@@ -208,7 +351,7 @@
     <div><span>Selected contract</span><strong>${esc(row.symbol)}</strong><small>${esc(row.nearFuture?.tradingSymbol || '')}</small></div>
     <div class="commodity-chart-actions">
      <button type="button" class="bsm" data-commodity-chart="${esc(row.nearFuture?.tradingSymbol || '')}" data-commodity-timeframe="1d">Trend 1D</button>
-     <button type="button" class="bsm" data-commodity-chart="${esc(row.nearFuture?.tradingSymbol || '')}" data-commodity-timeframe="15m">Trade 15m</button>
+     <button type="button" class="bsm" data-commodity-chart="${esc(row.nearFuture?.tradingSymbol || '')}" data-commodity-timeframe="4h">Trade 4H</button>
     </div>
    </header>
    <div class="commodity-leg-grid">
@@ -218,8 +361,8 @@
    </div>
    <div class="commodity-execution">
     <div><span>Depth status</span><strong>${row.depthConfirmed ? 'Observed' : 'Indicative only'}</strong></div>
-    <div><span>Executable direction</span><strong>${esc(row.executableDirection || '--')}</strong></div>
-    <div><span>Executable spread</span><strong>${row.executableSpread == null ? '--' : signed(row.executableSpread)}</strong></div>
+    <div><span>Best quoted structure</span><strong>${esc(row.executableDirection || '--')}</strong></div>
+    <div><span>Quoted spread</span><strong>${row.executableSpread == null ? '--' : signed(row.executableSpread)}</strong></div>
    <div><span>Quote quantity</span><strong>${integer(row.quoteQuantity)}</strong></div>
    </div>
    ${spreadResearchHtml(row)}
@@ -270,7 +413,7 @@
    <header><div><span>Commodity Lab</span><strong>${esc(row.underlying)}</strong><small>${esc(row.symbol)}</small></div><span class="commodity-lab-badge ${labRowTone(row)}">${esc(row.priorityLabel)}</span></header>
    <div class="commodity-lab-grid">
     <div><span>Continuous trend</span><strong>${esc(raw.trendLabel || '--')}</strong><small>${integer(raw.dailyCandles)} daily candles | ${integer(raw.historyDays)} days</small></div>
-    <div><span>Entry timing</span><strong>${esc(raw.timingLabel || '--')}</strong><small>${integer(raw.intradayCandles)} active-contract 15m candles</small></div>
+    <div><span>Entry timing</span><strong>${esc(raw.timingLabel || '--')}</strong><small>${integer(raw.intradayCandles)} active-contract 4H candles</small></div>
     <div><span>Calendar spread</span><strong>${signed(raw.indicativeSpread)}</strong><small>${signed(raw.annualizedSpreadPct, 2, '% annualised')}</small></div>
     <div><span>Expiry handling</span><strong>${raw.rollRisk ? 'Roll required first' : `${number(raw.daysToExpiry, 1)} days left`}</strong><small>Exact contract before manual trade</small></div>
    </div>
@@ -282,7 +425,7 @@
    </div>
    <div class="commodity-chart-actions">
     <button type="button" class="bsm commodity-primary" data-commodity-chart="${esc(row.symbol)}" data-commodity-timeframe="1d">Open Trend Chart</button>
-    <button type="button" class="bsm" data-commodity-chart="${esc(row.symbol)}" data-commodity-timeframe="15m">Open Entry Chart</button>
+    <button type="button" class="bsm" data-commodity-chart="${esc(row.symbol)}" data-commodity-timeframe="4h">Open Entry Chart</button>
    </div>
    <p>Trend is based on rolling front-month daily history. Entry timing and margin must use the displayed active future. Research only; no order is placed.</p>
   </section>`;
@@ -347,7 +490,7 @@
   const setup = spreadSetup(row);
   if (!setup || setup.key === state.spreadKey) return setup;
   state.spreadKey = setup.key;
-  state.spreadEntryDate = new Date().toLocaleDateString('en-CA');
+  state.spreadEntryDate = lastCompletedMarketDate();
   state.spreadEntryBuyPrice = String(Number(setup.buyPrice || 0));
   state.spreadEntrySellPrice = String(Number(setup.sellPrice || 0));
   state.spreadBuyLots = setup.buyLots;
@@ -499,6 +642,125 @@
   </table></div>`;
  }
 
+ function selectedSpreadRow() {
+  const selected = state.spreadRows.find(row => row.key === state.selectedSpreadKey);
+  if (selected) return selected;
+  state.selectedSpreadKey = state.spreadRows[0]?.key || '';
+  return state.spreadRows[0] || null;
+ }
+
+ function spreadDirectionLabel(row = {}) {
+  const direction = row.analysis?.direction;
+  if (direction === 'widening') return `BUY ${row.secondRole} / SELL ${row.firstRole}`;
+  if (direction === 'narrowing') return `SELL ${row.secondRole} / BUY ${row.firstRole}`;
+  return 'WAIT - spread is ranging';
+ }
+
+ function spreadPlanningLegs(row = {}) {
+  const widening = row.analysis?.direction === 'widening';
+  const firstLots = Math.max(1, Number(row.firstLots || 1));
+  const secondLots = Math.max(1, Number(row.secondLots || 1));
+  return [{
+   ...row.firstInstrument,
+   transactionType: widening ? 'SELL' : 'BUY',
+   quantity: Math.max(1, Number(row.firstInstrument?.lotSize || 1) * firstLots),
+   price: Number(row.firstPrice || 0),
+  }, {
+   ...row.secondInstrument,
+   transactionType: widening ? 'BUY' : 'SELL',
+   quantity: Math.max(1, Number(row.secondInstrument?.lotSize || 1) * secondLots),
+   price: Number(row.secondPrice || 0),
+  }];
+ }
+
+ function spreadDeskDetailHtml(row) {
+  if (!row) return '<div class="commodity-empty">Run Spread Scan to discover calendar and size-matched MCX pairs.</div>';
+  const analysis = row.analysis || {};
+  const direction = analysis.direction || 'range';
+  const actionable = analysis.tradeAllowed === true;
+  const costs = row.costs || {};
+  const safeguards = row.safeguards || {};
+  const lots = `${integer(row.firstLots)} ${esc(row.firstRole)} : ${integer(row.secondLots)} ${esc(row.secondRole)}`;
+  const widening = direction === 'widening';
+  const narrowing = direction === 'narrowing';
+  return `<section class="commodity-spread-desk-detail">
+   <header><div><span>Selected spread</span><strong>${esc(row.label)}</strong><small>${esc(row.canonicalLabel)} | ${esc(row.firstInstrument?.tradingSymbol)} / ${esc(row.secondInstrument?.tradingSymbol)}</small></div><b class="${actionable ? direction : 'blocked'}">${actionable ? esc(direction.toUpperCase()) : 'BLOCKED'}</b></header>
+   <div class="commodity-spread-desk-grid">
+    <div><span>Current spread</span><strong>${signed(row.spread)}</strong><small>${esc(row.canonicalLabel)}</small></div>
+    <div><span>Forecast confidence</span><strong>${integer(analysis.score)} / 100</strong><small>${esc(analysis.confidence || 'low')} confidence</small></div>
+    <div><span>Matched lot ratio</span><strong>${lots}</strong><small>${row.type === 'matched' ? 'Contract-size matched, same expiry' : 'Same underlying calendar pair'}</small></div>
+    <div><span>Depth snapshot</span><strong>${row.depthConfirmed ? 'Observed' : 'Indicative LTP'}</strong><small>${row.executableUpdatedAt ? `Updated ${new Date(row.executableUpdatedAt).toLocaleTimeString('en-IN')}` : 'Waiting for depth refresh'}</small></div>
+   </div>
+   <div class="commodity-spread-desk-grid">
+    <div><span>Three EMA</span><strong>${number(analysis.ema9)} / ${number(analysis.ema30)} / ${number(analysis.ema100)}</strong><small>EMA 9 / 30 / 100</small></div>
+    <div><span>OBV confirmation</span><strong>${analysis.obvUp ? 'Rising' : analysis.obvDown ? 'Falling' : 'Flat'}</strong><small>Slope ${signed(analysis.obvSlope, 0)}</small></div>
+    <div><span>Entry / stop / target</span><strong>${signed(analysis.entryTrigger)} / ${signed(analysis.stopSpread)} / ${signed(analysis.targetSpread)}</strong><small>Spread levels, not leg prices</small></div>
+    <div><span>Dhan fixed brokerage</span><strong>Rs ${number(costs.fixedBrokerageAndGst)}</strong><small>${integer(costs.executedOrders)} executed orders | Rs ${number(costs.brokeragePerOrder)} each + GST</small></div>
+   </div>
+   <div class="commodity-spread-trade-read">
+    <div class="${widening ? 'active' : ''}"><span>Widening trade</span><strong>BUY ${esc(row.secondRole)} / SELL ${esc(row.firstRole)}</strong><small>Entry spread ${row.wideningEntrySpread == null ? '--' : signed(row.wideningEntrySpread)}</small></div>
+    <div class="${narrowing ? 'active' : ''}"><span>Narrowing trade</span><strong>SELL ${esc(row.secondRole)} / BUY ${esc(row.firstRole)}</strong><small>Entry spread ${row.narrowingEntrySpread == null ? '--' : signed(row.narrowingEntrySpread)}</small></div>
+   </div>
+   <div class="commodity-spread-reasons">${(analysis.reasons || []).map(reason => `<span>${esc(reason)}</span>`).join('')}</div>
+   ${(analysis.blockers || safeguards.warnings || []).length ? `<div class="commodity-spread-blockers">${(analysis.blockers || safeguards.warnings || []).map(reason => `<span>${esc(reason)}</span>`).join('')}</div>` : ''}
+   <div class="commodity-spread-cost-note">Target move ${signed(analysis.targetMove)} points versus required ${signed(analysis.costRequiredMove)} points for fixed brokerage and visible entry slippage. Exchange charges, CTT, stamp duty and other statutory charges are not included.</div>
+   <div class="commodity-chart-actions">
+    <button type="button" class="bsm commodity-primary" data-commodity-spread-chart="${esc(row.key)}" data-commodity-timeframe="1d">Open Spread Chart 1D</button>
+    <button type="button" class="bsm" data-commodity-spread-chart="${esc(row.key)}" data-commodity-timeframe="4h">Open Spread Chart 4H</button>
+    <button type="button" class="bsm" id="commoditySpreadMarginPreview" ${!actionable || state.marginStatus === 'loading' ? 'disabled' : ''}>Estimate Spread Margin</button>
+    <button type="button" class="bsm" id="commoditySaveSpreadWatch" ${!actionable ? 'disabled' : ''}>Save Spread Watch</button>
+   </div>
+   ${previewHtml()}
+   <p>Recommendation: <strong>${actionable ? esc(spreadDirectionLabel(row)) : 'WAIT - safeguards or Three EMA + OBV confirmation are incomplete'}</strong>. The synthetic chart is inside this app's Lightweight Charts workspace. No order is placed.</p>
+  </section>`;
+ }
+
+ function spreadMonitorHtml() {
+  const spreadPlans = state.plans.filter(plan => plan.scope === 'spread');
+  if (!spreadPlans.length) return '';
+  return `<section class="commodity-spread-monitor"><header><strong>Saved Spread Monitoring</strong><small>Live LTP movement versus saved spread</small></header><div>${spreadPlans.map(plan => {
+   const row = state.spreadRows.find(item => item.key === plan.spreadKey);
+   const current = Number(row?.spread);
+   const change = Number.isFinite(current) ? current - Number(plan.entrySpread || 0) : null;
+   const favorable = plan.direction === 'widening' ? Number(change || 0) >= 0 : Number(change || 0) <= 0;
+   return `<article><strong>${esc(plan.symbol)}</strong><span>${esc(plan.direction)}</span><b class="${favorable ? 'up' : 'down'}">${change == null ? '--' : signed(change)}</b><small>Entry ${signed(plan.entrySpread)} | Stop ${signed(plan.stopSpread)} | Target ${signed(plan.targetSpread)}</small><button type="button" class="bsm" data-commodity-plan-remove="${esc(plan.id)}">Remove</button></article>`;
+  }).join('')}</div></section>`;
+ }
+
+ function spreadDeskHtml() {
+  if (state.spreadDeskStatus === 'loading') return `<section class="commodity-spread-state-panel loading" aria-live="polite">
+   <div class="commodity-spread-state-copy"><span>Spread engine</span><strong>${esc(state.spreadDeskProgress?.title || 'Building synthetic MCX histories')}</strong><p>${esc(state.spreadDeskProgress?.detail || 'Matching contract candles, refreshing depth, and checking Three EMA plus OBV confirmation.')}</p></div>
+   <div class="commodity-spread-skeleton" aria-hidden="true">${Array.from({ length: 5 }, (_, index) => `<i style="--spread-index:${index}"></i>`).join('')}</div>
+   <button type="button" class="bsm danger" id="commodityStopSpreadScan">Stop Scan</button>
+  </section>`;
+  if (state.spreadDeskError) return `<section class="commodity-spread-state-panel error" role="alert">
+   <div class="commodity-spread-state-copy"><span>Spread scan unavailable</span><strong>We could not complete this scan</strong><p>${esc(state.spreadDeskError)}</p></div>
+   <button type="button" class="bsm commodity-primary" id="commodityRetrySpreadScan">Retry Spread Scan</button>
+  </section>`;
+  if (!state.spreadRows.length) return `<section class="commodity-spread-state-panel empty">
+   <div class="commodity-spread-state-copy"><span>Spread Desk</span><strong>Find the direction before choosing the legs</strong><p>Scan active MCX calendar and size-matched pairs, then review widening, narrowing, execution depth, costs, and risk levels.</p></div>
+   <div class="commodity-spread-state-steps"><span>1. Match contracts</span><span>2. Read Three EMA + OBV</span><span>3. Check executable depth</span></div>
+   <button type="button" class="bsm commodity-primary" id="commodityEmptySpreadScan">Run Spread Scan</button>
+  </section>`;
+  const selected = selectedSpreadRow();
+  return `<section class="commodity-spread-brief">
+    <div><span>Decision model</span><strong>Far minus near</strong><small>Rising spread means widening. Falling spread means narrowing.</small></div>
+    <div><span>Signal proof</span><strong>Three EMA + OBV</strong><small>EMA 9/30/100 must align with spread OBV.</small></div>
+    <div><span>Execution proof</span><strong>Depth + cost edge</strong><small>Blocked when liquidity, expiry, or visible costs fail.</small></div>
+   </section>
+   <div class="commodity-spread-desk-metrics">
+    <div><span>Pairs analyzed</span><strong>${integer(state.spreadRows.length)}</strong><small>Calendar and size-matched</small></div>
+    <div><span>Widening</span><strong>${integer(state.spreadRows.filter(row => row.analysis?.direction === 'widening').length)}</strong><small>Far-minus-near rising</small></div>
+    <div><span>Narrowing</span><strong>${integer(state.spreadRows.filter(row => row.analysis?.direction === 'narrowing').length)}</strong><small>Far-minus-near falling</small></div>
+    <div><span>Ranging</span><strong>${integer(state.spreadRows.filter(row => row.analysis?.direction === 'range').length)}</strong><small>Wait for confirmation</small></div>
+   </div>
+   <div class="commodity-spread-desk-layout">
+    <aside class="commodity-spread-desk-list" aria-label="Commodity spread scan results">${state.spreadRows.map((row, index) => `<button type="button" style="--spread-index:${index}" class="${row.key === state.selectedSpreadKey ? 'selected' : ''} ${esc(row.analysis?.direction || 'range')}" data-commodity-spread-key="${esc(row.key)}"><div><strong>${esc(row.label)}</strong><small>${esc(row.canonicalLabel)}</small></div><span>${signed(row.spread)}</span><b>${row.analysis?.tradeAllowed ? integer(row.analysis?.score || 0) : 'BLOCK'}</b></button>`).join('')}</aside>
+    ${spreadDeskDetailHtml(selected)}
+   </div>
+   ${spreadMonitorHtml()}`;
+ }
+
  function render() {
   const root = document.getElementById('pane-commodities');
   if (!root) return;
@@ -511,10 +773,12 @@
    </header>
    <div class="commodity-view-toggle" role="tablist" aria-label="Commodity workspace mode">
     <button type="button" data-commodity-view="watch" class="${state.workspaceView === 'watch' ? 'active' : ''}">Market Watch</button>
+    <button type="button" data-commodity-view="spread" class="${state.workspaceView === 'spread' ? 'active' : ''}">Spread Desk</button>
     <button type="button" data-commodity-view="lab" class="${state.workspaceView === 'lab' ? 'active' : ''}">Commodity Lab</button>
     ${state.workspaceView === 'lab' ? `<button type="button" class="bsm commodity-primary" id="commodityRunLab" ${state.labStatus === 'loading' ? 'disabled' : ''}>${state.labStatus === 'loading' ? 'Analyzing...' : 'Run Lab'}</button>` : ''}
+    ${state.workspaceView === 'spread' ? `<div class="commodity-spread-desk-actions"><div class="commodity-spread-segmented" role="group" aria-label="Spread pair type"><button type="button" data-spread-desk-type="all" class="${state.spreadDeskType === 'all' ? 'active' : ''}">All pairs</button><button type="button" data-spread-desk-type="calendar" class="${state.spreadDeskType === 'calendar' ? 'active' : ''}">Calendar</button><button type="button" data-spread-desk-type="matched" class="${state.spreadDeskType === 'matched' ? 'active' : ''}">Size matched</button></div><button type="button" class="bsm commodity-primary commodity-spread-run" id="commodityRunSpreadScan" ${state.spreadDeskStatus === 'loading' ? 'disabled' : ''}>${state.spreadDeskStatus === 'loading' ? 'Scanning spreads...' : 'Run Spread Scan'}</button><button type="button" class="bsm" id="commodityCachedSpreadScan" ${state.spreadDeskStatus === 'loading' ? 'disabled' : ''}>Refresh Cached</button><button type="button" class="bsm" id="commodityForceSpreadScan" ${state.spreadDeskStatus === 'loading' ? 'disabled' : ''}>Force Full</button>${state.spreadDeskStatus === 'loading' ? '<button type="button" class="bsm danger" id="commodityStopSpreadScanTop">Stop</button>' : ''}</div>` : ''}
    </div>
-   ${state.workspaceView === 'lab' ? labResultsHtml() : `
+   ${state.workspaceView === 'lab' ? labResultsHtml() : state.workspaceView === 'spread' ? spreadDeskHtml() : `
    <div class="commodity-controls">
     <div class="commodity-filters" role="tablist" aria-label="Commodity filter">
      <button type="button" data-commodity-filter="featured" class="${state.filter === 'featured' ? 'active' : ''}">Core contracts</button>
@@ -557,6 +821,27 @@
   render();
  }
 
+ async function estimateSpreadMargin(row = selectedSpreadRow()) {
+  if (!row || row.analysis?.tradeAllowed !== true) return;
+  state.marginStatus = 'loading';
+  state.marginError = '';
+  state.marginPreview = null;
+  render();
+  try {
+   const response = await marketData('commodity_margin_preview', {
+    legs: spreadPlanningLegs(row),
+    productType: state.productType,
+   });
+   if (!response?.ok) throw new Error(response?.error || 'Spread margin preview request failed.');
+   state.marginPreview = response;
+   state.marginStatus = 'ready';
+  } catch (error) {
+   state.marginStatus = 'error';
+   state.marginError = error?.message || 'Spread margin preview request failed.';
+  }
+  render();
+ }
+
  function resetPreview() {
   state.marginStatus = 'idle';
   state.marginError = '';
@@ -566,6 +851,14 @@
  async function loadSpreadHistory(row = currentRow()) {
   const setup = ensureSpreadInputs(row);
   if (!setup) return;
+  const today = dateInputValue();
+  if (String(state.spreadEntryDate || '') >= today) {
+   state.spreadStatus = 'error';
+   state.spreadError = 'Dhan daily close data for today is usually available only after the session closes. Select the previous trading day for Load History, or try again after EOD.';
+   state.spreadAnalysis = null;
+   render();
+   return;
+  }
   state.spreadStatus = 'loading';
   state.spreadError = '';
   state.spreadAnalysis = null;
@@ -649,12 +942,85 @@
   render();
  }
 
+ function stopSpreadScan() {
+  if (state.spreadDeskStatus !== 'loading') return;
+  state.spreadDeskStopRequested = true;
+  state.spreadDeskStatus = state.spreadRows.length ? 'ready' : 'idle';
+  state.spreadDeskProgress = { title: 'Spread scan stopped', detail: 'Late API results from the stopped request will be ignored.' };
+  render();
+ }
+
+ async function runSpreadScan(options = {}) {
+  const runId = Date.now();
+  state.spreadDeskRunId = runId;
+  state.spreadDeskStopRequested = false;
+  state.spreadDeskStatus = 'loading';
+  state.spreadDeskError = '';
+  state.spreadDeskProgress = {
+   title: options.force ? 'Force refreshing spread histories' : 'Refreshing spread desk from cache first',
+   detail: options.force ? 'Requesting fresh Dhan candles for MCX pairs. Use Stop if you need to cancel this UI operation.' : 'Reusing cached histories when valid, then filling any missing candle windows.',
+  };
+  render();
+  try {
+   const response = await marketData('commodity_spread_scanner', { spreadType: state.spreadDeskType, limit: 30, historyDays: 365, force: options.force === true });
+   if (state.spreadDeskStopRequested || state.spreadDeskRunId !== runId) return;
+   if (!response?.ok) throw new Error(response?.error || 'Commodity spread scan failed.');
+   state.spreadRows = Array.isArray(response.rows) ? response.rows : [];
+   state.spreadSummary = response;
+   state.selectedSpreadKey = state.spreadRows[0]?.key || '';
+   state.spreadDeskStatus = 'ready';
+   await subscribeLive();
+   await refreshSpreadQuotes();
+   checkSpreadAlerts();
+  } catch (error) {
+   if (state.spreadDeskStopRequested || state.spreadDeskRunId !== runId) return;
+   state.spreadDeskStatus = 'error';
+   state.spreadDeskError = error?.message || 'Commodity spread scan failed.';
+  }
+  render();
+ }
+
  function openChart(contract = '', timeframe = '1d') {
   const symbol = String(contract || '').trim().toUpperCase();
   if (!symbol) return;
-  const safeTimeframe = timeframe === '15m' ? '15m' : '1d';
-  const visibleCandleCount = safeTimeframe === '1d' ? 1095 : 8640;
+  const safeTimeframe = timeframe === '4h' ? '4h' : timeframe === '1w' ? '1w' : '1d';
+  const visibleCandleCount = safeTimeframe === '1d' ? 1095 : 520;
   global.openSignalInChartWorkspace?.({ symbol, timeframe: safeTimeframe, setupFamilyLabel: safeTimeframe === '1d' ? 'MCX Rolling Trend' : 'MCX Active Future' }, { overlay: false, timeframe: safeTimeframe, visibleCandleCount });
+ }
+
+ function openSpreadChart(row = selectedSpreadRow(), timeframe = '1d') {
+  if (!row) return;
+  const safeTimeframe = timeframe === '4h' ? '4h' : '1d';
+  const symbol = `MCX-SPREAD:${row.key}`.toUpperCase();
+  global.openSignalInChartWorkspace?.({
+   symbol,
+   timeframe: safeTimeframe,
+   setupFamilyLabel: `${row.label} synthetic spread`,
+   commoditySpread: row,
+  }, { overlay: false, timeframe: safeTimeframe, preset: 'ema_obv', visibleCandleCount: safeTimeframe === '1d' ? 520 : 360 });
+ }
+
+ function saveSpreadWatch(row = selectedSpreadRow()) {
+  if (!row || row.analysis?.tradeAllowed !== true) return;
+  const direction = row.analysis?.direction === 'narrowing' ? 'narrowing' : row.analysis?.direction === 'widening' ? 'widening' : 'range';
+  const plan = {
+   id: `${Date.now()}-${row.key}`,
+   symbol: row.label,
+   scope: 'spread',
+   spreadKey: row.key,
+   direction,
+   entrySpread: Number(row.spread || 0),
+   entryTrigger: Number(row.analysis?.entryTrigger || row.spread || 0),
+   stopSpread: Number(row.analysis?.stopSpread || 0),
+   targetSpread: Number(row.analysis?.targetSpread || 0),
+   brokerageBreakevenPoints: Number(row.costs?.brokerageBreakevenPoints || 0),
+   firstLots: row.firstLots,
+   secondLots: row.secondLots,
+   savedAt: Date.now(),
+  };
+  state.plans = [plan, ...state.plans.filter(existing => existing.spreadKey !== plan.spreadKey)].slice(0, 30);
+  writePlans(state.plans);
+  render();
  }
 
  function bind() {
@@ -667,6 +1033,15 @@
   document.querySelectorAll('[data-commodity-chart]').forEach(button => button.addEventListener('click', event => {
    event.stopPropagation();
    openChart(button.dataset.commodityChart, button.dataset.commodityTimeframe || '1d');
+  }));
+  document.querySelectorAll('[data-commodity-spread-chart]').forEach(button => button.addEventListener('click', () => {
+   const row = state.spreadRows.find(item => item.key === button.dataset.commoditySpreadChart);
+   openSpreadChart(row, button.dataset.commodityTimeframe || '1d');
+  }));
+  document.querySelectorAll('[data-commodity-spread-key]').forEach(button => button.addEventListener('click', () => {
+   state.selectedSpreadKey = String(button.dataset.commoditySpreadKey || '');
+   resetPreview();
+   render();
   }));
   document.querySelectorAll('[data-commodity-filter]').forEach(button => button.addEventListener('click', () => {
    state.filter = String(button.dataset.commodityFilter || 'featured');
@@ -696,22 +1071,21 @@
    ensureSpreadInputs(currentRow());
    render();
   }));
-  document.getElementById('commoditySpreadDate')?.addEventListener('change', event => { state.spreadEntryDate = String(event.target.value || ''); });
-  document.getElementById('commoditySpreadBuy')?.addEventListener('change', event => { state.spreadEntryBuyPrice = String(event.target.value || ''); });
-  document.getElementById('commoditySpreadSell')?.addEventListener('change', event => { state.spreadEntrySellPrice = String(event.target.value || ''); });
-  document.getElementById('commoditySpreadBuyLots')?.addEventListener('change', event => { state.spreadBuyLots = Math.max(1, Math.round(Number(event.target.value || 1))); });
-  document.getElementById('commoditySpreadSellLots')?.addEventListener('change', event => { state.spreadSellLots = Math.max(1, Math.round(Number(event.target.value || 1))); });
-  document.getElementById('commoditySpreadCosts')?.addEventListener('change', event => { state.spreadCosts = Math.max(0, Number(event.target.value || 0)); });
+  document.getElementById('commoditySpreadDate')?.addEventListener('input', event => { state.spreadEntryDate = String(event.target.value || ''); });
+  document.getElementById('commoditySpreadBuy')?.addEventListener('input', event => { state.spreadEntryBuyPrice = String(event.target.value || ''); });
+  document.getElementById('commoditySpreadSell')?.addEventListener('input', event => { state.spreadEntrySellPrice = String(event.target.value || ''); });
+  document.getElementById('commoditySpreadBuyLots')?.addEventListener('input', event => { state.spreadBuyLots = Math.max(1, Math.round(Number(event.target.value || 1))); });
+  document.getElementById('commoditySpreadSellLots')?.addEventListener('input', event => { state.spreadSellLots = Math.max(1, Math.round(Number(event.target.value || 1))); });
+  document.getElementById('commoditySpreadCosts')?.addEventListener('input', event => { state.spreadCosts = Math.max(0, Number(event.target.value || 0)); });
   document.getElementById('commodityLoadSpread')?.addEventListener('click', () => loadSpreadHistory());
   document.getElementById('commodityProductType')?.addEventListener('change', event => {
    state.productType = String(event.target.value || 'MARGIN');
    resetPreview();
    render();
   });
-  document.getElementById('commodityQuantity')?.addEventListener('change', event => {
+  document.getElementById('commodityQuantity')?.addEventListener('input', event => {
    state.quantity = Math.max(1, Math.round(Number(event.target.value || 1)));
    resetPreview();
-   render();
   });
   document.getElementById('commodityMarginPreview')?.addEventListener('click', () => estimateMargin());
   document.getElementById('commoditySavePlan')?.addEventListener('click', () => savePlan());
@@ -722,9 +1096,23 @@
   }));
   document.querySelectorAll('[data-commodity-view]').forEach(button => button.addEventListener('click', () => {
    state.workspaceView = String(button.dataset.commodityView || 'watch');
+   resetPreview();
    render();
   }));
   document.getElementById('commodityRunLab')?.addEventListener('click', runLab);
+  document.getElementById('commodityRunSpreadScan')?.addEventListener('click', () => runSpreadScan());
+  document.getElementById('commodityCachedSpreadScan')?.addEventListener('click', () => runSpreadScan());
+  document.getElementById('commodityForceSpreadScan')?.addEventListener('click', () => runSpreadScan({ force: true }));
+  document.getElementById('commodityStopSpreadScan')?.addEventListener('click', stopSpreadScan);
+  document.getElementById('commodityStopSpreadScanTop')?.addEventListener('click', stopSpreadScan);
+  document.getElementById('commodityRetrySpreadScan')?.addEventListener('click', () => runSpreadScan());
+  document.getElementById('commodityEmptySpreadScan')?.addEventListener('click', () => runSpreadScan());
+  document.getElementById('commoditySaveSpreadWatch')?.addEventListener('click', () => saveSpreadWatch());
+  document.getElementById('commoditySpreadMarginPreview')?.addEventListener('click', () => estimateSpreadMargin());
+  document.querySelectorAll('[data-spread-desk-type]').forEach(button => button.addEventListener('click', () => {
+   state.spreadDeskType = String(button.dataset.spreadDeskType || 'all');
+   runSpreadScan();
+  }));
   document.querySelectorAll('[data-commodity-lab-symbol]').forEach(button => button.addEventListener('click', () => {
    state.selectedLabSymbol = String(button.dataset.commodityLabSymbol || '');
    render();

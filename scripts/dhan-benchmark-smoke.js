@@ -15,6 +15,7 @@ const ribbonStyleText = read('src/renderer/styles/16-index-ribbon.css');
 const registryText = read('src/renderer/scripts/shared/strategy-registry.js');
 const dhanRendererText = read('src/renderer/scripts/background/03-dhan-data.js');
 const chartWorkspaceText = read('src/renderer/scripts/popup/07-chart-workspace.js');
+const runtimeText = read('src/renderer/scripts/background/04-runtime.js');
 
 assert(scanText.includes('Indices:'), 'scanner should log index tape state');
 assert(scanText.includes("benchmarkSymbol: 'NIFTY'"), 'scanner should expose NIFTY as benchmark symbol');
@@ -44,10 +45,10 @@ assert(dhanRendererText.includes('retrying OHLC breadth feed'), 'renderer ticker
 assert(dhanRendererText.includes('pointChange:'), 'renderer quote map should preserve absolute point change');
 assert(dhanRendererText.includes('quote?.net_change'), 'renderer quote map should read Dhan net_change for index points');
 assert(dhanRendererText.includes("dhanNative('live_feed_subscribe'"), 'scanner quotes should subscribe index and active stock symbols to the live feed');
-assert(chartWorkspaceText.includes("const RESOLUTIONS = Object.freeze(['15m', '4h', '1d', '1w']);"), 'chart workspace should expose only 15m/4h/1d/1w chart timeframes');
+assert(chartWorkspaceText.includes("const RESOLUTIONS = Object.freeze(['4h', '1d', '1w']);"), 'chart workspace should expose only 4h/1d/1w chart timeframes');
 assert(!chartWorkspaceText.includes('data-ds-chart-tf=\"5m\"'), 'chart UI should not expose 5m timeframe buttons');
 assert(!chartWorkspaceText.includes('data-ds-chart-tf=\"1h\"'), 'chart UI should not expose 1h timeframe buttons');
-assert(chartWorkspaceText.includes("executionTimeframe: normalizeTimeframe(raw.executionTimeframe || raw.timeframe || base.executionTimeframe || '15m')"), 'chart execution timeframe fallback should be 15m');
+assert(chartWorkspaceText.includes("executionTimeframe: normalizeTimeframe(raw.executionTimeframe || raw.timeframe || base.executionTimeframe || '4h')"), 'chart execution timeframe fallback should be 4h');
 assert(!chartWorkspaceText.includes("{ symbol: FWD_INDEX_SYMBOL, name: 'Nifty 50 Equal-Weight Index'"), 'plain NIFTY must not resolve to the legacy equal-weight synthetic chart');
 
 const sandbox = {
@@ -99,8 +100,15 @@ assert(result.indexTape.some(item => item.symbol === 'INDIA VIX' && item.label =
 assert(result.indexTape.some(item => item.symbol === 'BANKNIFTY' && item.pointChange === 96.81), 'index tape should preserve Bank Nifty point move');
 assert(result.indexTape.some(item => item.symbol === 'NIFTYIT' && item.pointChange === -126.44), 'index tape should preserve Nifty IT point move');
 assert.strictEqual(result.topCoins.length, 2);
-assert.strictEqual(sandbox.resolveScanLimitForUniverse('all_nse', 150), 3000, 'All NSE should not inherit stale low scan limits');
-assert.strictEqual(sandbox.resolveDeepScanLimitForStrategy({ scanUniverse: 'all_nse', scanMode: 'penny_awakening' }, 3000), 3000, 'All NSE should deep scan the requested breadth');
-assert(scanText.includes("strat.scanMode = 'standard';"), 'All NSE scan should force standard mode during full scan');
+assert.strictEqual(sandbox.resolveScanLimitForUniverse('all_nse', 150), 900, 'All NSE should use a bounded ranked shortlist by default');
+assert.strictEqual(sandbox.resolveScanLimitForUniverse('nse_af', 0), 650, 'NSE chunks should default to a fast rotating scan size');
+assert.strictEqual(sandbox.resolveScanLimitForUniverse('nse_rest', 0), 650, 'NSE Rest should use the chunk-style overlap-safe scan size');
+assert.strictEqual(sandbox.resolveScanLimitForUniverse('bse_only', 0), 650, 'BSE Only should use the chunk-style scan size');
+assert.strictEqual(sandbox.resolveDeepScanLimitForStrategy({ scanUniverse: 'all_nse', scanMode: 'penny_awakening' }, 900), 900, 'Full equity scans should deep scan only the ranked shortlist');
+assert.strictEqual(sandbox.resolveDeepScanLimitForStrategy({ scanUniverse: 'nse_af' }, 900), 650, 'Chunk scans should cap deep candle work for speed');
+assert(scanText.includes("strat.scanMode = 'standard';"), 'Full equity scans should force standard mode during full scan');
+assert(scanText.includes('scannedCoins: 0, scannedStocks: 0') && scanText.includes('completed ${i}, pending ${Math.max(0, deepTotal - i)}'), 'Scanner progress should report completed candle work instead of queued candidates');
+assert(runtimeText.includes('FULL_EQUITY_SCAN_HARD_DEADLINE_MS') && runtimeText.includes("['all_nse', 'all_bse'].includes(universe)"), 'Full equity scans should have a dedicated hard deadline');
+assert(runtimeText.includes('globalThis.scanAbortRequested = true;'), 'A hard deadline should request cancellation of the underlying scan loop');
 
 console.log('OK Dhan/Nifty benchmark smoke passed');

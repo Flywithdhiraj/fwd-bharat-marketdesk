@@ -210,7 +210,7 @@ function startPolling() {
  globalThis.updateSecureStorageWarningBanner?.();
  updateApiUsageMeter();
  updateStatusBar(d.scanStatus, d.scanProgress, d.lastScan, d.scanActive, d.scanHeartbeat, d);
- updateHeaderStats(d.scanResults, d.alerts, d.scannedStocks, d.totalStocks);
+ updateHeaderStats(d.scanResults, d.alerts, d.scannedStocks, d.totalStocks, d.scannerUniverseMeta || null);
  renderPriceChangeDistribution(d.scanResults, d.marketIndex);
  refreshLiveMarketIndex(d.marketIndex);
  updateSectorBar(d.sectorSummary);
@@ -527,16 +527,14 @@ function updateStatusBar(status, pct, lastScan, scanActive = false, scanHeartbea
  const strategyUniverse = preloaded?.strategy?.scanUniverse || '';
  const universeLabel = universeMeta.label || getScannerUniverseLabel(strategyUniverse || 'fno_stocks');
  const scannedCount = Number(universeMeta.scanned || preloaded?.scannedStocks || 0);
- const totalCount = Number(universeMeta.total || universeMeta.count || preloaded?.totalStocks || 0);
+ const totalCount = Number(universeMeta.deepTotal || universeMeta.deepScanLimit || universeMeta.total || universeMeta.count || preloaded?.totalStocks || 0);
  const progress = Number.isFinite(+pct) ? Math.max(0, Math.min(100, +pct)) : 0;
  const statusText = String(status || '').trim();
- const completedScanWithPartialWarning = !!lastScan && !scanActive && /using partial results/i.test(statusText);
+ const pendingCount = Number(universeMeta.pending || 0);
+ const completedScanWithPartialWarning = !!lastScan && !scanActive && (/using partial results/i.test(statusText) || universeMeta.partial || (pendingCount > 0 && !universeMeta.completed));
  const failedStatus = /stopped|failed|rate limit|too many|unavailable|error/i.test(statusText);
- const completedStatus = /^ok done|^ready\b|complete/i.test(statusText) || progress >= 100;
- const scanLikeStatus = !!statusText && /loading|scanning/i.test(statusText) && !failedStatus && !completedStatus;
- const heartbeatFresh = Number.isFinite(+scanHeartbeat) && (Date.now() - Number(scanHeartbeat)) < SCAN_HEARTBEAT_STALE_MS;
- const scanRunning = !!scanActive && heartbeatFresh && scanLikeStatus && progress < 100;
- const staleScanState = scanLikeStatus && progress < 100 && !scanRunning;
+ const completedStatus = !completedScanWithPartialWarning && (universeMeta.completed || /^ok done|^ready\b|complete/i.test(statusText) || progress >= 100);
+ const scanRunning = !!scanActive && !failedStatus && !completedStatus && progress < 100;
 
  if (scanRunning) {
  if (dot) dot.className = 'sdot pulse';
@@ -557,32 +555,13 @@ function updateStatusBar(status, pct, lastScan, scanActive = false, scanHeartbea
  }
  scanning = true;
  } else {
- if (completedScanWithPartialWarning && (Date.now() - lastScanRecoveryAt > 10000)) {
- lastScanRecoveryAt = Date.now();
- chrome.storage.local.set({
- scanActive: false,
- scanHeartbeat: Date.now(),
- scanStatus: `Ready - last scan ${lastScan}`,
- scanProgress: 100,
- scanPartialAvailable: false,
- });
- }
- if (staleScanState && (Date.now() - lastScanRecoveryAt > 10000)) {
- lastScanRecoveryAt = Date.now();
- chrome.storage.local.set({
- scanActive: false,
- scanHeartbeat: Date.now(),
- scanStatus: lastScan ? `Ready - last scan ${lastScan}` : 'Ready - click Scan Now',
- scanProgress: 0,
- });
- }
  if (dot) dot.className = failedStatus ? 'sdot red' : (progress === 100 ? 'sdot green' : 'sdot');
  const readyText = lastScan
  ? `Ready - last scan ${lastScan}${universeLabel ? ` | ${universeLabel}` : ''}${scannedCount || totalCount ? ` | ${scannedCount || '--'}/${totalCount || '--'} scanned` : ''}`
  : 'Ready - click Scan Now';
- if (stxt) stxt.textContent = staleScanState
- ? (lastScan ? `Scan stopped - last complete ${lastScan}` : 'Scan stopped - ready to restart')
- : (completedScanWithPartialWarning || completedStatus ? readyText : (statusText && !/^starting/i.test(statusText) ? statusText : readyText));
+ if (stxt) stxt.textContent = completedScanWithPartialWarning
+ ? statusText
+ : (completedStatus ? readyText : (statusText && !/^starting/i.test(statusText) ? statusText : readyText));
  if (progw) progw.style.display = 'none';
  if (btnS) {
   btnS.disabled = false;
@@ -611,8 +590,8 @@ function updateHeaderStats(results, alerts, scanned, total, universeMeta = null)
  const symbolsEl = document.getElementById('cStocks') || document.getElementById('csymbols');
  const meta = universeMeta || {};
  const universeLabel = meta.label || getScannerUniverseLabel(meta.id || meta.universe || '');
- const requested = Number(meta.requested || meta.limit || total || 0);
- const actualScanned = Number(scanned || meta.scanned || 0);
+ const requested = Number(meta.deepTotal || meta.deepScanLimit || meta.requested || meta.limit || total || 0);
+ const actualScanned = Number(meta.scanned || scanned || 0);
  const available = Number(meta.count || meta.total || total || 0);
  if (signalsEl) signalsEl.textContent = (results || []).length;
  if (alertsEl) alertsEl.textContent = (alerts || []).length;
@@ -622,7 +601,8 @@ function updateHeaderStats(results, alerts, scanned, total, universeMeta = null)
   symbolsEl.title = [
    universeLabel ? `Scanner universe: ${universeLabel}` : '',
    `Scanned this run: ${actualScanned || 0}`,
-   requested ? `Requested scan limit: ${requested}` : '',
+   requested ? `Deep scan target: ${requested}` : '',
+   meta.returned ? `Quote rows loaded: ${meta.returned}` : '',
    available ? `Available symbols in selected universe: ${available}` : '',
   ].filter(Boolean).join('\n');
  }
@@ -836,17 +816,28 @@ function sanitizeScannerUniverseId(value = '') {
  if (['midcap150', 'midcap_150', 'midcap'].includes(raw)) return 'midcap150';
  if (['smallcap250', 'smallcap_250', 'smallcap'].includes(raw)) return 'smallcap250';
  if (['all_nse', 'all', 'nse'].includes(raw)) return 'all_nse';
+ if (['nse_rest', 'nse_remaining', 'nse_uncovered', 'nse_ex_overlap', 'nse_ex_core'].includes(raw)) return 'nse_rest';
+ if (['all_bse', 'bse'].includes(raw)) return 'all_bse';
+ if (['bse_only', 'bse_unique', 'bse_ex_nse', 'bse_not_nse'].includes(raw)) return 'bse_only';
+ if (['nse_a_f', 'nse_af', 'nse_1', 'nse_chunk_1'].includes(raw)) return 'nse_af';
+ if (['nse_g_l', 'nse_gl', 'nse_2', 'nse_chunk_2'].includes(raw)) return 'nse_gl';
+ if (['nse_m_r', 'nse_mr', 'nse_3', 'nse_chunk_3'].includes(raw)) return 'nse_mr';
+ if (['nse_s_z', 'nse_sz', 'nse_4', 'nse_chunk_4'].includes(raw)) return 'nse_sz';
+ if (['bse_a_f', 'bse_af', 'bse_1', 'bse_chunk_1'].includes(raw)) return 'bse_af';
+ if (['bse_g_l', 'bse_gl', 'bse_2', 'bse_chunk_2'].includes(raw)) return 'bse_gl';
+ if (['bse_m_r', 'bse_mr', 'bse_3', 'bse_chunk_3'].includes(raw)) return 'bse_mr';
+ if (['bse_s_z', 'bse_sz', 'bse_4', 'bse_chunk_4'].includes(raw)) return 'bse_sz';
  return 'fno_stocks';
 }
 
-function sanitizeScannerTimeframe(value = '', fallback = '15m') {
+function sanitizeScannerTimeframe(value = '', fallback = '4h') {
  const raw = String(value || '').trim().toLowerCase();
- if (['15m', '4h', '1d', '1w'].includes(raw)) return raw;
+ if (['4h', '1d'].includes(raw)) return raw;
  if (['1h', '60m', '60', '240'].includes(raw)) return '4h';
- if (['1wk', 'w', 'weekly', 'week'].includes(raw)) return '1w';
+ if (['1wk', 'w', 'weekly', 'week'].includes(raw)) return '1d';
  if (['d', 'day', 'daily'].includes(raw)) return '1d';
- if (['1m', '3m', '5m', '15'].includes(raw)) return '15m';
- return ['15m', '4h', '1d', '1w'].includes(fallback) ? fallback : '15m';
+ if (['1m', '3m', '5m', '15'].includes(raw)) return '4h';
+ return ['4h', '1d'].includes(fallback) ? fallback : '4h';
 }
 
 function getScannerUniverseLabel(value = '') {
@@ -857,6 +848,17 @@ function getScannerUniverseLabel(value = '') {
   midcap150: 'Midcap 150',
   smallcap250: 'Smallcap 250',
   all_nse: 'All NSE Equity',
+  nse_rest: 'NSE Rest',
+  nse_af: 'NSE A-F',
+  nse_gl: 'NSE G-L',
+  nse_mr: 'NSE M-R',
+  nse_sz: 'NSE S-Z',
+  all_bse: 'All BSE Equity',
+  bse_only: 'BSE Only',
+  bse_af: 'BSE A-F',
+  bse_gl: 'BSE G-L',
+  bse_mr: 'BSE M-R',
+  bse_sz: 'BSE S-Z',
  }[id] || 'F&O Stocks';
 }
 
@@ -867,9 +869,22 @@ function getScannerUniverseDefaultLimit(value = '') {
   nifty500: 500,
   midcap150: 150,
   smallcap250: 250,
-  all_nse: 3000,
+  all_nse: 900,
+  nse_rest: 650,
+  nse_af: 650,
+  nse_gl: 650,
+  nse_mr: 650,
+  nse_sz: 650,
+  all_bse: 900,
+  bse_only: 650,
+  bse_af: 650,
+  bse_gl: 650,
+  bse_mr: 650,
+  bse_sz: 650,
  }[id] || 250;
 }
+
+const SCAN_UNIVERSE_SNAPSHOTS_KEY = 'scanUniverseSnapshotsV1';
 
 function sanitizeScannerMode(value = '') {
  const raw = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
@@ -944,7 +959,7 @@ async function loadScannerSettings() {
   const scanUniverse = sanitizeScannerUniverseId(s.scanUniverse || 'fno_stocks');
   const scanMode = sanitizeScannerMode(s.scanMode || 'standard');
   setScannerSettingValue('sTF1', sanitizeScannerTimeframe(s.tf1, '1d'));
-  setScannerSettingValue('sTF2', sanitizeScannerTimeframe(s.tf2, '15m'));
+  setScannerSettingValue('sTF2', sanitizeScannerTimeframe(s.tf2, '4h'));
   setScannerSettingValue('sScanUniverse', scanUniverse);
   setScannerSettingValue('sScanMode', scanMode);
   updateScannerUniverseButtons(scanUniverse);
@@ -1015,7 +1030,7 @@ async function saveScannerSettings() {
  ema3: getScannerSettingNumber('sE3', 100, 1, 200),
  obvPeriod: getScannerSettingNumber('sOBV', 50, 1, 500),
  tf1: sanitizeScannerTimeframe(getScannerSettingValue('sTF1', '1d'), '1d'),
- tf2: sanitizeScannerTimeframe(getScannerSettingValue('sTF2', '15m'), '15m'),
+ tf2: sanitizeScannerTimeframe(getScannerSettingValue('sTF2', '4h'), '4h'),
  minScore: getScannerSettingNumber('sMinScore', 15, 0, 100),
  alertScore: getScannerSettingNumber('sAlertScore', 65, 0, 100),
   maxCoins: getMaxScanSymbolsValue(previous.maxCoins ?? 500),
@@ -1055,10 +1070,10 @@ async function saveScannerSettings() {
 
 function applyScannerProfilePreset(presetId = '') {
  const presets = {
- manual_clean: { minScore: 15, alertScore: 65, maxCoins: 500, tf1: '1d', tf2: '15m', chart: 'key', universe: 'nifty500' },
- breakout_validation: { minScore: 24, alertScore: 78, maxCoins: 350, tf1: '1d', tf2: '15m', chart: 'analysis', universe: 'nifty500' },
+ manual_clean: { minScore: 15, alertScore: 65, maxCoins: 500, tf1: '1d', tf2: '4h', chart: 'key', universe: 'nifty500' },
+ breakout_validation: { minScore: 24, alertScore: 78, maxCoins: 350, tf1: '1d', tf2: '4h', chart: 'analysis', universe: 'nifty500' },
  trend_follow: { minScore: 20, alertScore: 72, maxCoins: 450, tf1: '1d', tf2: '4h', chart: 'ema', universe: 'nifty500' },
- mean_reversion: { minScore: 24, alertScore: 76, maxCoins: 250, tf1: '1d', tf2: '15m', chart: 'key', universe: 'fno_stocks' },
+ mean_reversion: { minScore: 24, alertScore: 76, maxCoins: 250, tf1: '1d', tf2: '4h', chart: 'key', universe: 'fno_stocks' },
  };
  const preset = presets[String(presetId || '').trim()];
  if (!preset) return;
@@ -1091,26 +1106,63 @@ async function rebuildMarketIndexOnNextScan() {
 
 async function selectScannerUniverse(universe = 'fno_stocks', { runNow = false } = {}) {
  const scanUniverse = sanitizeScannerUniverseId(universe);
- const data = await storeGet(['strategy']);
+ const data = await storeGet(['strategy', SCAN_UNIVERSE_SNAPSHOTS_KEY]);
   const strategy = {
   ...(data.strategy || {}),
   scanUniverse,
-  scanMode: scanUniverse === 'all_nse' ? sanitizeScannerMode(data.strategy?.scanMode === 'penny_awakening' ? 'standard' : (data.strategy?.scanMode || 'standard')) : sanitizeScannerMode(data.strategy?.scanMode || 'standard'),
+  scanMode: ['all_nse', 'all_bse'].includes(scanUniverse) ? sanitizeScannerMode(data.strategy?.scanMode === 'penny_awakening' ? 'standard' : (data.strategy?.scanMode || 'standard')) : sanitizeScannerMode(data.strategy?.scanMode || 'standard'),
   tf1: sanitizeScannerTimeframe(data.strategy?.tf1, '1d'),
-  tf2: sanitizeScannerTimeframe(data.strategy?.tf2, '15m'),
+  tf2: sanitizeScannerTimeframe(data.strategy?.tf2, '4h'),
   };
   strategy.maxCoins = getScannerUniverseDefaultLimit(scanUniverse);
-  await storeSet({ strategy });
+ const savedSnapshot = data?.[SCAN_UNIVERSE_SNAPSHOTS_KEY]?.[scanUniverse] || null;
+ const restorePayload = savedSnapshot && typeof savedSnapshot === 'object'
+ ? {
+  scanResults: Array.isArray(savedSnapshot.scanResults) ? savedSnapshot.scanResults : [],
+  alerts: Array.isArray(savedSnapshot.alerts) ? savedSnapshot.alerts : [],
+  decisionShortlist: Array.isArray(savedSnapshot.decisionShortlist) ? savedSnapshot.decisionShortlist : [],
+  autoWatchlist: Array.isArray(savedSnapshot.autoWatchlist) ? savedSnapshot.autoWatchlist : [],
+  manualWatchlist: Array.isArray(savedSnapshot.manualWatchlist) ? savedSnapshot.manualWatchlist : [],
+  watchlist: Array.isArray(savedSnapshot.watchlist) ? savedSnapshot.watchlist : [],
+  sectorSummary: savedSnapshot.sectorSummary || {},
+  sectorBreadth: savedSnapshot.sectorBreadth || null,
+  candleFetchStats: savedSnapshot.candleFetchStats || null,
+  marketIndex: savedSnapshot.marketIndex || null,
+  lastScan: savedSnapshot.lastScan || '',
+  lastScanTs: Number(savedSnapshot.lastScanTs || 0),
+  scannedStocks: Number(savedSnapshot.scannedStocks || savedSnapshot.scannerUniverseMeta?.scanned || 0),
+  totalStocks: Number(savedSnapshot.totalStocks || savedSnapshot.scannerUniverseMeta?.count || 0),
+  scannerUniverseMeta: savedSnapshot.scannerUniverseMeta || { universe: scanUniverse, label: getScannerUniverseLabel(scanUniverse) },
+  scanStatus: savedSnapshot.lastScan ? `Ready - restored ${getScannerUniverseLabel(scanUniverse)} scan ${savedSnapshot.lastScan}` : `Ready - ${getScannerUniverseLabel(scanUniverse)} selected`,
+  scanProgress: savedSnapshot.lastScan ? 100 : 0,
+  scanActive: false,
+  scanHeartbeat: Date.now(),
+ }
+ : {
+  scanResults: [],
+  alerts: [],
+  decisionShortlist: [],
+  autoWatchlist: [],
+  scanStatus: `Ready - ${getScannerUniverseLabel(scanUniverse)} selected`,
+  scanProgress: 0,
+  scanActive: false,
+  scanHeartbeat: Date.now(),
+  scannerUniverseMeta: { universe: scanUniverse, label: getScannerUniverseLabel(scanUniverse), requested: strategy.maxCoins, count: strategy.maxCoins, scanned: 0, pending: 0 },
+  scannedStocks: 0,
+  totalStocks: strategy.maxCoins,
+ };
+  await storeSet({ strategy, ...restorePayload });
   setScannerSettingValue('sScanUniverse', scanUniverse);
   setScannerSettingValue('sScanMode', strategy.scanMode);
   setMaxScanSymbolsValue(strategy.maxCoins);
  updateScannerUniverseButtons(scanUniverse);
  showSystemToast?.(
  `${getScannerUniverseLabel(scanUniverse)} selected`,
- 'Use Scan Now to run this universe.',
+ savedSnapshot?.lastScan ? `Restored saved scan from ${savedSnapshot.lastScan}. Use Scan Now to refresh.` : 'Use Scan Now to run this universe.',
  'success',
  2400
  );
+ scheduleWorkspaceTabRender?.('scanner', { preloaded: { strategy, ...restorePayload } });
 }
 
 globalThis.startManualScan = startManualScan;
@@ -1657,6 +1709,7 @@ document.getElementById('d10detail')?.addEventListener('click', async () => {
  .map(driver => `<span class="d10-sec-pill">${escapeHtml(String(driver || ''))}</span>`)
  .join('');
  const auditHtml = buildFwd100AuditHtml(mi, comp);
+ const breadthPct = Number(mi.sentiment?.breadthPct ?? 0);
 
  document.getElementById('d10body').innerHTML = `
  <div class="d10-modal-hero">

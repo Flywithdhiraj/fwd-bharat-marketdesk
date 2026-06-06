@@ -149,7 +149,13 @@
   return { ok: false, error: 'No fresh shared scan context' };
  }
  await global.FWDTradeDeskBackgroundLazyModules?.ensureStrategyLabScannersLoaded?.({ includeNative: false, includeCryptoOnly: false });
- await setUnifiedStatus('Deriving Strategy Lab scanners from main scan context', { active: true, scanId: context.scanId });
+ await setUnifiedStatus(context.partial ? 'Deriving Strategy Lab from partial scanner checkpoint' : 'Deriving Strategy Lab scanners from main scan context', {
+ active: true,
+ scanId: context.scanId,
+ partial: !!context.partial,
+ scannedRows: Number(context.scannedRows || 0),
+ candidateRows: Number(context.candidateRows || 0),
+ });
  const tasks = [
    ['wizard', () => global.FWDTradeDeskWizardScanner?.runWizardScanFromContext?.(context)],
    ['stage', () => global.FWDTradeDeskStageScanner?.runStageScanFromContext?.(context)],
@@ -170,16 +176,22 @@
     derived[id] = { ok: false, error: error?.message || String(error) };
    }
   }
-  await setUnifiedStatus('Strategy Lab derived from main scan context', {
+  await setUnifiedStatus(context.partial ? 'Strategy Lab derived from partial scanner checkpoint' : 'Strategy Lab derived from main scan context', {
    active: false,
    ok: true,
    scanId: context.scanId,
+   partial: !!context.partial,
+   scannedRows: Number(context.scannedRows || 0),
+   candidateRows: Number(context.candidateRows || 0),
    derived,
    finishedAt: now(),
   });
   return {
    ok: true,
    scanId: context.scanId,
+   partial: !!context.partial,
+   scannedRows: Number(context.scannedRows || 0),
+   candidateRows: Number(context.candidateRows || 0),
    mainCount: Array.isArray(context.scanResults) ? context.scanResults.length : 0,
    derived,
   };

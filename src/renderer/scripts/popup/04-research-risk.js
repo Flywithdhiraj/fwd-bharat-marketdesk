@@ -883,7 +883,7 @@ async function renderCorrelationMatrix() {
 
  <div class="corr-meta corr-meta-modern">
  <span>Updated: ${new Date(c.updatedAt || Date.now()).toLocaleTimeString()}</span>
- <span>${c.resolution || '15m'}</span>
+ <span>${c.resolution || '4h'}</span>
  <span>${c.candles || 100} candles${filterMeta}</span>
  <span>Selected: ${esc(selectedLabel)}</span>
  </div>

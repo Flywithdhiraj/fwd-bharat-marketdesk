@@ -7,8 +7,8 @@
   focusLimit: 10,
   freshListingLimit: 5,
   minUsdVolume24h: 75000,
-  preferredIntradayCandles: 180,
-  minIntradayCandles: 36,
+  preferredIntradayCandles: 120,
+  minIntradayCandles: 24,
   preferredDailyCandles: 120,
   minDailyCandles: 30,
   freshListingFirstSeenHours: 72,
@@ -19,14 +19,14 @@
   breakoutLookback: 36,
   vwapTolerancePct: 0.012,
   replayHorizons: Object.freeze([
-   ['15m', 15 * 60000],
+   ['4h', 4 * 60 * 60000],
    ['1h', 60 * 60000],
    ['4h', 4 * 60 * 60000],
   ]),
  });
 
- const LIVE_15M = Object.freeze({ closedOnly: false });
- const CLOSED_DAILY = Object.freeze({ closedOnly: true });
+ const CLOSED_4H = Object.freeze({ closedOnly: true, timeoutMs: 30000, paceMs: 1800 });
+ const CLOSED_DAILY = Object.freeze({ closedOnly: true, timeoutMs: 30000, paceMs: 1800 });
 
  function radarNow() {
   return Date.now();
@@ -656,7 +656,7 @@ async function radarLoadSettings() {
     firstSeenTs,
     isFirstSeenNew,
     isShortHistory,
-    candleCount15m: rows.length,
+    candleCount4h: rows.length,
     candleCount1d: daily.length,
     riskFlags,
     scoreParts: radarBuildScoreParts(scoreParts),
@@ -730,7 +730,7 @@ async function radarLoadSettings() {
     });
    }
    try {
-    const intraday = await fetchCandles(item.symbol, '15m', settings.preferredIntradayCandles, LIVE_15M);
+    const intraday = await fetchCandles(item.symbol, '4h', settings.preferredIntradayCandles, CLOSED_4H);
     const safeIntraday = Array.isArray(intraday) ? intraday : [];
     if (safeIntraday.length < Math.min(12, Number(settings.minIntradayCandles || 36))) {
      skipped.insufficientIntraday += 1;
@@ -814,7 +814,7 @@ async function radarLoadSettings() {
     });
    }
    try {
-    const safeIntraday = getContextCandles?.(context, item.symbol, '15m', settings.preferredIntradayCandles) || [];
+    const safeIntraday = getContextCandles?.(context, item.symbol, '4h', settings.preferredIntradayCandles) || [];
     if (safeIntraday.length < Math.min(12, Number(settings.minIntradayCandles || 36))) {
      skipped.insufficientIntraday += 1;
      if (!safeIntraday.length) skipped.noContextCandles += 1;

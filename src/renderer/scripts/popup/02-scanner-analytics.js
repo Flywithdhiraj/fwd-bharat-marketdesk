@@ -22,8 +22,7 @@ function isScannerUiActive(data = {}) {
  const progress = Number.isFinite(+data.scanProgress) ? Math.max(0, Math.min(100, +data.scanProgress)) : 0;
  const failedStatus = /stopped|failed|rate limit|too many|unavailable|error/i.test(statusText);
  const completedStatus = /^ok done|^ready\b|complete/i.test(statusText) || progress >= 100;
- const heartbeatFresh = Number.isFinite(+data.scanHeartbeat) && (Date.now() - Number(data.scanHeartbeat)) < 20000;
- return !!data.scanActive && heartbeatFresh && /loading|scanning/i.test(statusText) && !failedStatus && !completedStatus;
+ return !!data.scanActive && !failedStatus && !completedStatus;
 }
 
 async function renderScanner(preloaded = null) {
@@ -110,7 +109,7 @@ function renderNativeStraddleScannerRail(rows = [], status = {}) {
  <button type="button" class="bsm" id="btnNativeStraddleLab">Strategy Lab</button>
  </div>
  </div>
- <div class="native-straddle-strip-list">${list.length ? list.map(buildNativeStraddleScannerCard).join('') : '<div class="native-straddle-empty">No Native Straddle result yet. Scan fetches fresh MV quotes and opens charts in 15m.</div>'}</div>
+ <div class="native-straddle-strip-list">${list.length ? list.map(buildNativeStraddleScannerCard).join('') : '<div class="native-straddle-empty">No Native Straddle result yet. Scan fetches fresh MV quotes and opens charts in 4H.</div>'}</div>
  </section>`;
  wrap.querySelector('#btnNativeStraddleScan')?.addEventListener('click', () => {
  chrome.runtime.sendMessage({ action: 'native-straddle:startScan', force: true }, () => {
@@ -123,11 +122,11 @@ function renderNativeStraddleScannerRail(rows = [], status = {}) {
  wrap.querySelectorAll('[data-native-straddle-chart]').forEach(button => {
   button.addEventListener('click', async () => {
    const symbol = button.dataset.nativeStraddleChart || '';
-   const row = list.find(item => item.symbol === symbol) || { symbol, raw: { timeframe: '15m' } };
+   const row = list.find(item => item.symbol === symbol) || { symbol, raw: { timeframe: '4h' } };
    await globalThis.openSignalInChartWorkspace?.({
     ...row,
     chartTradingDraft: row.raw?.chartTradingDraft || null,
-   }, { reviewTab: true, returnTab: 'scanner', returnSymbol: symbol, timeframe: '15m' });
+   }, { reviewTab: true, returnTab: 'scanner', returnSymbol: symbol, timeframe: '4h' });
   });
  });
 }
@@ -147,6 +146,10 @@ function renderScannerFeedStatus(data = {}) {
   const signals = Number(Array.isArray(data?.scanResults) ? data.scanResults.length : universeMeta.signals || 0);
   const skippedNoHistory = Number(universeMeta.skippedNoHistory || data?.scanProgress?.noHistory || 0);
   const scanActive = isScannerUiActive(data);
+ const candleStats = data?.candleFetchStats || {};
+ const cacheHits = Number(candleStats.cacheHits || 0) + Number(candleStats.fallbackCacheHits || 0);
+ const apiFetches = Number(candleStats.apiFetches || 0);
+ const incremental = Number(candleStats.incrementalRequests || 0);
  const updated = (globalThis.formatUiAge || (() => 'Not yet'))(data?.lastScanTs || 0);
  const marketIndex = data?.marketIndex || {};
  // Cache for regime-aware card dimming in renderCards
@@ -158,12 +161,14 @@ function renderScannerFeedStatus(data = {}) {
  : 'Execute >= 65 | Setup >= 60 | Watch >= 45');
  const autoWatchlist = Array.isArray(data?.autoWatchlist) ? data.autoWatchlist : [];
   wrap.innerHTML = (globalThis.buildMarketDataStatusPills || (() => ''))([
-  { label: 'Universe', value: universeLabel, tone: String(data?.strategy?.scanUniverse || '').toLowerCase() === 'all_nse' ? 'warn' : 'ok' },
+  { label: 'Universe', value: universeLabel, tone: ['all_nse', 'all_bse'].includes(String(data?.strategy?.scanUniverse || '').toLowerCase()) ? 'warn' : 'ok' },
   { label: 'Quotes', value: quoteReturned || quoteTotal ? `${quoteReturned || 0}/${quoteTotal || '?'}` : 'Waiting', tone: quoteReturned ? 'ok' : 'warn' },
   { label: 'Type', value: scanMode === 'penny_awakening' ? 'Penny Awakening' : 'Standard', tone: scanMode === 'penny_awakening' ? 'warn' : 'ok' },
   { label: 'Deep Scan', value: scanned || deepLimit ? `${scanned || 0}/${deepLimit || '?'}` : 'Default', tone: scanActive ? 'warn' : scanned ? 'ok' : 'warn' },
   { label: 'Skipped', value: skippedNoHistory ? `${skippedNoHistory} no history` : '0 no history', tone: skippedNoHistory ? 'warn' : 'ok' },
   { label: 'Signals', value: `${signals} found`, tone: signals ? 'ok' : (scanActive ? 'warn' : 'fail') },
+  { label: 'Candle Cache', value: `${cacheHits} hit / ${apiFetches} API`, tone: cacheHits ? 'ok' : apiFetches ? 'warn' : 'info' },
+  { label: 'Incremental', value: incremental ? `${incremental} gap fetch` : 'Full/Fresh', tone: incremental ? 'ok' : 'info' },
   { label: 'Mode', value: mode, tone: String(data?.strategy?.marketDataMode || globalThis.dhanMarketDataMode || 'auto').toLowerCase() === 'polling' ? 'warn' : 'ok' },
  { label: 'Regime', value: String(marketIndex?.regime || 'UNKNOWN').replace(/_/g, ' '), tone: String(marketIndex?.regime || '').toLowerCase().includes('high') ? 'fail' : String(marketIndex?.regime || '').toLowerCase().includes('trend') ? 'ok' : 'warn' },
  { label: 'Direction', value: String(marketIndex?.condition || (scanActive ? 'Scanning' : 'Idle')).toUpperCase(), tone: String(marketIndex?.condition || '').toLowerCase() === 'neutral' ? 'warn' : 'ok' },
@@ -597,12 +602,26 @@ function matchesScannerPreset(signal) {
  const isReversal = absFr >= 0.05 || !!signal.daily?.volumeClimax?.isClimax || !!signal.liquidationRisk;
 
  const isCrowding = absFr >= 0.05 || !!signal.liquidationRisk;
+ const setupLabel = String(signal.setupFamilyLabel || signal.setupLabel || '').toLowerCase();
+ const reasons = Array.isArray(signal.reasons) ? signal.reasons.join(' ').toLowerCase() : '';
+ const isBreakout = setupLabel.includes('breakout') || reasons.includes('breakout') || !!signal.breakout || !!signal.daily?.breakout;
+ const isEmaObv = reasons.includes('ema') || reasons.includes('obv') || setupLabel.includes('ema') || setupLabel.includes('reclaim');
+ const isSectorLeader = String(signal.sectorBreadthState || '').toLowerCase() === 'confirmed' || !!signal.sectorLeader;
+ const isVolume = Number(signal.relativeVolume20 || signal.daily?.relativeVolume20 || 0) >= 1.8 || (Number(signal.volume24h || 0) > 0 && Math.abs(Number(signal.change24h || 0)) >= 1.5);
 
  if (scannerPreset === 'trend') return isTrend;
 
  if (scannerPreset === 'reversal') return isReversal;
 
  if (scannerPreset === 'crowding') return isCrowding;
+
+ if (scannerPreset === 'volume') return isVolume;
+
+ if (scannerPreset === 'breakout') return isBreakout;
+
+ if (scannerPreset === 'ema_obv') return isEmaObv;
+
+ if (scannerPreset === 'sector_leaders') return isSectorLeader;
 
  if (scannerPreset === 'tracked') return tracked.watched || tracked.analytics;
 
@@ -1226,7 +1245,7 @@ function buildCard(r, isPinned, isChoppyRegime = false) {
 
  <span class="mtf-bar-num" style="color:${dColor}">${dScore}</span></div>` : ''}
 
- ${l ? `<div class="mtf-bar-item"><span class="mtf-bar-label">${l.label || '15m'}</span>
+ ${l ? `<div class="mtf-bar-item"><span class="mtf-bar-label">${l.label || '4h'}</span>
 
  <div class="mtf-bar-track"><div class="mtf-bar-fill" style="width:${lScore}%;background:${lColor}"></div></div>
 
@@ -1246,7 +1265,7 @@ function buildCard(r, isPinned, isChoppyRegime = false) {
 
  // VWAP chip
 
- const vwapChip = l?.vwap != null ? `<div class="chip ${l.vwapAbove ? 'ok' : 'fail'}">${l.label || '15m'} VWAP ${l.vwapAbove ? '&uarr;' : '&darr;'}</div>` : '';
+ const vwapChip = l?.vwap != null ? `<div class="chip ${l.vwapAbove ? 'ok' : 'fail'}">${l.label || '4h'} VWAP ${l.vwapAbove ? '&uarr;' : '&darr;'}</div>` : '';
 
 
 
@@ -1278,7 +1297,7 @@ function buildCard(r, isPinned, isChoppyRegime = false) {
 
  const kl1D = getTFKeyLevels(r.keyLevels, '1D');
 
- const kl15m = getTFKeyLevels(r.keyLevels, '15m');
+ const kl4h = getTFKeyLevels(r.keyLevels, '4h');
 
  const chipList = [
 

@@ -701,7 +701,7 @@ async function v16OpenAnalyticsChart(symbol = '', trade = null) {
  await globalThis.FWDTradeDeskChartWorkspace?.openReplayForTrade?.(trade);
  return;
  }
- await globalThis.FWDTradeDeskChartWorkspace?.openDetachedChart?.({ symbol: normalized, timeframe: '15m', preset: 'decision', showOrders: true, uiMode: 'default', refreshNonce: Date.now() });
+ await globalThis.FWDTradeDeskChartWorkspace?.openDetachedChart?.({ symbol: normalized, timeframe: '4h', preset: 'decision', showOrders: true, uiMode: 'default', refreshNonce: Date.now() });
 }
 
 function v16TradeCheckPaperTradeTime(trade = {}) {
@@ -741,7 +741,7 @@ function v16TradeCheckPaperRowsHtml(decision = {}, symbol = '') {
  return `<div class="trade-check-paper-row state-${resultTone}">
  <div class="trade-check-paper-main">
  <strong>${v16Esc(trade.symbol || symbol)} <span>${v16Esc(String(trade.side || '').toUpperCase())}</span></strong>
- <small>${v16Esc(trade.setupFamilyLabel || trade.setupFamily || 'Paper trade')} | ${v16Esc(trade.timeframe || '15m')} | ${v16Esc(ageCopy)}</small>
+ <small>${v16Esc(trade.setupFamilyLabel || trade.setupFamily || 'Paper trade')} | ${v16Esc(trade.timeframe || '4h')} | ${v16Esc(ageCopy)}</small>
  </div>
  <div><span>Entry</span><strong>${v16FmtPrice(Number(trade.entryPrice || 0))}</strong></div>
  <div><span>SL</span><strong>${v16FmtPrice(Number(trade.stopLoss || 0))}</strong></div>

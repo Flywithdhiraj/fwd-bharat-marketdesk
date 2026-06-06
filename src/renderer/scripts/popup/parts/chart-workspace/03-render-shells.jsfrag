@@ -74,7 +74,7 @@
  const openedAt = normalizeTsMs(trade.openedAt || trade.entryTs || trade.entryTime);
  const closedAt = normalizeTsMs(trade.closedAt || trade.exitTs || trade.exitTime);
  const durationMs = Math.max(0, closedAt - openedAt);
- if (durationMs <= 3 * 24 * 60 * 60 * 1000) return '15m';
+ if (durationMs <= 3 * 24 * 60 * 60 * 1000) return '4h';
  if (durationMs <= 14 * 24 * 60 * 60 * 1000) return '4h';
  return '4h';
 }
@@ -116,7 +116,7 @@
  });
  }
 
- function buildAxisLabels(candles = [], timeframe = '15m', startIndex = 0) {
+ function buildAxisLabels(candles = [], timeframe = '4h', startIndex = 0) {
  const labels = [];
  const verticals = [];
  if (!candles.length) return { labels, verticals };
@@ -136,7 +136,7 @@
  ) : false;
  const yearChanged = prev ? date.getUTCFullYear() !== prev.getUTCFullYear() : false;
  let label = '';
- if (timeframe === '15m') {
+ if (timeframe === '4h') {
  if (dayChanged) {
  label = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
  verticals.push({ leftPct, label });
@@ -265,7 +265,7 @@
  </details>`;
  }
  if (key === 'darvas') {
- const darvas = sanitizeDarvasBoxSettings(state.darvasSettings || {}, state.timeframe || '15m');
+ const darvas = sanitizeDarvasBoxSettings(state.darvasSettings || {}, state.timeframe || '4h');
  const toggle = (toggleKey, label) => `<button class="bsm ${darvas[toggleKey] !== false ? 'active' : ''}" type="button" data-ds-darvas-toggle="${escapeHtml(toggleKey)}">${escapeHtml(label)}</button>`;
  const number = (numberKey, label, value, min, max, step = '1') => `<label class="ds-darvas-number">${escapeHtml(label)}<input type="number" min="${escapeHtml(min)}" max="${escapeHtml(max)}" step="${escapeHtml(step)}" value="${escapeHtml(value)}" data-ds-darvas-number="${escapeHtml(numberKey)}" /></label>`;
  return `<details class="ds-chart-indicator-settings ds-darvas-indicator-settings">
@@ -667,7 +667,7 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  }
 
  function buildDeskChartPanel(panelKey, title, panelState = {}, dataset = {}, model = null, intelligence = null, state = {}, calculatedIndicators = {}) {
- const tf = normalizeTimeframe(panelState.timeframe || state.timeframe || '15m');
+ const tf = normalizeTimeframe(panelState.timeframe || state.timeframe || '4h');
  const isFwdIndex = dataset?.syntheticIndex === true;
  const panelResolutions = isFwdIndex ? ['1d'] : RESOLUTIONS;
  const statusText = !panelState.symbol
@@ -907,7 +907,7 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  }
 
  function buildChartRangeControls(state = {}) {
- const tf = normalizeTimeframe(state.timeframe || '15m');
+ const tf = normalizeTimeframe(state.timeframe || '4h');
  const activeCount = Number(state.visibleCandleCount || defaultVisibleCount(tf));
  const oneYear = tf === '1d' ? 365 : MAX_RENDER_CANDLES;
  const twoYear = tf === '1d' ? 730 : MAX_RENDER_CANDLES;
@@ -935,7 +935,7 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  function buildChartModel(dataset = {}, state = {}, strategy = {}, orderContext = null) {
  const candles = Array.isArray(dataset.candles) ? dataset.candles : [];
  if (!candles.length) return null;
- const timeframe = normalizeTimeframe(state.timeframe || dataset.timeframe || '15m');
+ const timeframe = normalizeTimeframe(state.timeframe || dataset.timeframe || '4h');
  const eventCandleTimes = getEventCandleTimes(candles, state);
  const chartCandles = eventCandleTimes.size
  ? candles.filter(candle => !eventCandleTimes.has(Number(candle.time || 0)))
@@ -1301,7 +1301,7 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  }
 
  function buildQuickReviewControls(state = {}) {
-  const currentTf = normalizeTimeframe(state.timeframe || '15m');
+  const currentTf = normalizeTimeframe(state.timeframe || '4h');
   const reviewTabs = sanitizeChartReviewTabs(state.chartReviewTabs || []);
   const activeReviewId = String(state.activeChartReviewTabId || '').trim();
   const activeReviewTab = reviewTabs.find(tab => tab.id === activeReviewId) || reviewTabs[0] || null;
@@ -1313,7 +1313,6 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
   : '';
   return `<div class="ds-chart-review-controls">
  <div class="ds-chart-review-tfs" aria-label="Quick View timeframe">
- ${tfButton('15m', '15m')}
  ${tfButton('4h', '4H')}
  ${tfButton('1d', '1D')}
  ${tfButton('1w', '1W')}
@@ -1422,7 +1421,7 @@ function buildChartTabPicker(state = {}, options = {}) {
  </div>
  <div class="live-order-chart-timeframes ds-fullscreen-control-group">
  <button class="bsm ds-fullscreen-toggle ${state.chartFullscreen ? 'active' : ''}" type="button" data-ds-chart-fullscreen="1">${state.chartFullscreen ? 'Exit Full Screen' : 'Full Screen'}</button>
- <button class="bsm ${state.deskLayoutMode !== 'single' && normalizeTimeframe(state.primaryTimeframe || '') === '1d' && normalizeTimeframe(state.executionTimeframe || '') === '15m' ? 'active' : ''}" type="button" title="Compare daily structure with the 15 minute execution chart" data-ds-desk-compare="1d-15m">1D + 15m</button>
+ <button class="bsm ${state.deskLayoutMode !== 'single' && normalizeTimeframe(state.primaryTimeframe || '') === '1d' && normalizeTimeframe(state.executionTimeframe || '') === '4h' ? 'active' : ''}" type="button" title="Compare daily structure with the 4 hour execution chart" data-ds-desk-compare="1d-4h">1D + 4h</button>
  </div>
  </div>
  <div class="ds-chart-command-group ds-chart-command-group-tools">
@@ -1467,9 +1466,9 @@ function buildChartTabPicker(state = {}, options = {}) {
 
  function buildDeskMarkup(surface = SURFACE_TAB, state = {}, strategy = {}, primaryPayload = {}, executionPayload = {}, signal = null, marketIndex = null, contextData = {}) {
  const isDetached = surface === SURFACE_DETACHED;
- const primaryTf = normalizeTimeframe(state.primaryTimeframe || state.timeframe || '15m');
- const executionTf = normalizeTimeframe(state.executionTimeframe || state.timeframe || '15m');
- const isCompareLayout = state.deskLayoutMode !== 'single' && primaryTf === '1d' && executionTf === '15m';
+ const primaryTf = normalizeTimeframe(state.primaryTimeframe || state.timeframe || '4h');
+ const executionTf = normalizeTimeframe(state.executionTimeframe || state.timeframe || '4h');
+ const isCompareLayout = state.deskLayoutMode !== 'single' && primaryTf === '1d' && executionTf === '4h';
  const isSingleChart = (state.chartFullscreen === true && !isCompareLayout) || state.deskLayoutMode === 'single';
  const collapsed = sanitizeCollapsedPanels(state.collapsedPanels);
  const maximized = normalizeMaximizedPanel(state.maximizedPanel);

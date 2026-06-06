@@ -38,7 +38,6 @@ let workspaceScrollIgnoreUntil = 0;
 let lastActivePaneScrollTop = 0;
 let desktopZoomMode = false;
 let desktopPaneRevealRequested = false;
-let lastScanRecoveryAt = 0;
 let lastWatchlistClickedSymbol = '';
 
 
@@ -80,16 +79,12 @@ const KEEP_ALERTS_MIN = 100;
 
 const KEEP_ALERTS_MAX = 1800;
 
-const SCAN_HEARTBEAT_STALE_MS = 20000;
-
 function isScannerUiActive(data = {}) {
  const statusText = String(data.scanStatus || '').trim();
  const progress = Number.isFinite(+data.scanProgress) ? Math.max(0, Math.min(100, +data.scanProgress)) : 0;
  const failedStatus = /stopped|failed|rate limit|too many|unavailable|error/i.test(statusText);
  const completedStatus = /^ok done|^ready\b|complete/i.test(statusText) || progress >= 100;
- const scanLikeStatus = /loading|scanning/i.test(statusText) && !failedStatus && !completedStatus;
- const heartbeatFresh = Number.isFinite(+data.scanHeartbeat) && (Date.now() - Number(data.scanHeartbeat)) < SCAN_HEARTBEAT_STALE_MS;
- return !!data.scanActive && heartbeatFresh && scanLikeStatus;
+ return !!data.scanActive && !failedStatus && !completedStatus;
 }
 
 let backupDirHandle = null;
@@ -1471,6 +1466,7 @@ function buildBrainActionCard(action = {}) {
 function resolveCommandNextStep(model = {}, topAction = null) {
  const allowedTabs = new Set(['home', 'scanner', 'strategies', 'chart', 'strategy']);
  const scanResults = Array.isArray(model.scanResults) ? model.scanResults : [];
+ const hasCompletedScan = !!model.lastScan;
  const executeCount = Number(model.executeCount || 0);
  const setupCount = Number(model.setupCount || 0);
  const scanActive = /scanning|loading/i.test(String(model.scanLabel || '')) || String(model.scanTone || '') === 'warn';
@@ -1496,11 +1492,20 @@ function resolveCommandNextStep(model = {}, topAction = null) {
    tone: bucketMeta.tone,
   };
  }
- if (!scanResults.length) {
+ if (!scanResults.length && !hasCompletedScan) {
   return {
    label: 'Start',
    title: 'Run a fresh scan',
    detail: 'No scan results are loaded yet. Start with Scanner Activity first.',
+   tab: 'scanner',
+   tone: 'info',
+  };
+ }
+ if (!scanResults.length && hasCompletedScan) {
+  return {
+   label: 'Review',
+   title: 'Scan completed with no signals',
+   detail: 'The latest scan finished, but no symbols met the current score and setup filters. Lower the score filter or run a different universe.',
    tab: 'scanner',
    tone: 'info',
   };
@@ -1783,8 +1788,8 @@ function openChartForSymbolCommand(symbol, signal = null) {
  symbol: key,
  chartViewMode: 'tab',
  preset: 'key',
- timeframe: '15m',
- primaryTimeframe: '15m',
+ timeframe: '4h',
+ primaryTimeframe: '4h',
  }).catch(() => {});
  return;
  }
@@ -1793,9 +1798,9 @@ function openChartForSymbolCommand(symbol, signal = null) {
  symbol: key,
  chartViewMode: 'tab',
  preset: 'key',
- timeframe: '15m',
- primaryTimeframe: '15m',
- executionTimeframe: '15m',
+ timeframe: '4h',
+ primaryTimeframe: '4h',
+ executionTimeframe: '4h',
  refreshNonce: Date.now(),
  }).catch(() => {});
  }
@@ -1990,6 +1995,7 @@ function resolveCommandCenterModel(d = {}) {
  ['Check settings & API', snapshot ? 'Connection is ready' : 'Run the connection check', 'strategy', ''],
  ];
  return {
+ lastScan: d.lastScan || '',
  scanLabel,
  scanDetail,
  scanTone: scanActive ? 'warn' : (d.lastScan ? 'good' : 'bad'),
@@ -2031,7 +2037,7 @@ function renderCommandCenter(d = {}) {
  .join('');
  const nextStep = resolveCommandNextStep(model, null);
  const queueState = nextStep.label;
- const emptyDesk = !model.scanResults.length;
+ const emptyDesk = !model.scanResults.length && !model.lastScan;
  const nextTabLabel = {
   scanner: 'Scanner Activity',
   strategies: 'Strategies',
@@ -2041,6 +2047,8 @@ function renderCommandCenter(d = {}) {
  }[nextStep.tab] || nextStep.tab || 'workspace';
  const blockerTitle = model.scanTone === 'warn'
  ? 'Scanner running'
+ : !model.scanResults.length && model.lastScan
+ ? 'No signals found'
  : emptyDesk
  ? 'No scan loaded'
  : model.apiValue === 'Check'
@@ -2048,6 +2056,8 @@ function renderCommandCenter(d = {}) {
  : 'Ready to review';
  const blockerDetail = model.scanTone === 'warn'
  ? 'Let the current scan finish before choosing the next workspace.'
+ : !model.scanResults.length && model.lastScan
+ ? 'Latest scan completed, but no setup passed the current filters.'
  : emptyDesk
  ? 'Run one scan so the desk can rank the next setup.'
  : model.apiValue === 'Check'
@@ -2768,7 +2778,7 @@ async function exportFullAppBackup(reason = 'manual') {
  const candleRows = Number(summary.candleRows || 0);
  setBackupStatus(candleRows > 0
  ? `OK Full backup saved: ${response.fileName || 'backup file'} (${Number(summary.candleFiles || 0)} candle files, ${candleRows} rows)`
- : `Backup saved but candle history is empty. Start 1D + 15M backfill before laptop migration.`, candleRows > 0 ? '#00e5a0' : '#ffc840');
+ : `Backup saved but candle history is empty. Start 1D + 4H backfill before laptop migration.`, candleRows > 0 ? '#00e5a0' : '#ffc840');
  return response;
  } catch (error) {
  setBackupStatus(`Full backup failed: ${error?.message || 'unknown error'}`, '#ff4560');
@@ -3041,7 +3051,7 @@ function buildSignalModalBody(r) {
  const vwapSource = lower?.vwap != null ? lower : daily?.vwap != null ? daily : null;
  const vwapHTML = vwapSource?.vwap != null ? `
  <div class="mo-section">VWAP ANALYSIS</div>
- <div class="mo-row"><span class="mo-label">${esc(vwapSource.label || '15m')} VWAP</span><span class="mo-val">${formatInrPrice(vwapSource.vwap)}</span></div>
+ <div class="mo-row"><span class="mo-label">${esc(vwapSource.label || '4h')} VWAP</span><span class="mo-val">${formatInrPrice(vwapSource.vwap)}</span></div>
  <div class="mo-row"><span class="mo-label">Price vs VWAP</span><span class="mo-val" style="color:${vwapSource.vwapAbove ? '#00e5a0' : '#ff4560'}">${vwapSource.vwapAbove ? 'Above VWAP - bullish' : 'Below VWAP - bearish'}</span></div>` : '';
 
  const volumeProfile = daily?.volumeProfile;
@@ -3077,7 +3087,7 @@ function buildSignalModalBody(r) {
  ${Array.isArray(marketStructure.swingLows) && marketStructure.swingLows.length ? `<div class="mo-row"><span class="mo-label">Swing Lows</span><span class="mo-val">${marketStructure.swingLows.map(value => formatInrPrice(value)).join(', ')}</span></div>` : ''}` : '';
 
  const kl1D = typeof getTFKeyLevels === 'function' ? getTFKeyLevels(r?.keyLevels, '1D') : { resistance: [], support: [] };
- const kl15m = typeof getTFKeyLevels === 'function' ? getTFKeyLevels(r?.keyLevels, '15m') : { resistance: [], support: [] };
+ const kl4h = typeof getTFKeyLevels === 'function' ? getTFKeyLevels(r?.keyLevels, '4h') : { resistance: [], support: [] };
  const formatLevels = typeof formatKeyLevelList === 'function'
  ? formatKeyLevelList
  : (levels = []) => Array.isArray(levels) && levels.length ? levels.map(v => formatInrPrice(v)).join(', ') : '-';
@@ -3085,8 +3095,8 @@ function buildSignalModalBody(r) {
  <div class="mo-section">KEY LEVELS (SUPPORT / RESISTANCE)</div>
  <div class="mo-row"><span class="mo-label">1D Resistance</span><span class="mo-val">${formatLevels(kl1D.resistance)}</span></div>
  <div class="mo-row"><span class="mo-label">1D Support</span><span class="mo-val">${formatLevels(kl1D.support)}</span></div>
- <div class="mo-row"><span class="mo-label">15m Resistance</span><span class="mo-val">${formatLevels(kl15m.resistance)}</span></div>
- <div class="mo-row"><span class="mo-label">15m Support</span><span class="mo-val">${formatLevels(kl15m.support)}</span></div>`;
+ <div class="mo-row"><span class="mo-label">4H Resistance</span><span class="mo-val">${formatLevels(kl4h.resistance)}</span></div>
+ <div class="mo-row"><span class="mo-label">4H Support</span><span class="mo-val">${formatLevels(kl4h.support)}</span></div>`;
 
  const volumeClimax = daily?.volumeClimax;
  const volumeClimaxHTML = volumeClimax?.isClimax ? `
@@ -3209,22 +3219,22 @@ function buildSignalModalBody(r) {
  lower?.vwapAbove === true ? 'Above VWAP' : lower?.vwapAbove === false ? 'Below VWAP' : '',
  Number.isFinite(Number(lower?.rsi)) ? `RSI ${Number(lower.rsi).toFixed(1)}` : '',
  lower?.macdBull ? 'MACD bull' : lower?.macdBear ? 'MACD bear' : '',
- ].filter(Boolean).join(' | ') || '15m indicators not available';
+ ].filter(Boolean).join(' | ') || '4H indicators not available';
  const timeframeBody = `
  <div class="mo-row"><span class="mo-label">1D Score</span><span class="mo-val">${Number(daily?.score || 0)}/100 | ${dailyBias}</span></div>
- <div class="mo-row"><span class="mo-label">15m Score</span><span class="mo-val">${Number(lower?.score || 0)}/100 | ${lowerBias}</span></div>
- <div class="mo-row"><span class="mo-label">MTF Status</span><span class="mo-val">${r?.mtfConfirmed ? 'Confirmed across 1D and 15m' : 'Partial alignment, wait for confirmation'}</span></div>
+ <div class="mo-row"><span class="mo-label">4H Score</span><span class="mo-val">${Number(lower?.score || 0)}/100 | ${lowerBias}</span></div>
+ <div class="mo-row"><span class="mo-label">MTF Status</span><span class="mo-val">${r?.mtfConfirmed ? 'Confirmed across 1D and 4H' : 'Partial alignment, wait for confirmation'}</span></div>
  <div class="mo-row"><span class="mo-label">1D Indicators</span><span class="mo-val">${esc(dailyIndicators)}</span></div>
- <div class="mo-row"><span class="mo-label">15m Indicators</span><span class="mo-val">${esc(lowerIndicators)}</span></div>
+ <div class="mo-row"><span class="mo-label">4H Indicators</span><span class="mo-val">${esc(lowerIndicators)}</span></div>
  <div class="mo-row"><span class="mo-label">Trigger Context</span><span class="mo-val">${r?.spike ? 'Volume spike present' : 'No volume spike'} | ${r?.oiConfirmed ? 'OI confirmed' : 'OI neutral'} | ${esc(activityText)}</span></div>`;
 
  const technicalBody = [vwapHTML, volumeProfileHTML, msHTML, keyLevelsHTML, volumeClimaxHTML, oiHTML, corrHTML, sentimentHTML]
  .filter(Boolean)
  .join('');
  const evidenceBody = [historyHTML, orderbookHTML].filter(Boolean).join('');
- const scoreBody = `${scoreHTML('DAILY (1D)', daily)}${scoreHTML('15M TRIGGER', lower)}`;
+ const scoreBody = `${scoreHTML('DAILY (1D)', daily)}${scoreHTML('4H TRIGGER', lower)}`;
  const folds = [
- buildModalFold('Signal Breakdown', 'Daily score, 15m trigger, and key indicators.', timeframeBody, { open: false }),
+ buildModalFold('Signal Breakdown', 'Daily score, 4H trigger, and key indicators.', timeframeBody, { open: false }),
  buildModalFold('Trade Plan', 'Entry, stop, targets, and adjustable reward-to-risk.', tradePlanBody, { open: true }),
  '<div id="v16SignalDecisionBlock"></div>',
  buildModalFold('Market Data', 'Latest snapshot, price context, and session-level freshness.', marketDataBody, { open: false }),
@@ -3308,7 +3318,7 @@ function showPreTradeChecklist(signal) {
  const mtf = resolveChecklistMTF(signal);
  const isLong = String(signal?.direction || '').includes('long');
  const marketStructure = signal?.daily?.marketStructure;
- const lowerTfLabel = signal?.lower?.label || '15m';
+ const lowerTfLabel = signal?.lower?.label || '4h';
  const liveMetrics = typeof v16LiveAccountView !== 'undefined' ? v16LiveAccountView.lastPositionMetrics : null;
  const openPositionCount = liveMetrics?.positions?.length || 0;
  const todayPnl = Number(liveMetrics?.netPnl || 0);

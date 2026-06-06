@@ -49,17 +49,28 @@ const checks = [
    && runtime.includes('strategyLabDeriving: true'),
  },
  {
-  name: 'scan creates partial checkpoints for Strategy Lab during long runs',
-  pass: scan.includes('savePartialScanCheckpoint')
+ name: 'scan creates partial checkpoints for Strategy Lab during long runs',
+ pass: scan.includes('savePartialScanCheckpoint')
    && scan.includes('SCAN_PARTIAL_CHECKPOINT_EVERY')
+   && scan.includes('STRATEGY_LAB_PARTIAL_DERIVE_MIN_MS')
+   && scan.includes("source: 'partial_checkpoint'")
+   && scan.includes('scanResults,')
    && context.includes('partial: !!context.partial')
    && runtime.includes('markScanStoppedWithPartialFallback'),
+ },
+ {
+ name: 'strategy lab labels partial checkpoint derivations',
+ pass: context.includes('Deriving Strategy Lab from partial scanner checkpoint')
+  && context.includes('Strategy Lab derived from partial scanner checkpoint')
+  && lab.includes("'Data state'")
+  && lab.includes('Partial ${contextProgress}'),
  },
  {
   name: 'scan deadline prevents stale long-running scans',
   pass: runtime.includes('50 * 60 * 1000')
    && runtime.includes('runScanWithDeadline()')
-   && !runtime.includes('runScan().finally'),
+   && runtime.includes('scanExecutionPromise')
+   && runtime.includes('globalThis.scanAbortRequested = true;'),
  },
  {
   name: 'strategy lab Run All uses unified main scan action',

@@ -12,7 +12,7 @@
  outputLimit: 500,
  });
 
- const CLOSED_DAILY = Object.freeze({ closedOnly: true });
+ const CLOSED_DAILY = Object.freeze({ closedOnly: true, timeoutMs: 30000, paceMs: 1800 });
 
  function wizardNow() {
  return Date.now();

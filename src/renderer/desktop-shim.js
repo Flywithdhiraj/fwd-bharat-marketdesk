@@ -42,6 +42,7 @@
  'stage:startScan',
  'buildCorrelationMatrix',
  'exportCSV',
+ 'v16:getPublicCandles',
  'v16:getPrivateAccountSnapshot',
  'v16:placeTradeOrder',
  'v16:placePositionAction',

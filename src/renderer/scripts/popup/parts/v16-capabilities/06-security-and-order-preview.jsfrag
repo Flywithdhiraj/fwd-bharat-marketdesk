@@ -1308,7 +1308,7 @@ async function v16OpenPositionTradeChart(position = {}, metrics = {}) {
  await globalThis.ensureChartWorkspaceLoaded?.();
  await globalThis.FWDTradeDeskChartWorkspace?.openDetachedChart?.({
  symbol: position.symbol,
- timeframe: '15m',
+ timeframe: '4h',
  preset: 'trade',
  showOrders: true,
  showVwap: true,

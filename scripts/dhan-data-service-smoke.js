@@ -8,8 +8,15 @@ const {
  buildFnoStockUniverse,
  buildFnoCarryContracts,
  buildCommodityFuturePairs,
+ buildCommoditySpreadPairs,
+ buildCommoditySpreadCandles,
+ clipCommoditySpreadRowsForPair,
+ analyzeCommoditySpreadCandles,
+ commoditySpreadCostEstimate,
+ commoditySpreadSafeguards,
  buildCommoditySpreadHistory,
  commodityPriceMultiplier,
+ commodityMatchedLotRatio,
  parseDerivativeExpiryMs,
  buildUniverseCatalog,
  normalizeUniverseId,
@@ -18,6 +25,8 @@ const {
  mergeCandleRows,
  aggregateCandleRows,
  normalizeDhanCandles,
+ dhanErrorMessage,
+ isDhanNoHistoricalDataResponse,
 groupQuoteBatch,
 flattenInstrumentGroups,
 mergeDhanFeedResponses,
@@ -33,6 +42,8 @@ assert.strictEqual(limits.optionChainMinIntervalMs >= 3000, true);
 assert.strictEqual(limits.quoteBatchSize, 1000);
 assert.strictEqual(limits.liveFeedSubscribeChunk, 100);
 assert.strictEqual(feedRequestCodeForMode('ticker'), 15);
+assert.strictEqual(dhanErrorMessage({ errorCode: 'DH-905', errorMessage: 'System is unable to fetch data due to incorrect parameters or no data present' }), 'System is unable to fetch data due to incorrect parameters or no data present');
+assert.strictEqual(isDhanNoHistoricalDataResponse({ status: 400, raw: { errorCode: 'DH-905', errorMessage: 'System is unable to fetch data due to incorrect parameters or no data present' } }), true);
 assert.strictEqual(feedRequestCodeForMode('quote'), 17);
 assert.strictEqual(feedRequestCodeForMode('full'), 21);
 
@@ -160,7 +171,51 @@ assert.strictEqual(commodityPairs.length, 1);
 assert.strictEqual(commodityPairs[0].symbol, 'GOLD');
 assert.strictEqual(commodityPairs[0].nearFuture.securityId, '9001');
 assert.strictEqual(commodityPairs[0].nextFuture.securityId, '9002');
+assert.strictEqual(commodityPairs[0].futures.length, 2);
 assert.deepStrictEqual(commodityPriceMultiplier({ underlyingSymbol: 'GOLDM' }), { symbol: 'GOLDM', multiplier: 10, known: true });
+assert.deepStrictEqual(commodityMatchedLotRatio({ underlyingSymbol: 'GOLD' }, { underlyingSymbol: 'GOLDM' }), { firstLots: 1, secondLots: 10, matched: true });
+
+const goldmNear = { ...commodityNear, securityId: '9011', symbol: 'GOLDM', underlyingSymbol: 'GOLDM', tradingSymbol: 'GOLDM-05JUN2026-FUT' };
+const goldmPairs = buildCommodityFuturePairs([goldmNear], Date.UTC(2026, 4, 26));
+const spreadPairs = buildCommoditySpreadPairs([...commodityPairs, ...goldmPairs]);
+assert.strictEqual(spreadPairs.some(pair => pair.type === 'calendar' && pair.canonicalLabel === 'Far - Near'), true);
+assert.strictEqual(spreadPairs.some(pair => pair.type === 'matched' && pair.firstLots === 1 && pair.secondLots === 10), true);
+
+const syntheticCandles = buildCommoditySpreadCandles(
+ [{ time: 1, open: 100, high: 105, low: 98, close: 102, volume: 12 }],
+ [{ time: 1, open: 110, high: 116, low: 108, close: 114, volume: 8 }]
+);
+assert.deepStrictEqual(syntheticCandles[0], { time: 1, open: 10, high: 18, low: 3, close: 12, volume: 8 });
+const clippedSpreadRows = clipCommoditySpreadRowsForPair(
+ { firstInstrument: { underlyingSymbol: 'GOLDM', expiry: '2026-06-30 23:30:00' }, secondInstrument: { underlyingSymbol: 'GOLDM', expiry: '2026-08-31 23:30:00' } },
+ [
+  { time: Date.UTC(2026, 0, 15) / 1000, close: 100 },
+  { time: Date.UTC(2026, 2, 5) / 1000, close: 105 },
+  { time: Date.UTC(2026, 2, 6) / 1000, open: 120, high: 122, low: 118, close: 121, volume: 9 },
+ ],
+ [
+  { time: Date.UTC(2026, 0, 15) / 1000, close: 110 },
+  { time: Date.UTC(2026, 2, 5) / 1000, close: 118 },
+  { time: Date.UTC(2026, 2, 6) / 1000, open: 120, high: 122, low: 118, close: 121, volume: 9 },
+ ],
+ '1d',
+ Date.UTC(2025, 5, 1),
+ Date.UTC(2026, 5, 4)
+);
+assert.strictEqual(clippedSpreadRows.firstRows.length, 1);
+assert.strictEqual(clippedSpreadRows.secondRows.length, 1);
+assert.strictEqual(clippedSpreadRows.firstRows[0].close, 105);
+const wideningAnalysis = analyzeCommoditySpreadCandles(Array.from({ length: 140 }, (_, index) => ({ time: index + 1, open: index, high: index + 2, low: index - 1, close: index + 1, volume: 100 + index })));
+assert.strictEqual(wideningAnalysis.direction, 'widening');
+assert.strictEqual(wideningAnalysis.ema9 > wideningAnalysis.ema30 && wideningAnalysis.ema30 > wideningAnalysis.ema100, true);
+assert.strictEqual(wideningAnalysis.obvUp, true);
+assert.strictEqual(wideningAnalysis.targetSpread > wideningAnalysis.latest, true);
+const spreadCosts = commoditySpreadCostEstimate({ firstInstrument: { underlyingSymbol: 'GOLDM' }, secondInstrument: { underlyingSymbol: 'GOLDM' }, firstLots: 1, secondLots: 1 }, { spread: 100, wideningEntrySpread: 101, narrowingEntrySpread: 99 });
+assert.strictEqual(spreadCosts.brokerage, 80);
+assert.strictEqual(spreadCosts.fixedBrokerageAndGst, 94.4);
+const spreadGuard = commoditySpreadSafeguards({ firstInstrument: commodityNear, secondInstrument: commodityNext }, { firstPrice: 100, secondPrice: 110, depthConfirmed: false, firstVolume: 0, secondVolume: 0, firstOi: 0, secondOi: 0 }, Date.UTC(2026, 4, 26));
+assert.strictEqual(spreadGuard.tradeAllowed, false);
+assert.strictEqual(spreadGuard.warnings.length > 0, true);
 
 const calendarHistory = buildCommoditySpreadHistory({
  buyInstrument: { underlyingSymbol: 'GOLDM' },
@@ -195,6 +250,10 @@ assert.strictEqual(sizedGoldPair.latest.grossPnl, 500);
 
 assert.strictEqual(normalizeUniverseId('Nifty 500'), 'nifty500');
 assert.strictEqual(normalizeUniverseId('all'), 'all_nse');
+assert.strictEqual(normalizeUniverseId('nse rest'), 'nse_rest');
+assert.strictEqual(normalizeUniverseId('BSE Only'), 'bse_only');
+assert.strictEqual(normalizeUniverseId('nse chunk 1'), 'nse_af');
+assert.strictEqual(normalizeUniverseId('BSE M-R'), 'bse_mr');
 assert.strictEqual(normalizeUniverseId('indices'), 'indices');
 assert.strictEqual(isNseEquityInstrument(equity), true);
 
@@ -207,8 +266,17 @@ const rel = normalizeInstrument({
  DISPLAY_NAME: 'Reliance',
  SERIES: 'EQ',
 });
+const bseOnly = normalizeInstrument({
+ EXCH_ID: 'BSE',
+ SEGMENT: 'E',
+ SECURITY_ID: '600001',
+ INSTRUMENT: 'EQUITY',
+ SYMBOL_NAME: 'BSEONLY',
+ DISPLAY_NAME: 'BSE Only Ltd',
+ SERIES: 'EQ',
+});
 const universeCatalog = buildUniverseCatalog({
- instruments: [nifty, equity, rel],
+ instruments: [nifty, equity, rel, bseOnly],
  fnoStockUniverse: [equity],
  indexSources: {
   nifty500: { ok: true, symbols: new Set(['HDFCBANK', 'RELIANCE']) },
@@ -218,6 +286,11 @@ const universeCatalog = buildUniverseCatalog({
  nseAllSource: { ok: true, symbols: new Set(['HDFCBANK', 'RELIANCE']) },
 });
 assert.strictEqual(universeCatalog.counts.all_nse, 2);
+assert.strictEqual(universeCatalog.counts.bse_only, 1);
+assert.strictEqual(universeCatalog.counts.nse_rest || 0, 0);
+assert.strictEqual(universeCatalog.counts.nse_af || 0, 0);
+assert.strictEqual(universeCatalog.counts.nse_gl, 1);
+assert.strictEqual(universeCatalog.counts.nse_mr, 1);
 assert.strictEqual(universeCatalog.counts.fno_stocks, 1);
 assert.strictEqual(universeCatalog.counts.indices, 1);
 assert.strictEqual(universeCatalog.counts.nifty500, 2);
@@ -228,8 +301,8 @@ const longRange = buildIntradayChunks(Date.UTC(2026, 0, 1), Date.UTC(2026, 6, 1)
 assert.strictEqual(longRange.length, 3);
 assert(longRange.every(range => range.endMs - range.startMs <= 90 * 24 * 60 * 60 * 1000));
 
-assert.deepStrictEqual(normalizeResolution('5m'), { kind: 'intraday', interval: '5', seconds: 300, aggregateSeconds: 0 });
-assert.deepStrictEqual(normalizeResolution('25m'), { kind: 'intraday', interval: '25', seconds: 1500, aggregateSeconds: 0 });
+assert.deepStrictEqual(normalizeResolution('5m'), { kind: 'intraday', interval: '60', seconds: 14400, aggregateSeconds: 14400 });
+assert.deepStrictEqual(normalizeResolution('25m'), { kind: 'intraday', interval: '60', seconds: 14400, aggregateSeconds: 14400 });
 assert.deepStrictEqual(normalizeResolution('4h'), { kind: 'intraday', interval: '60', seconds: 14400, aggregateSeconds: 14400 });
 assert.deepStrictEqual(normalizeResolution('1w'), { kind: 'historical', interval: '1D', seconds: 604800, aggregateSeconds: 604800 });
 

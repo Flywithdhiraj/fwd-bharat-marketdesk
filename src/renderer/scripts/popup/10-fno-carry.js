@@ -167,7 +167,7 @@
  async function marketData(action, payload = {}) {
   const bridge = global.fwdDesktopNative;
   if (!bridge?.sendNativeMessage) return { ok: false, error: 'Desktop market-data bridge is not available.' };
-  return bridge.sendNativeMessage({ type: 'dhan_data', action, ...payload });
+ return bridge.sendNativeMessage({ ...payload, type: 'dhan_data', action });
  }
 
  function estimateRow(row = {}) {

@@ -145,6 +145,26 @@ function candleCacheRefreshMs(resolution = '', options = {}) {
  return Math.max(60 * 1000, Math.min(periodSec * 1000, 6 * 60 * 60 * 1000));
 }
 
+function extractDhanRetryAfterMs(message = '') {
+ const text = String(message || '');
+ const match = text.match(/retry\s+in\s+(\d+)\s*seconds/i);
+ if (match) return Math.max(0, Number(match[1] || 0) * 1000);
+ return /rate.?limit|cooling down/i.test(text) ? 60000 : 0;
+}
+
+function waitForSharedDhanCandleCooldown(waitMs = 0) {
+ const safeWaitMs = Math.max(0, Math.min(90000, Number(waitMs || 0)));
+ if (!(safeWaitMs > 0)) return Promise.resolve();
+ const until = Date.now() + safeWaitMs;
+ const active = globalThis.dhanCandleCooldownWait || null;
+ if (active && Number(active.until || 0) >= until - 1000 && active.promise) return active.promise;
+ const promise = new Promise(resolve => setTimeout(resolve, safeWaitMs + 750));
+ globalThis.dhanCandleCooldownWait = { until, promise };
+ return promise.finally(() => {
+  if (globalThis.dhanCandleCooldownWait?.promise === promise) globalThis.dhanCandleCooldownWait = null;
+ });
+}
+
 function filterCandlesByRequestedRange(rows = [], startSec = 0, endSec = 0, resolution = '') {
  const periodSec = resolveCandleResolutionSec(resolution);
  return (Array.isArray(rows) ? rows : []).filter(row => {
@@ -1407,7 +1427,7 @@ function detectKeyLevels(dayCandles, tf15Candles, currentPrice, rawSettings = {}
  }
 
  const dayLevels = buildTfLevels(dayCandles || [], '1D');
- const tf15Levels = buildTfLevels(tf15Candles || [], '15m');
+ const tf15Levels = buildTfLevels(tf15Candles || [], '4h');
  const allKeyLevelCandles = [...(Array.isArray(dayCandles) ? dayCandles : []), ...(Array.isArray(tf15Candles) ? tf15Candles : [])]
  .filter(candle => Number(candle?.time || 0) > 0)
  .sort((a, b) => Number(a.time || 0) - Number(b.time || 0));
@@ -1451,7 +1471,7 @@ function detectKeyLevels(dayCandles, tf15Candles, currentPrice, rawSettings = {}
  resistance: dayLevels.resistance,
  support: dayLevels.support,
  },
- '15m': {
+ '4h': {
  resistance: tf15Levels.resistance,
  support: tf15Levels.support,
  },
@@ -1648,7 +1668,7 @@ async function buildCorrelationMatrix(results, strat) {
  )];
  if (symbols.length < 2) return null;
 
- const resolution = strat?.tf2 || '15m';
+ const resolution = strat?.tf2 || '4h';
  const candlesList = await Promise.all(symbols.map(sym => fetchCandles(sym, resolution, 100)));
  const series = [];
  for (let i = 0; i < symbols.length; i++) {
@@ -1819,12 +1839,12 @@ function classifyEmergingMove(daily, lower, ticker) {
  const mode = reversalLong || reversalShort ? 'reversal' : 'trend';
  const factors = [];
 
- if (lower.emaCross === 'bull') factors.push('15m bull cross');
- if (lower.emaCross === 'bear') factors.push('15m bear cross');
- if (lower.marketStructure?.bullish) factors.push('15m structure up');
- if (lower.marketStructure?.bearish) factors.push('15m structure down');
- if (lower.vwapAbove === true) factors.push('15m above VWAP');
- if (lower.vwapAbove === false) factors.push('15m below VWAP');
+ if (lower.emaCross === 'bull') factors.push('4H bull cross');
+ if (lower.emaCross === 'bear') factors.push('4H bear cross');
+ if (lower.marketStructure?.bullish) factors.push('4H structure up');
+ if (lower.marketStructure?.bearish) factors.push('4H structure down');
+ if (lower.vwapAbove === true) factors.push('4H above VWAP');
+ if (lower.vwapAbove === false) factors.push('4H below VWAP');
  if (lower.obvBull) factors.push('OBV bid');
  if (lower.obvBear) factors.push('OBV offer');
  if (lower.spike) factors.push('volume expansion');
@@ -1853,8 +1873,8 @@ function classifyEmergingMove(daily, lower, ticker) {
  label: `${mode === 'reversal' ? 'Emerging Reversal' : 'Trend Ignition'} ${side === 'long' ? 'Long' : 'Short'}`,
  note:
  mode === 'reversal'
- ? `15m ${side} impulse while 1D is still repairing`
- : `15m ${side} impulse expanding inside the broader trend`,
+ ? `4H ${side} impulse while 1D is still repairing`
+ : `4H ${side} impulse expanding inside the broader trend`,
  factors: factors.slice(0, 4),
  };
 }
@@ -1939,13 +1959,13 @@ function parseCandle(c) {
 const RES_MAP = {
  '1w':['1w'], '1wk':['1w'], W:['1w'],
  '1d':['1d'], '4h':['4h'], '1h':['1h'], '30m':['30m'],
- '15m':['15m'], '5m':['5m'], '3m':['3m'], '1m':['1m'],
- D:['1d'], '60':['1h'], '15':['15m'], '5':['5m'], '240':['4h'], '720':['12h'],
+ '5m':['4h'], '3m':['4h'], '1m':['4h'],
+ D:['1d'], '60':['4h'], '5':['4h'], '240':['4h'], '720':['4h'],
 };
 const SECS_MAP = {
  '1w':604800,
  '1d':86400, '4h':14400, '1h':3600, '30m':1800,
- '15m':900, '5m':300, '3m':180, '1m':60, '12h':43200,
+ '5m':14400, '3m':14400, '1m':14400, '12h':14400,
 };
 
 function resolveCandleResolutionSec(resolution = '') {
@@ -1999,7 +2019,7 @@ async function fetchCandles(symbol, resolution, limit = 200, options = {}) {
  })();
  const lastCachedTs = cachedRows.length ? Number(cachedRows[cachedRows.length - 1]?.time || 0) : 0;
  const cacheFresh = persisted.fromMemory || ((Date.now() - Number(persisted.updatedAt || 0)) < refreshMs);
- const largeNativeHistoryRequest = ['15m', '4h', '1d', '1w'].includes(safeResolution) && Number(limit || 0) >= 1000;
+ const largeNativeHistoryRequest = ['4h', '1d', '1w'].includes(safeResolution) && Number(limit || 0) >= 1000;
  const reusableClosedSeries = closedOnly && cacheFresh;
  const reusableLiveSeries = lastCachedTs >= (end - Math.max(secs, 60)) && cacheFresh;
  if (!largeNativeHistoryRequest && persistedCandles.length >= Math.min(20, limit) && (reusableClosedSeries || reusableLiveSeries)) {
@@ -2010,11 +2030,18 @@ async function fetchCandles(symbol, resolution, limit = 200, options = {}) {
   setCache(cKey, persistedCandles);
   return persistedCandles;
   }
- const incrementalStart = largeNativeHistoryRequest
- ? start
- : lastCachedTs > 0
- ? Math.max(start, lastCachedTs - (secs * Math.min(2, Math.max(1, limit))))
+ const cachedCoverageEnough = cachedRows.length >= Math.min(Math.max(20, Number(limit || 0)), Math.max(20, Number(limit || 0)));
+ const overlapBars = closedOnly ? 2 : 4;
+ const incrementalStart = lastCachedTs > 0 && cachedCoverageEnough
+ ? Math.max(start, lastCachedTs - (secs * overlapBars))
  : start;
+ if (lastCachedTs > 0) {
+  globalThis.dhanCandleFetchStats = {
+   ...(globalThis.dhanCandleFetchStats || {}),
+   persistedRows: Number(globalThis.dhanCandleFetchStats?.persistedRows || 0) + cachedRows.length,
+   incrementalRequests: Number(globalThis.dhanCandleFetchStats?.incrementalRequests || 0) + (incrementalStart > start ? 1 : 0),
+  };
+ }
  const withCandleTimeout = promise => {
   if (!(timeoutMs > 0)) return promise;
   return Promise.race([
@@ -2024,7 +2051,12 @@ async function fetchCandles(symbol, resolution, limit = 200, options = {}) {
  };
  if (typeof globalThis.dhanFetchCandlesForRenderer === 'function') {
  try {
-   const fetchedRows = await withCandleTimeout(globalThis.dhanFetchCandlesForRenderer(safeSymbol, safeResolution, incrementalStart || start, end, { timeoutMs, instrument }));
+   const fetchedRows = await withCandleTimeout(globalThis.dhanFetchCandlesForRenderer(safeSymbol, safeResolution, incrementalStart || start, end, {
+    timeoutMs,
+    paceMs: Math.max(0, Number(options?.paceMs || 0)),
+    failFastOnRateLimit: true,
+    instrument,
+   }));
    if (fetchedRows?.length) {
     globalThis.dhanCandleFetchStats = {
      ...(globalThis.dhanCandleFetchStats || {}),
@@ -2047,6 +2079,20 @@ async function fetchCandles(symbol, resolution, limit = 200, options = {}) {
   }
   } catch (e) {
    const message = String(e?.message || e || '');
+   const retryAfterMs = extractDhanRetryAfterMs(message);
+   if (retryAfterMs > 0 && options?._rateLimitRetry !== true) {
+    globalThis.dhanCandleFetchStats = {
+     ...(globalThis.dhanCandleFetchStats || {}),
+     rateLimitWaits: Number(globalThis.dhanCandleFetchStats?.rateLimitWaits || 0) + 1,
+    };
+    dlog(`Candle rate-limit pause ${safeSymbol} ${safeResolution}: waiting ${Math.ceil(retryAfterMs / 1000)}s before retry`);
+    await waitForSharedDhanCandleCooldown(retryAfterMs);
+    return fetchCandles(symbol, resolution, limit, {
+     ...options,
+     _rateLimitRetry: true,
+     timeoutMs: Math.max(timeoutMs || 0, retryAfterMs + 45000),
+    });
+   }
    const instrumentLabel = instrument?.exchangeSegment && instrument?.securityId
    ? `${String(instrument.exchangeSegment).trim().toUpperCase()}:${String(instrument.securityId).trim()}`
    : 'instrument unresolved';
@@ -2340,7 +2386,7 @@ function analyseTF(candles, label, strat) {
 // ================================================================
 function analyseCoin(symbol, dCandles, m2Candles, ticker, strat, marketContextInput) {
  const daily = analyseTF(dCandles, '1D', strat);
- const lower = analyseTF(m2Candles, strat.tf2 || '15m', strat);
+ const lower = analyseTF(m2Candles, strat.tf2 || '4h', strat);
  if (!daily.valid && !lower.valid) return null;
  const marketContext = resolveMarketContext(marketContextInput, strat);
 
@@ -2422,7 +2468,7 @@ function analyseCoin(symbol, dCandles, m2Candles, ticker, strat, marketContextIn
  direction = 'watch_short';
  }
 
- // Final guardrail against trend mislabelling on 15m.
+ // Final guardrail against trend mislabelling on 4H.
  if (direction === 'long' && (lMsBear || lPriceBear || lVwapBear)) {
  direction = 'watch_long';
  avgScore = Math.max(0, avgScore - 6);
@@ -2505,10 +2551,10 @@ function analyseCoin(symbol, dCandles, m2Candles, ticker, strat, marketContextIn
  if (mtfConfirmed) reasons.push('MTF aligned');
  if (dailyConfirmation.passed) reasons.push(`1D confirms ${dailyConfirmation.side}`);
  if (daily.emaCross) reasons.push(`Daily EMA ${daily.emaCross} cross`);
- if (lower.emaCross) reasons.push(`${strat.tf2 || '15m'} EMA ${lower.emaCross} cross`);
- if (lower.marketStructure) reasons.push(`${strat.tf2 || '15m'} structure: ${lower.marketStructure.structure}`);
+ if (lower.emaCross) reasons.push(`${strat.tf2 || '4h'} EMA ${lower.emaCross} cross`);
+ if (lower.marketStructure) reasons.push(`${strat.tf2 || '4h'} structure: ${lower.marketStructure.structure}`);
  if (lower.vwapAbove !== null) reasons.push(
- `${strat.tf2 || '15m'} ${lower.vwapAbove ? 'above' : 'below'} VWAP`
+ `${strat.tf2 || '4h'} ${lower.vwapAbove ? 'above' : 'below'} VWAP`
  );
  if (daily.rsiBullishShift) reasons.push('RSI bullish range shift');
  if (daily.rsiBearishShift) reasons.push('RSI bearish range shift');

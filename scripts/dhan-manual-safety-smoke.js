@@ -49,7 +49,7 @@ assert(core.includes('function playAlert') && core.includes('window.playAlert = 
 assert(shell.includes('playAlert(d.strategy?.alertTone)'), 'Scanner sound alert must use the always-loaded core helper.');
 assert(scan.includes('Scan complete') && scan.includes('skipped no-history'), 'Scan completion notification and no-history summary must be present.');
 assert(infra.includes('requestUnits') && mainDhan.includes('apiCalls: responses.length') && mainDhan.includes('apiCalls: chunks.length'), 'Dhan API meter must count quote batches and candle chunks, not only bridge calls.');
-assert(shell.includes('Data Ready') && shell.includes('Requested scan limit') && shell.includes('Available symbols in selected universe'), 'API/scanner display must expose readiness and count semantics.');
+assert(shell.includes('Data Ready') && shell.includes('Deep scan target') && shell.includes('Quote rows loaded') && shell.includes('Available symbols in selected universe'), 'API/scanner display must expose readiness and count semantics.');
 assert(html.includes('scanned/requested'), 'Header label must explain scanner count semantics.');
 
 if (process.exitCode) process.exit(process.exitCode);

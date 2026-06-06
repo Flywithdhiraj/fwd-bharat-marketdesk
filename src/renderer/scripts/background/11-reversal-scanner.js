@@ -5,8 +5,8 @@
   maxCoins: 500,
   outputLimit: 500,
   minUsdVolume24h: 100000,
-  preferredIntradayCandles: 180,
-  minIntradayCandles: 72,
+  preferredIntradayCandles: 120,
+  minIntradayCandles: 24,
   preferredDailyCandles: 120,
   minDailyCandles: 45,
   rsiExtremeHigh: 72,
@@ -17,8 +17,8 @@
   volumeClimaxRatio: 2.4,
  });
 
- const LIVE_15M = Object.freeze({ closedOnly: false });
- const CLOSED_DAILY = Object.freeze({ closedOnly: true });
+ const CLOSED_4H = Object.freeze({ closedOnly: true, timeoutMs: 30000, paceMs: 1800 });
+ const CLOSED_DAILY = Object.freeze({ closedOnly: true, timeoutMs: 30000, paceMs: 1800 });
 
  function reversalNow() {
   return Date.now();
@@ -397,7 +397,7 @@ async function reversalLoadSettings() {
     rangeHigh: reversalRound(levels.high, 8),
     rangeLow: reversalRound(levels.low, 8),
     rangeMid: reversalRound(levels.mid, 8),
-    candleCount15m: rows.length,
+    candleCount4h: rows.length,
     candleCount1d: daily.length,
     riskFlags,
     scoreParts: reversalBuildScoreParts(scoreParts),
@@ -442,7 +442,7 @@ async function reversalLoadSettings() {
     });
    }
    try {
-    const intraday = await fetchCandles(item.symbol, '15m', settings.preferredIntradayCandles, LIVE_15M);
+    const intraday = await fetchCandles(item.symbol, '4h', settings.preferredIntradayCandles, CLOSED_4H);
     const safeIntraday = Array.isArray(intraday) ? intraday : [];
     if (safeIntraday.length < Number(settings.minIntradayCandles || 72)) {
      skipped.insufficientHistory += 1;
@@ -505,7 +505,7 @@ async function reversalLoadSettings() {
     });
    }
    try {
-    const safeIntraday = getContextCandles?.(context, item.symbol, '15m', settings.preferredIntradayCandles) || [];
+    const safeIntraday = getContextCandles?.(context, item.symbol, '4h', settings.preferredIntradayCandles) || [];
     if (safeIntraday.length < Number(settings.minIntradayCandles || 72)) {
      skipped.insufficientHistory += 1;
      if (!safeIntraday.length) skipped.noContextCandles += 1;

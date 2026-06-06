@@ -110,7 +110,7 @@ function refreshRuntimeHealthStatus() {
 const SETTINGS_STRATEGY_PRESETS = Object.freeze({
  manual_clean: {
  label: 'Manual Clean',
- strategy: { minScore: 15, alertScore: 65, maxCoins: 500, tf1: '1d', tf2: '15m' },
+ strategy: { minScore: 15, alertScore: 65, maxCoins: 500, tf1: '1d', tf2: '4h' },
  auto: { minScore: 72, paperTrackingEnabled: true, entryTriggerRequired: true, riskQualityRequired: true, setupPerformanceMinSample: 20 },
  risk: { atrStopMultiplier: 1.5, targetRR: 2 },
  chart: { defaultPreset: 'key', showOrders: false, showVwap: false },
@@ -120,7 +120,7 @@ const SETTINGS_STRATEGY_PRESETS = Object.freeze({
  },
  breakout_validation: {
  label: 'Breakout Validation',
- strategy: { minScore: 24, alertScore: 78, maxCoins: 350, tf1: '1d', tf2: '15m' },
+ strategy: { minScore: 24, alertScore: 78, maxCoins: 350, tf1: '1d', tf2: '4h' },
  auto: { minScore: 78, paperTrackingEnabled: true, entryTriggerMode: 'balanced', entryTriggerRequired: true, riskQualityRequired: true, setupPerformanceMinSample: 30 },
  risk: { atrStopMultiplier: 1.3, targetRR: 2.5 },
  chart: { defaultPreset: 'analysis', showOrders: true, showVwap: false },
@@ -140,7 +140,7 @@ const SETTINGS_STRATEGY_PRESETS = Object.freeze({
  },
  mean_reversion: {
  label: 'Mean Reversion',
- strategy: { minScore: 24, alertScore: 76, maxCoins: 250, tf1: '4h', tf2: '15m' },
+ strategy: { minScore: 24, alertScore: 76, maxCoins: 250, tf1: '1d', tf2: '4h' },
  auto: { minScore: 76, paperTrackingEnabled: true, entryTriggerMode: 'conservative', entryTriggerRequired: true, riskQualityRequired: true, setupPerformanceMinSample: 40 },
  risk: { atrStopMultiplier: 1.1, targetRR: 1.6 },
  chart: { defaultPreset: 'analysis', showOrders: true, showVwap: true },
@@ -150,7 +150,7 @@ const SETTINGS_STRATEGY_PRESETS = Object.freeze({
  },
  paper_first: {
  label: 'Paper First',
- strategy: { minScore: 18, alertScore: 70, maxCoins: 500, tf1: '1d', tf2: '15m' },
+ strategy: { minScore: 18, alertScore: 70, maxCoins: 500, tf1: '1d', tf2: '4h' },
  auto: { minScore: 70, paperTrackingEnabled: true, entryTriggerMode: 'balanced', entryTriggerRequired: true, riskQualityRequired: true, setupPerformanceMinSample: 20 },
  risk: { atrStopMultiplier: 1.5, targetRR: 2 },
  chart: { defaultPreset: 'key', showOrders: true, showVwap: false },
@@ -213,8 +213,8 @@ function loadStrategy() {
  document.getElementById('sE2').value = s.ema2 ?? 30;
  document.getElementById('sE3').value = s.ema3 ?? 100;
  document.getElementById('sOBV').value = s.obvPeriod ?? 50;
- document.getElementById('sTF1').value = s.tf1 ?? '1d';
- document.getElementById('sTF2').value = s.tf2 ?? '15m';
+ document.getElementById('sTF1').value = ['1d', '4h'].includes(s.tf1) ? s.tf1 : '1d';
+ document.getElementById('sTF2').value = ['1d', '4h'].includes(s.tf2) ? s.tf2 : '4h';
  document.getElementById('sMinScore').value = s.minScore ?? 15;
  document.getElementById('sAlertScore').value = s.alertScore ?? 65;
  document.getElementById('sMaxCoins').value = s.maxCoins ?? 500;
@@ -397,7 +397,7 @@ document.addEventListener('click', async (e) => {
  ema3: +settingsValue('sE3', '100'),
  obvPeriod: +settingsValue('sOBV', '50'),
  tf1: settingsValue('sTF1', '1d'),
- tf2: settingsValue('sTF2', '15m'),
+ tf2: settingsValue('sTF2', '4h'),
  minScore: +settingsValue('sMinScore', '15'),
  alertScore: +settingsValue('sAlertScore', '65'),
  maxCoins: +settingsValue('sMaxCoins', '500'),

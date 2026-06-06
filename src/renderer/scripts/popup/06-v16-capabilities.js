@@ -4877,7 +4877,7 @@ function v16BuildAnalyticsSetupRows(manageModel = {}, scanResults = [], setupPer
  const baseFamilyKey = String(signal?.setupFamily || signal?.setupFamilyLabel || '').trim().toLowerCase().replace(/\s+/g, '_');
  const familyLabel = String(signal?.setupFamilyLabel || v16HumanizeSetupFamily(signal?.setupFamily || '') || 'Live Watch').trim();
  if (!baseFamilyKey || !familyLabel) return;
- const timeframe = String(signal?.lower?.label || signal?.tf2 || signal?.timeframe || '15m').trim() || '15m';
+ const timeframe = String(signal?.lower?.label || signal?.tf2 || signal?.timeframe || '4h').trim() || '4H';
  const marketRegime = String(signal?.marketRegime || 'UNKNOWN').trim().toUpperCase() || 'UNKNOWN';
  const familyKey = `${baseFamilyKey}|${timeframe.toLowerCase()}|${marketRegime}`;
  const entry = liveSetupMap.get(familyKey) || {
@@ -5136,7 +5136,7 @@ function v16RenderAnalyticsReliabilityPanel(snapshot = {}, analyticsModel = null
  { label: 'Auto Scan', value: autoScan ? 'Running' : 'Stopped', tone: autoScan ? 'good' : 'bad', detail: autoScan ? `Every ${Number(store?.autoScanInterval || 0) || '?'} min | last ${store?.lastScan || 'pending'}` : 'Enable auto scan to collect paper data.' },
  { label: 'Paper Tracking', value: settings.paperTrackingEnabled ? 'On' : 'Off', tone: settings.paperTrackingEnabled ? 'good' : 'bad', detail: settings.paperTrackingEnabled ? `${Number(ledger?.open?.length || 0)} open | ${Number(ledger?.closed?.length || 0)} closed` : 'Paper ledger is disabled in Settings.' },
  { label: 'Last Paper Update', value: ledgerUpdatedAt ? v16FormatDurationShort(now - ledgerUpdatedAt) : 'None', tone: paperFresh ? 'good' : (ledgerUpdatedAt ? 'warn' : 'bad'), detail: ledgerUpdatedAt ? `Updated ${v16FormatTs(ledgerUpdatedAt)}` : 'No paper ledger update yet.' },
- { label: 'App Lock', value: 'Safe for paper', tone: 'info', detail: 'The 15-minute app lock does not close the background scanner while the app stays open and Windows is awake.' },
+ { label: 'App Lock', value: 'Safe for paper', tone: 'info', detail: 'The 4-hour app lock does not close the background scanner while the app stays open and Windows is awake.' },
  { label: 'Sleep Risk', value: 'PC must stay awake', tone: 'warn', detail: 'Closing the app or Windows sleep stops scan, paper tracking, and live automation.' },
  { label: 'API/Data', value: apiBlocked ? 'Blocked' : (lastScanTs ? (scanAgeMs < 20 * 60 * 1000 ? 'Fresh' : 'Stale') : 'Pending'), tone: apiBlocked ? 'bad' : (lastScanTs && scanAgeMs < 20 * 60 * 1000 ? 'good' : 'warn'), detail: apiBlocked ? 'API circuit breaker is active.' : (lastScanTs ? `Last scan ${v16FormatDurationShort(scanAgeMs)} ago.` : 'No scan timestamp yet.') },
  ];
@@ -5200,7 +5200,7 @@ function v16RenderPaperLedgerPanel(shadowLedger = {}) {
  const r = trade?.rMultiple === null || trade?.rMultiple === undefined ? '-' : `${Number(trade.rMultiple) >= 0 ? '+' : ''}${v16FmtNumber(Number(trade.rMultiple || 0), 2)}R`;
  const triggerText = trade?.trigger?.label || trade?.triggerType || '-';
  return `<div class="risk-manage-setup-row state-${isClosed ? (Number(trade?.rMultiple || trade?.pnl || 0) >= 0 ? 'good' : 'bad') : 'warn'}">
- <span class="rsf-name"><span class="rsf-name-main">${v16Esc(trade.symbol || '-')} <span class="rsf-badge tone-${isClosed ? 'info' : 'warn'}">${isClosed ? 'CLOSED' : 'OPEN'}</span></span><small class="rsf-name-meta">${v16Esc(String(trade.side || '').toUpperCase())} | ${v16Esc(trade.setupFamilyLabel || trade.setupFamily || 'setup')} | ${v16Esc(trade.timeframe || '15m')}</small></span>
+ <span class="rsf-name"><span class="rsf-name-main">${v16Esc(trade.symbol || '-')} <span class="rsf-badge tone-${isClosed ? 'info' : 'warn'}">${isClosed ? 'CLOSED' : 'OPEN'}</span></span><small class="rsf-name-meta">${v16Esc(String(trade.side || '').toUpperCase())} | ${v16Esc(trade.setupFamilyLabel || trade.setupFamily || 'setup')} | ${v16Esc(trade.timeframe || '4h')}</small></span>
  <span><strong class="rsf-cell-main">${v16FmtPrice(Number(trade.entryPrice || 0))}</strong><small class="rsf-cell-meta">Entry</small></span>
  <span><strong class="rsf-cell-main">${v16FmtPrice(Number(trade.stopLoss || 0))}</strong><small class="rsf-cell-meta">SL</small></span>
  <span><strong class="rsf-cell-main">${v16FmtPrice(Number(trade.takeProfit || 0))}</strong><small class="rsf-cell-meta">TP</small></span>
@@ -5950,7 +5950,7 @@ async function v16OpenAnalyticsChart(symbol = '', trade = null) {
  await globalThis.FWDTradeDeskChartWorkspace?.openReplayForTrade?.(trade);
  return;
  }
- await globalThis.FWDTradeDeskChartWorkspace?.openDetachedChart?.({ symbol: normalized, timeframe: '15m', preset: 'decision', showOrders: true, uiMode: 'default', refreshNonce: Date.now() });
+ await globalThis.FWDTradeDeskChartWorkspace?.openDetachedChart?.({ symbol: normalized, timeframe: '4h', preset: 'decision', showOrders: true, uiMode: 'default', refreshNonce: Date.now() });
 }
 
 function v16TradeCheckPaperTradeTime(trade = {}) {
@@ -5990,7 +5990,7 @@ function v16TradeCheckPaperRowsHtml(decision = {}, symbol = '') {
  return `<div class="trade-check-paper-row state-${resultTone}">
  <div class="trade-check-paper-main">
  <strong>${v16Esc(trade.symbol || symbol)} <span>${v16Esc(String(trade.side || '').toUpperCase())}</span></strong>
- <small>${v16Esc(trade.setupFamilyLabel || trade.setupFamily || 'Paper trade')} | ${v16Esc(trade.timeframe || '15m')} | ${v16Esc(ageCopy)}</small>
+ <small>${v16Esc(trade.setupFamilyLabel || trade.setupFamily || 'Paper trade')} | ${v16Esc(trade.timeframe || '4h')} | ${v16Esc(ageCopy)}</small>
  </div>
  <div><span>Entry</span><strong>${v16FmtPrice(Number(trade.entryPrice || 0))}</strong></div>
  <div><span>SL</span><strong>${v16FmtPrice(Number(trade.stopLoss || 0))}</strong></div>
@@ -8390,7 +8390,7 @@ async function v16OpenPositionTradeChart(position = {}, metrics = {}) {
  await globalThis.ensureChartWorkspaceLoaded?.();
  await globalThis.FWDTradeDeskChartWorkspace?.openDetachedChart?.({
  symbol: position.symbol,
- timeframe: '15m',
+ timeframe: '4h',
  preset: 'trade',
  showOrders: true,
  showVwap: true,

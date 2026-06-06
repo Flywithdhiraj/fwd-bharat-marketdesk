@@ -29,7 +29,7 @@ const SINGLE_ACCOUNT_PROFILE_ID = 'primary';
 const SINGLE_CREDENTIAL_ALIAS = 'FWD Bharat MarketDesk/primary';
 const V16_AUTO_TRADE_MANUAL_CONTROLS_KEY = 'v16AutoTradeManualControlsV17';
 const V16_NOTIFICATION_FEED_KEY = 'v16NotificationFeedV17';
-const V16_PUBLIC_CANDLE_RESOLUTIONS = new Set(['15m', '4h', '1d', '1w']);
+const V16_PUBLIC_CANDLE_RESOLUTIONS = new Set(['4h', '1d', '1w']);
 const DHAN_MANUAL_ONLY_ORDER_DISABLED = 'Order placement is disabled in this manual-only build';
 const DHAN_MANUAL_ONLY_MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 let v16AccountStateQueue = Promise.resolve();
@@ -1302,11 +1302,11 @@ async function runV16PublicTicker(payload = {}) {
 async function runV16PublicCandles(payload = {}) {
  const symbol = v16NormalizeSymbol(payload.symbol || '');
  if (!symbol) throw new Error('Symbol is required');
- const requestedResolution = String(payload.resolution || '15m').trim().toLowerCase();
+ const requestedResolution = String(payload.resolution || '4h').trim().toLowerCase();
  const migratedResolution = requestedResolution === '1h' || requestedResolution === '60m' || requestedResolution === '60' || requestedResolution === '240'
   ? '4h'
-  : (requestedResolution === '1m' || requestedResolution === '3m' || requestedResolution === '5m' || requestedResolution === '15' ? '15m' : requestedResolution);
- const resolution = V16_PUBLIC_CANDLE_RESOLUTIONS.has(migratedResolution) ? migratedResolution : '15m';
+  : (requestedResolution === '1m' || requestedResolution === '3m' || requestedResolution === '5m' || requestedResolution === '15' ? '4h' : requestedResolution);
+ const resolution = V16_PUBLIC_CANDLE_RESOLUTIONS.has(migratedResolution) ? migratedResolution : '4h';
  const limit = Math.max(60, Math.min(20000, Number(payload.limit || 180) || 180));
  const keyLevelSettings = v16BgSanitizeKeyLevelSettings(payload.keyLevelSettings || {});
  const startMs = v16ToEpochMs(payload.startTime || payload.startTs || 0);
@@ -1362,20 +1362,20 @@ async function runV16PublicCandles(payload = {}) {
  let keyLevels = null;
  try {
  const currentPrice = Number(normalizedCandles[normalizedCandles.length - 1]?.close || 0);
- const [dayCandles, tf15Candles] = await Promise.all([
+ const [dayCandles, tf4hCandles] = await Promise.all([
  resolution === '1d' && normalizedCandles.length >= 80
  ? Promise.resolve(normalizedCandles.slice(-Math.max(80, Math.min(normalizedCandles.length, 240))))
  : (startSec > 0 && endSec > startSec && typeof fetchCandlesRange === 'function'
  ? fetchCandlesRange(symbol, '1d', Math.max(0, startSec - (200 * 24 * 60 * 60)), endSec)
  : fetchCandles(symbol, '1d', 180)),
- resolution === '15m' && normalizedCandles.length >= 120
+ resolution === '4h' && normalizedCandles.length >= 120
  ? Promise.resolve(normalizedCandles.slice(-Math.max(120, Math.min(normalizedCandles.length, 320))))
  : (startSec > 0 && endSec > startSec && typeof fetchCandlesRange === 'function'
- ? fetchCandlesRange(symbol, '15m', Math.max(0, startSec - (360 * 15 * 60)), endSec)
- : fetchCandles(symbol, '15m', 260)),
+ ? fetchCandlesRange(symbol, '4h', Math.max(0, startSec - (260 * 4 * 60 * 60)), endSec)
+ : fetchCandles(symbol, '4h', 260)),
  ]);
  keyLevels = typeof detectKeyLevels === 'function'
- ? detectKeyLevels(dayCandles || [], tf15Candles || [], currentPrice, keyLevelSettings)
+ ? detectKeyLevels(dayCandles || [], tf4hCandles || [], currentPrice, keyLevelSettings)
  : null;
  } catch (_) {
  keyLevels = null;

@@ -24,7 +24,7 @@
  priorAdvancePct: 40,
  });
 
- const CLOSED_DAILY = Object.freeze({ closedOnly: true });
+ const CLOSED_DAILY = Object.freeze({ closedOnly: true, timeoutMs: 30000, paceMs: 1800 });
  const STAGE_LABELS = Object.freeze({
  STAGE_I: 'Stage I - Base / Consolidation',
  STAGE_II: 'Stage II - Uptrend',

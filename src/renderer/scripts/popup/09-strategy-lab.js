@@ -21,8 +21,8 @@
  const STRATEGY_LAB_OUTCOME_KEY = 'strategyLabOutcomeTrackerV1';
  const STRATEGY_LAB_REVIEW_TIMEFRAME = '1d';
  const STRATEGY_LAB_REVIEW_VISIBLE_CANDLES = 120;
- const STRATEGY_LAB_ENTRY_TIMEFRAME = '15m';
- const STRATEGY_LAB_ENTRY_VISIBLE_CANDLES = 90 * 24 * 4;
+ const STRATEGY_LAB_ENTRY_TIMEFRAME = '4h';
+ const STRATEGY_LAB_ENTRY_VISIBLE_CANDLES = 120;
  let strategyLabOutcomeTracker = {};
  let strategyLabOutcomePersistTimer = null;
 
@@ -116,12 +116,12 @@
    avoid_chase: 'Move is too late or risky. Better to skip. Risk: bad entry after big move.',
   },
   new_coin_scalper: {
-   long_reclaim: 'New coin reclaimed a 15m level or VWAP. Confirm it holds before entry.',
-   short_fade: 'New coin failed a 15m high or VWAP area. Confirm rejection before entry.',
+   long_reclaim: 'New coin reclaimed a 4H level or VWAP. Confirm it holds before entry.',
+   short_fade: 'New coin failed a 4H high or VWAP area. Confirm rejection before entry.',
    obv_confirmed: 'OBV agrees with the scalp direction. Still use small risk on fresh listings.',
-   key_level_scalp: 'Price is near a 15m or 4H key level. Wait for a clean reaction.',
+   key_level_scalp: 'Price is near a 4H key level. Wait for a clean reaction.',
    trap_watch: 'Fresh coin is stretched without complete reversal proof. Wait for confirmation.',
-   watch: 'New coin is visible but needs cleaner 15m and 4H proof.',
+   watch: 'New coin is visible but needs cleaner 4H proof.',
    new: 'New or short-history coin. Use smaller risk. Risk: price can move wildly.',
   },
   darvas: {
@@ -137,13 +137,13 @@
    volume: 'Volume must expand on breakout. Risk: low volume breakouts often fail.',
   },
  pullback: {
-   ema_reclaim: 'Price touched or undercut the 9 EMA and reclaimed it. Entry still needs 15m timing plus market fit. Risk: reclaim can fail.',
+   ema_reclaim: 'Price touched or undercut the 9 EMA and reclaimed it. Entry still needs 4H timing plus market fit. Risk: reclaim can fail.',
    ema_pullback: 'Price is near the 9 EMA in an uptrend. Wait for a clean reclaim candle. Risk: early entry can slide lower.',
-   round_support: 'Pullback also respected a round/support area. Check 15m trigger and reward before entry. Risk: support can break.',
+   round_support: 'Pullback also respected a round/support area. Check 4H trigger and reward before entry. Risk: support can break.',
    trend_watch: 'Trend is up but price has not pulled back enough. Wait for the next 9 EMA touch. Risk: chasing gives poor reward.',
-   ema_reject_short: 'Price rallied into the 9 EMA in a downtrend and rejected it. Entry still needs 15m timing plus market fit. Risk: short squeeze.',
+   ema_reject_short: 'Price rallied into the 9 EMA in a downtrend and rejected it. Entry still needs 4H timing plus market fit. Risk: short squeeze.',
    ema_pullback_short: 'Price is rallying toward the 9 EMA while trend remains down. Wait for a clean rejection candle. Risk: early short can squeeze.',
-   round_resistance_short: 'The short rally also rejected a round/resistance area. Check 15m trigger and reward before entry. Risk: resistance can break.',
+   round_resistance_short: 'The short rally also rejected a round/resistance area. Check 4H trigger and reward before entry. Risk: resistance can break.',
    trend_watch_short: 'Trend is down but price has not rallied enough. Wait for the next 9 EMA short pullback. Risk: chasing gives poor reward.',
    avoid_chase: 'Price is too far above the 9 EMA. Better to wait. Risk: late entries often pull back.',
    reclaim: 'Price moved back above the 9 EMA after weakness. Check it holds.',
@@ -209,12 +209,12 @@
   return 'It appeared because stretch or reversal data needs review.';
  }
  if (strategy === 'new_coin_scalper') {
-  if (eventType === 'obv_confirmed') return 'It appeared because the 15m trigger and OBV are pointing in the same scalp direction.';
-  if (eventType === 'long_reclaim') return 'It appeared because a fresh coin is trying to reclaim a 15m level, VWAP, or recent low.';
+  if (eventType === 'obv_confirmed') return 'It appeared because the 4H trigger and OBV are pointing in the same swing direction.';
+  if (eventType === 'long_reclaim') return 'It appeared because a fresh coin is trying to reclaim a 4H level, VWAP, or recent low.';
   if (eventType === 'short_fade') return 'It appeared because a fresh coin failed a high, VWAP, or upper key level.';
-  if (eventType === 'key_level_scalp') return 'It appeared because price is close to a 15m or 4H level that can matter for scalping.';
+  if (eventType === 'key_level_scalp') return 'It appeared because price is close to a 4H level that can matter for scalping.';
   if (eventType === 'trap_watch') return 'It appeared because the coin is stretched but still needs clean reversal proof.';
-  return 'It appeared because this is a new or short-history coin that needs 15m and 4H chart review.';
+  return 'It appeared because this is a new or short-history coin that needs 4H chart review.';
  }
  if (strategy === 'darvas') {
   if (eventType === 'breakout') return 'It appeared because price moved above the Darvas box top with volume confirmation.';
@@ -241,7 +241,7 @@ if (strategy === 'pullback') {
   const market = raw.marketContext || {};
   const premium = raw.premiumRead || {};
   if (eventType === 'sell_straddle') return `Sell premium only: ${market.underlying || 'BTC'} is calm enough and MV premium is not expanding.`;
-  if (eventType === 'buy_straddle') return `Buy-vol watch only: ${market.underlying || 'BTC'} or the MV premium chart is expanding. Confirm the 15m chart before action.`;
+  if (eventType === 'buy_straddle') return `Buy-vol watch only: ${market.underlying || 'BTC'} or the MV premium chart is expanding. Confirm the 4H chart before action.`;
   if (premium.trendState) return `No trade because MV premium is ${premium.trendState}.`;
   return 'No trade until market regime, premium trend, spread, and liquidity all line up.';
  }
@@ -668,8 +668,8 @@ function labEarlyOpportunityRows(snapshot = strategyLabSnapshot) {
   targets: {
    trigger,
    vwap: Number(newCoinScalperRaw.vwap || radarRaw.vwap || reversalRaw.vwap || 0),
-   resistance: Number(newCoinScalperRaw.keyLevels?.resistance15m || radarRaw.resistance || wizardRaw.pivotPrice || 0),
-   support: Number(newCoinScalperRaw.keyLevels?.support15m || radarRaw.support || stageRaw.stageMetrics?.rangeLow || 0),
+   resistance: Number(newCoinScalperRaw.keyLevels?.resistance4h || radarRaw.resistance || wizardRaw.pivotPrice || 0),
+   support: Number(newCoinScalperRaw.keyLevels?.support4h || radarRaw.support || stageRaw.stageMetrics?.rangeLow || 0),
   },
   reasons: reasons.slice(0, 10),
   checks: {
@@ -719,8 +719,8 @@ function labEarlyOpportunityRows(snapshot = strategyLabSnapshot) {
     entry,
     stop,
     vwap: Number(newCoinScalperRaw.vwap || radarRaw.vwap || reversalRaw.vwap || 0),
-    resistance: Number(newCoinScalperRaw.keyLevels?.resistance15m || radarRaw.resistance || wizardRaw.pivotPrice || 0),
-    support: Number(newCoinScalperRaw.keyLevels?.support15m || radarRaw.support || stageRaw.stageMetrics?.rangeLow || 0),
+    resistance: Number(newCoinScalperRaw.keyLevels?.resistance4h || radarRaw.resistance || wizardRaw.pivotPrice || 0),
+    support: Number(newCoinScalperRaw.keyLevels?.support4h || radarRaw.support || stageRaw.stageMetrics?.rangeLow || 0),
    },
    volumeRatio,
   },
@@ -764,14 +764,14 @@ function labEarlyOpportunityRows(snapshot = strategyLabSnapshot) {
  function labIsNewCoinRow(row = {}) {
  const eventType = String(row.eventType || row.raw?.eventType || '').toLowerCase();
  const raw = row.raw || {};
- const c15 = Number(raw.candleCount15m || raw.candles15m || raw.intradayCandles || 0);
+ const c4h = Number(raw.candleCount4h || raw.candles4h || raw.intradayCandles || 0);
  const c1d = Number(raw.candleCount1d || raw.dailyCandles || 0);
  return eventType === 'new_coin'
  || raw.isDeltaNewCoin === true
  || raw.isNewDailyHistory === true
  || raw.isFirstSeenNew === true
  || raw.isShortHistory === true
- || (c15 > 0 && c15 < 36)
+ || (c4h > 0 && c4h < 36)
  || (c1d > 0 && c1d <= 15);
  }
 
@@ -815,7 +815,7 @@ function labEarlyOpportunityRows(snapshot = strategyLabSnapshot) {
    if (strategyLabViewMode === 'long') return applyStrategyQualityFilters(rows.filter(row => labDirection(row) !== 'short'));
    if (strategyLabViewMode === 'short') return applyStrategyQualityFilters(rows.filter(row => labDirection(row) === 'short'));
    if (strategyLabViewMode === 'obv') return applyStrategyQualityFilters(rows.filter(row => row.eventType === 'obv_confirmed' || row.raw?.eventType === 'obv_confirmed' || row.checks?.obvConfirmed));
-   if (strategyLabViewMode === 'level') return applyStrategyQualityFilters(rows.filter(row => row.eventType === 'key_level_scalp' || row.raw?.eventType === 'key_level_scalp' || row.checks?.near15High || row.checks?.near15Low || row.checks?.near4hHigh || row.checks?.near4hLow));
+   if (strategyLabViewMode === 'level') return applyStrategyQualityFilters(rows.filter(row => row.eventType === 'key_level_scalp' || row.raw?.eventType === 'key_level_scalp' || row.checks?.near4hHigh || row.checks?.near4hLow));
    if (strategyLabViewMode === 'trap') return applyStrategyQualityFilters(rows.filter(row => row.eventType === 'trap_watch' || row.raw?.eventType === 'trap_watch'));
    return applyStrategyQualityFilters(rows.filter(row => !['watch'].includes(String(row.eventType || row.raw?.eventType || '')) || Number(row.score || 0) >= 55)).slice(0, 12);
   }
@@ -999,7 +999,7 @@ function labEarlyOpportunityRows(snapshot = strategyLabSnapshot) {
    const diagnostics = status.diagnostics || {};
    const notes = [
    diagnostics.freshRows ? `${diagnostics.freshRows} fresh/short-history coins in universe` : '',
-   skipped.insufficientIntraday ? `${skipped.insufficientIntraday} with insufficient 15m history` : '',
+   skipped.insufficientIntraday ? `${skipped.insufficientIntraday} with insufficient 4H history` : '',
    skipped.reviewOnly ? `${skipped.reviewOnly} review-only rows` : '',
    skipped.fetchErrors ? `${skipped.fetchErrors} data errors` : '',
    ].filter(Boolean);
@@ -1010,7 +1010,7 @@ function labEarlyOpportunityRows(snapshot = strategyLabSnapshot) {
    const diagnostics = status.diagnostics || {};
    const notes = [
    diagnostics.universeRows ? `${diagnostics.universeRows} liquid symbols checked for stretch` : '',
-   skipped.insufficientHistory ? `${skipped.insufficientHistory} with short 15m history` : '',
+   skipped.insufficientHistory ? `${skipped.insufficientHistory} with short 4H history` : '',
    skipped.reviewOnly ? `${skipped.reviewOnly} review-only rows` : '',
    skipped.fetchErrors ? `${skipped.fetchErrors} data errors` : '',
    ].filter(Boolean);
@@ -1025,7 +1025,7 @@ function labEarlyOpportunityRows(snapshot = strategyLabSnapshot) {
    skipped.notNew ? `${skipped.notNew} not Delta-new by tag/launch time` : '',
    skipped.dailyFetchErrors ? `${skipped.dailyFetchErrors} kept/reviewed without daily verification` : '',
    skipped.notTradable ? `${skipped.notTradable} manual-review trading status` : '',
-   skipped.partialData ? `${skipped.partialData} kept with partial 15m/4H data` : '',
+   skipped.partialData ? `${skipped.partialData} kept with partial 4H data` : '',
    skipped.reviewOnly ? `${skipped.reviewOnly} watch-only rows` : '',
    skipped.fetchErrors ? `${skipped.fetchErrors} data errors` : '',
    ].filter(Boolean);
@@ -1168,7 +1168,7 @@ function labEarlyOpportunityRows(snapshot = strategyLabSnapshot) {
  <span>Compare mode</span>
  <strong>${labEsc(symbol)}</strong>
  <button type="button" data-strategy-chart-review="${labEsc(symbol)}">Trend 1D</button>
- <button type="button" data-strategy-entry-chart="${labEsc(symbol)}">Entry 15m</button>
+ <button type="button" data-strategy-entry-chart="${labEsc(symbol)}">Entry 4H</button>
  </div>
  <div class="strategy-compare-grid">
  ${compareRows.map(row => `<button type="button" class="${rowTone(row)}" data-strategy-lab-select="${labEsc(row.strategyId)}" data-strategy-symbol="${labEsc(row.symbol)}">
@@ -1418,9 +1418,9 @@ function labEarlyOpportunityRows(snapshot = strategyLabSnapshot) {
   : activeStrategyLabId === 'reversal'
   ? `Counter-trend scanner-only: ${allRows.length} stretched rows, chart confirmation required`
   : activeStrategyLabId === 'new_coin_scalper'
-  ? `New coin scanner-only: ${allRows.length} fresh-listing rows, 15m trigger and 4H context required`
+  ? `New coin scanner-only: ${allRows.length} fresh-listing rows, 4H trigger and daily context required`
   : activeStrategyLabId === 'native_straddle'
-  ? `Native straddle scanner-only: ${allRows.length} MV rows, open 1D review first and confirm 15m premium separately`
+  ? `Native straddle scanner-only: ${allRows.length} MV rows, open 1D review first and confirm 4H premium separately`
   : activeStrategyLabId === 'wizard'
   ? (status.marketHealth?.pass ? 'Market regime allows long scans' : 'Market regime cautious: prefer waitlist over new long entries')
   : `${countStage(allRows, 'STAGE_II')} Stage II and ${countStage(allRows, 'STAGE_IV')} Stage IV rows in latest lifecycle scan`;
@@ -1514,7 +1514,7 @@ function labEarlyOpportunityRows(snapshot = strategyLabSnapshot) {
  if (row.stage === 'STAGE_IV') return 'Wait for a base before any long review';
  if (raw.resistance || row.targets?.resistance) return `Break above ${labPrice(raw.resistance || row.targets?.resistance)}`;
  if (raw.vwap || row.targets?.vwap) return `Hold or reject VWAP ${labPrice(raw.vwap || row.targets?.vwap)}`;
- if (row.strategyId === 'new_coin_scalper' || activeStrategyLabId === 'new_coin_scalper') return `Confirm 15m trigger near ${labPrice(row.triggerPrice || raw.keyLevels?.trigger || row.entry)} with 4H context`;
+ if (row.strategyId === 'new_coin_scalper' || activeStrategyLabId === 'new_coin_scalper') return `Confirm 4H trigger near ${labPrice(row.triggerPrice || raw.keyLevels?.trigger || row.entry)} with daily context`;
  if (row.strategyId === 'native_straddle' || activeStrategyLabId === 'native_straddle') return `Open the 1D review chart for ${row.symbol}, then confirm premium behavior separately`;
  if (row.triggerPrice || row.entry) return `Price near ${labPrice(row.triggerPrice || row.entry)}`;
  return pack.nextAction || 'Open chart and confirm price behavior';
@@ -1653,6 +1653,12 @@ function labEarlyOpportunityRows(snapshot = strategyLabSnapshot) {
  const ignore = allRows.filter(row => row.signal === 'IGNORE').length;
  const developing = allRows.filter(row => row.signal === 'IGNORE' && Number(row.score || 0) >= 45).length;
   const best = allRows[0] || rows[0];
+ const contextMeta = strategyLabSnapshot?.current?.scanContextMeta || strategyLabSnapshot?.lastMainScanContextMeta || {};
+ const unifiedStatus = strategyLabSnapshot?.current?.unifiedStatus || strategyLabSnapshot?.strategyLabUnifiedScanStatus || {};
+ const isPartialContext = contextMeta.partial === true || unifiedStatus.partial === true;
+ const scannedRows = Number(contextMeta.scannedRows || unifiedStatus.scannedRows || 0);
+ const candidateRows = Number(contextMeta.candidateRows || unifiedStatus.candidateRows || 0);
+ const contextProgress = candidateRows > 0 ? `${Math.min(scannedRows, candidateRows)}/${candidateRows}` : 'Waiting';
  const mode = 'Research only';
   const marketLabel = activeStrategyLabId === 'stage'
   ? `${countStage(allRows, 'STAGE_II')} Stage II | ${countStage(allRows, 'STAGE_III')} Stage III`
@@ -1772,6 +1778,7 @@ function labEarlyOpportunityRows(snapshot = strategyLabSnapshot) {
  buildMetric('Last Scan', labAge(status.lastScanTs || status.ts), 'info'),
  ].join('');
  const summaryRows = [
+ { label: 'Data state', value: isPartialContext ? `Partial ${contextProgress}` : (contextMeta.finishedAt ? 'Fresh full scan' : 'Waiting'), tone: isPartialContext ? 'warn' : (contextMeta.finishedAt ? 'ok' : 'info') },
  { label: 'Review now', value: String(allRows.filter(row => labGuidanceBucket(row) === 'review').length), tone: 'ok' },
  { label: 'Wait for trigger', value: String(allRows.filter(row => labGuidanceBucket(row) === 'wait').length), tone: 'warn' },
  { label: 'Avoid', value: String(allRows.filter(row => labGuidanceBucket(row) === 'avoid').length), tone: 'info' },
@@ -2047,18 +2054,17 @@ function buildNewCoinScalperRow(row = {}) {
  const selected = selectedStrategySymbol === row.symbol ? 'selected' : '';
  const tone = rowTone(row);
  const raw = row.raw || {};
- const move = `${labPct(raw.move15m, 1)} / ${labPct(raw.move4hChart ?? raw.move4h, 1)}`;
+ const move = labPct(raw.move4hChart ?? raw.move4h, 1);
  const obv = row.checks?.obvConfirmed ? 'OBV confirmed' : row.checks?.obvUp ? 'OBV up' : row.checks?.obvDown ? 'OBV down' : 'OBV flat';
  const levels = raw.keyLevels || {};
  const level = labDirection(row) === 'short'
- ? `R ${labPrice(levels.resistance15m || row.targets?.resistance15m)}`
- : `S ${labPrice(levels.support15m || row.targets?.support15m)}`;
+ ? `R ${labPrice(levels.resistance4h || row.targets?.resistance4h)}`
+ : `S ${labPrice(levels.support4h || row.targets?.support4h)}`;
  const context = [
  raw.newCoinSource || 'Delta new',
  raw.eligibilityLabel || '',
  row.checks?.fourHourBull ? '4H bull' : row.checks?.fourHourBear ? '4H bear' : '4H mixed',
- raw.candleCount15m ? `${raw.candleCount15m}x15m` : '15m --',
- raw.candleCount4h ? `${raw.candleCount4h}x4H` : '4H --',
+  raw.candleCount4h ? `${raw.candleCount4h}x4H` : '4H --',
  ].filter(Boolean).join(' | ');
  return `<tr class="strategy-lab-row new-coin-scalper ${tone} ${labDirectionClass(row)} ${selected}" data-strategy-symbol="${labEsc(row.symbol)}">
 <td><strong>${labSymbolWithDirection(row)}</strong><small>${labEsc(raw.newCoinSource || (raw.isNewDailyHistory ? `Daily ${raw.candleCount1d || 0}/${raw.maxDailyCandlesForNewCoin || 15}` : row.setupLabel || ''))}</small></td>
@@ -2109,7 +2115,7 @@ function buildPullbackRow(row = {}) {
  const touch = raw.touchAge == null ? 'No touch' : raw.touchAge === 0 ? 'Today' : `${labFmt(raw.touchAge, 0)}d ago`;
  const triggerRead = timing.label || raw.workflowLabel || '--';
  const triggerSmall = timing.ready
- ? (timing.confirmations?.[0] || '15m confirmed')
+ ? (timing.confirmations?.[0] || '4H confirmed')
  : (timing.blockers?.[0] || market.label || 'wait');
  return `<tr class="strategy-lab-row pullback ${tone} ${labDirectionClass(row)} ${selected}" data-strategy-symbol="${labEsc(row.symbol)}">
 <td><strong>${labSymbolWithDirection(row)}</strong><small>${labEsc(row.setupLabel || '')}</small></td>
@@ -2203,7 +2209,7 @@ function buildStrategyRow(row = {}) {
  const diagnostics = labStatusForActive(strategyLabSnapshot)?.diagnostics || {};
  const radarEmptyNote = activeStrategyLabId === 'radar' && (skipped.insufficientIntraday || skipped.fetchErrors || skipped.reviewOnly)
  ? `No rows in this view. Diagnostics: ${[
- skipped.insufficientIntraday ? `${skipped.insufficientIntraday} short 15m history` : '',
+ skipped.insufficientIntraday ? `${skipped.insufficientIntraday} short 4H history` : '',
  skipped.reviewOnly ? `${skipped.reviewOnly} review-only rows` : '',
  skipped.fetchErrors ? `${skipped.fetchErrors} data errors` : '',
  ].filter(Boolean).join(', ')}.`
@@ -2218,7 +2224,7 @@ skipped.fetchErrors ? `${skipped.fetchErrors} data errors` : '',
 : '';
 const reversalEmptyNote = activeStrategyLabId === 'reversal' && (skipped.insufficientHistory || skipped.fetchErrors || skipped.reviewOnly)
 ? `No rows in this view. Diagnostics: ${[
-skipped.insufficientHistory ? `${skipped.insufficientHistory} short 15m history` : '',
+skipped.insufficientHistory ? `${skipped.insufficientHistory} short 4H history` : '',
 skipped.reviewOnly ? `${skipped.reviewOnly} review-only rows` : '',
 skipped.fetchErrors ? `${skipped.fetchErrors} data errors` : '',
 ].filter(Boolean).join(', ')}.`
@@ -2255,9 +2261,9 @@ const heading = activeStrategyLabId === 'radar'
  : activeStrategyLabId === 'darvas'
  ? '<thead><tr><th>Coin</th><th>Event</th><th>Action</th><th>Box</th><th>Top</th><th>To Top</th><th>Volume</th><th>Invalid</th><th>Score</th></tr></thead>'
  : activeStrategyLabId === 'pullback'
- ? '<thead><tr><th>Coin</th><th>Event</th><th>Action</th><th>EMA Read</th><th>Entry / Stop</th><th>Distance</th><th>Reward</th><th>15m Trigger</th><th>Score</th></tr></thead>'
+ ? '<thead><tr><th>Coin</th><th>Event</th><th>Action</th><th>EMA Read</th><th>Entry / Stop</th><th>Distance</th><th>Reward</th><th>4H Trigger</th><th>Score</th></tr></thead>'
  : activeStrategyLabId === 'native_straddle'
- ? '<thead><tr><th>Underlying</th><th>Signal</th><th>Action</th><th>Strike</th><th>Premium</th><th>Expiry</th><th>Spread</th><th>Market</th><th>MV 15m</th><th>Chart</th></tr></thead>'
+ ? '<thead><tr><th>Underlying</th><th>Signal</th><th>Action</th><th>Strike</th><th>Premium</th><th>Expiry</th><th>Spread</th><th>Market</th><th>MV 4H</th><th>Chart</th></tr></thead>'
  : activeStrategyLabId === 'stage'
  ? '<thead><tr><th>Symbol</th><th>Stage</th><th>Action</th><th>Priority</th><th>Confidence</th><th>30W Slope</th><th>Range</th><th>Volume</th><th>Protect/Trigger</th></tr></thead>'
  : '<thead><tr><th>Symbol</th><th>Signal</th><th>Action</th><th>Priority</th><th>Score</th><th>RS</th><th>Pivot</th><th>Entry</th><th>Stop</th><th>Risk</th></tr></thead>';
@@ -2345,7 +2351,7 @@ const heading = activeStrategyLabId === 'radar'
  <div><span>Stage Scanner</span><strong>${labSymbolWithDirection(row)}</strong></div>
  <em class="${rowTone(row)}">${labEsc(labPriorityLabel(row))}</em>
  </div>
- <div class="strategy-detail-actions"><button type="button" data-strategy-chart-review="${labEsc(row.symbol)}">Trend 1D</button><button type="button" data-strategy-entry-chart="${labEsc(row.symbol)}">Entry 15m</button><button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button></div>
+ <div class="strategy-detail-actions"><button type="button" data-strategy-chart-review="${labEsc(row.symbol)}">Trend 1D</button><button type="button" data-strategy-entry-chart="${labEsc(row.symbol)}">Entry 4H</button><button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button></div>
  ${buildPlainHelpPanel(row)}
  <div class="strategy-detail-grid">
  <div><span>${row.stage === 'STAGE_I' ? 'Trigger' : row.stage === 'STAGE_III' || row.stage === 'STAGE_IV' ? 'Exit' : 'Entry'}</span><strong>${labPrice(row.entry || row.exitPrice || row.triggerPrice)}</strong></div>
@@ -2395,7 +2401,7 @@ const heading = activeStrategyLabId === 'radar'
  <div><span>${labEsc(getStrategyMeta(row.strategyId || activeStrategyLabId)?.displayName || 'Current Strategy')}</span><strong>${labSymbolWithDirection(row)}</strong></div>
  <em class="${rowTone(row)}">${labEsc(labPriorityLabel(row))}</em>
  </div>
- <div class="strategy-detail-actions"><button type="button" data-strategy-chart-review="${labEsc(row.symbol)}">Trend 1D</button><button type="button" data-strategy-entry-chart="${labEsc(row.symbol)}">Entry 15m</button><button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button></div>
+ <div class="strategy-detail-actions"><button type="button" data-strategy-chart-review="${labEsc(row.symbol)}">Trend 1D</button><button type="button" data-strategy-entry-chart="${labEsc(row.symbol)}">Entry 4H</button><button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button></div>
  ${buildPlainHelpPanel(row)}
  <div class="strategy-detail-grid">
  <div><span>Entry</span><strong>${row.entry ? labFmt(row.entry, 4) : '--'}</strong></div>
@@ -2450,7 +2456,7 @@ function buildRadarDetail(row = null) {
  <div><span>Live Radar</span><strong>${labSymbolWithDirection(row)}</strong></div>
  <em class="${rowTone(row)}">${labEsc(labPriorityLabel(row))}</em>
  </div>
- <div class="strategy-detail-actions"><button type="button" data-strategy-chart-review="${labEsc(row.symbol)}">Trend 1D</button><button type="button" data-strategy-entry-chart="${labEsc(row.symbol)}">Entry 15m</button><button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button></div>
+ <div class="strategy-detail-actions"><button type="button" data-strategy-chart-review="${labEsc(row.symbol)}">Trend 1D</button><button type="button" data-strategy-entry-chart="${labEsc(row.symbol)}">Entry 4H</button><button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button></div>
  ${buildPlainHelpPanel(row)}
  <div class="strategy-detail-grid">
  <div><span>Entry</span><strong>${labPrice(row.entry || raw.latestPrice)}</strong></div>
@@ -2500,7 +2506,7 @@ function buildRadarDetail(row = null) {
  <div><span>OBV slope</span><strong>${labFmt(raw.obvSlope, 0)}</strong></div>
  <div><span>Resistance</span><strong>${labPrice(raw.resistance)}</strong></div>
  <div><span>Support</span><strong>${labPrice(raw.support)}</strong></div>
- <div><span>15m candles</span><strong>${labEsc(raw.candleCount15m || 0)}</strong></div>
+<div><span>4H candles</span><strong>${labEsc(raw.candleCount4h || 0)}</strong></div>
  <div><span>1D candles</span><strong>${labEsc(raw.candleCount1d || 0)}</strong></div>
  </div>
  </details>
@@ -2538,7 +2544,7 @@ function buildReversalDetail(row = null) {
 <div><span>Reversal Lab</span><strong>${labSymbolWithDirection(row)}</strong></div>
 <em class="${rowTone(row)}">${labEsc(labPriorityLabel(row))}</em>
 </div>
-<div class="strategy-detail-actions"><button type="button" data-strategy-chart-review="${labEsc(row.symbol)}">Trend 1D</button><button type="button" data-strategy-entry-chart="${labEsc(row.symbol)}">Entry 15m</button><button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button></div>
+<div class="strategy-detail-actions"><button type="button" data-strategy-chart-review="${labEsc(row.symbol)}">Trend 1D</button><button type="button" data-strategy-entry-chart="${labEsc(row.symbol)}">Entry 4H</button><button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button></div>
 ${buildPlainHelpPanel(row)}
 <div class="strategy-detail-grid">
 <div><span>Entry</span><strong>${labPrice(row.entry || raw.latestPrice)}</strong></div>
@@ -2579,7 +2585,7 @@ ${scoreRows.length ? scoreRows.map(item => `<div><span>${labEsc(item.label)}</sp
 <div><span>Range High</span><strong>${labPrice(raw.rangeHigh)}</strong></div>
 <div><span>Range Low</span><strong>${labPrice(raw.rangeLow)}</strong></div>
 <div><span>Volume</span><strong>${raw.volumeRatio ? `${labFmt(raw.volumeRatio, 2)}x` : '--'}</strong></div>
-<div><span>15m / 1D</span><strong>${labEsc(raw.candleCount15m || 0)} / ${labEsc(raw.candleCount1d || 0)}</strong></div>
+<div><span>4H / 1D</span><strong>${labEsc(raw.candleCount4h || 0)} / ${labEsc(raw.candleCount1d || 0)}</strong></div>
 </div>
 </details>
 <div class="strategy-report-block">
@@ -2598,7 +2604,7 @@ ${buildAlertControls(row)}
 
 function buildNewCoinScalperDetail(row = null) {
  if (!row) {
-  return '<aside class="strategy-lab-detail new-coin-scalper-detail"><div class="strategy-detail-empty">Select a New Coin Scalper row to inspect 15m trigger, 4H context, OBV, VWAP, and key levels.</div></aside>';
+  return '<aside class="strategy-lab-detail new-coin-scalper-detail"><div class="strategy-detail-empty">Select a New Coin Scalper row to inspect 4H trigger, daily context, OBV, VWAP, and key levels.</div></aside>';
  }
  const raw = row.raw || {};
  const checks = row.checks || {};
@@ -2611,7 +2617,7 @@ function buildNewCoinScalperDetail(row = null) {
 <div><span>New Coin Scalper</span><strong>${labSymbolWithDirection(row)}</strong><small>${labEsc(row.setupLabel || row.eventType || '')}</small></div>
 <em class="${rowTone(row)}">${labEsc(labPriorityLabel(row))}</em>
 </div>
-<div class="strategy-detail-actions"><button type="button" data-new-coin-scalper-chart-draft="${labEsc(row.symbol)}">Open 15m chart</button><button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button></div>
+<div class="strategy-detail-actions"><button type="button" data-new-coin-scalper-chart-draft="${labEsc(row.symbol)}">Open 4H chart</button><button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button></div>
 ${buildPlainHelpPanel(row)}
 <div class="strategy-detail-grid">
 <div><span>Entry</span><strong>${labPrice(row.entry || raw.latestPrice)}</strong></div>
@@ -2620,8 +2626,8 @@ ${buildPlainHelpPanel(row)}
 <div><span>Target 1</span><strong>${labPrice(row.targets?.target1 || levels.target1)}</strong></div>
 <div><span>VWAP</span><strong>${labPrice(raw.vwap || levels.vwap)}</strong></div>
 <div><span>VWAP Gap</span><strong>${labPct(raw.vwapDistancePct, 2)}</strong></div>
-<div><span>15m / 4H Move</span><strong>${labPct(raw.move15m, 1)} / ${labPct(raw.move4hChart ?? raw.move4h, 1)}</strong></div>
-<div><span>15m / 4H Candles</span><strong>${labEsc(raw.candleCount15m || 0)} / ${labEsc(raw.candleCount4h || 0)}</strong></div>
+<div><span>4H Move</span><strong>${labPct(raw.move4hChart ?? raw.move4h, 1)}</strong></div>
+<div><span>4H Candles</span><strong>${labEsc(raw.candleCount4h || 0)}</strong></div>
 <div><span>New Source</span><strong>${labEsc(raw.newCoinSource || 'Manual')}</strong></div>
 <div><span>Eligibility</span><strong>${labEsc(raw.eligibilityLabel || 'Manual review')}</strong></div>
 </div>
@@ -2629,22 +2635,18 @@ ${buildPlainHelpPanel(row)}
 ${buildCheck('Market-data new symbol signal', raw.isDeltaNewCoin)}
 ${buildCheck('Trading status confirmed', raw.eligibleForTrading)}
 ${buildCheck('Daily history <= 15 candles', raw.isNewDailyHistory)}
-${buildCheck('15m long trigger', checks.longTrigger)}
-${buildCheck('15m short trigger', checks.shortTrigger)}
+${buildCheck('4H long trigger', checks.longTrigger)}
+${buildCheck('4H short trigger', checks.shortTrigger)}
 ${buildCheck('OBV confirmed', checks.obvConfirmed)}
 ${buildCheck('VWAP reclaim/reject', checks.vwapReclaim || checks.vwapReject)}
-${buildCheck('Near 15m key level', checks.near15High || checks.near15Low)}
 ${buildCheck('Near 4H key level', checks.near4hHigh || checks.near4hLow)}
 ${buildCheck('4H context aligned', labDirection(row) === 'short' ? checks.fourHourBear : checks.fourHourBull)}
 </div>
 <div class="strategy-report-block">
 <div class="strategy-report-title">Scalp Key Levels</div>
 <div class="strategy-mini-grid">
-<div><span>15m Support</span><strong>${labPrice(levels.support15m || row.targets?.support15m)}</strong></div>
-<div><span>15m Resistance</span><strong>${labPrice(levels.resistance15m || row.targets?.resistance15m)}</strong></div>
 <div><span>4H Support</span><strong>${labPrice(levels.support4h || row.targets?.support4h)}</strong></div>
 <div><span>4H Resistance</span><strong>${labPrice(levels.resistance4h || row.targets?.resistance4h)}</strong></div>
-<div><span>15m Mid</span><strong>${labPrice(levels.mid15m)}</strong></div>
 <div><span>4H Mid</span><strong>${labPrice(levels.mid4h)}</strong></div>
 </div>
 </div>
@@ -2669,13 +2671,13 @@ ${scoreRows.length ? scoreRows.map(item => `<div><span>${labEsc(item.label)}</sp
 </div>
 <div class="strategy-report-block">
 <div class="strategy-report-title">Risk Notes</div>
-<p>${labEsc(riskFlags.length ? riskFlags.join(' | ') : 'No major risk note recorded. Scanner-only, verify the 15m and 4H chart manually.')}</p>
+<p>${labEsc(riskFlags.length ? riskFlags.join(' | ') : 'No major risk note recorded. Scanner-only, verify the 4H and Daily chart manually.')}</p>
 </div>
 ${buildDecisionNotes(row)}
 <div class="strategy-report-block">
 <div class="strategy-report-title">Chart Draft</div>
 <button type="button" class="strategy-chart-draft-btn" data-new-coin-scalper-chart-draft="${labEsc(row.symbol)}">Open Chart With Scalper Draft</button>
-<p>Loads entry, stop, VWAP, and 15m/4H key levels as review context. It does not place an order.</p>
+<p>Loads entry, stop, VWAP, and 4H key levels as review context. It does not place an order.</p>
 </div>
 ${buildAlertControls(row)}
 </aside>`;
@@ -2696,7 +2698,7 @@ function buildDarvasDetail(row = null) {
 <div><span>Darvas Box Lab</span><strong>${labSymbolWithDirection(row)}</strong></div>
 <em class="${rowTone(row)}">${labEsc(labPriorityLabel(row))}</em>
 </div>
-<div class="strategy-detail-actions"><button type="button" data-strategy-chart-review="${labEsc(row.symbol)}">Trend 1D</button><button type="button" data-strategy-entry-chart="${labEsc(row.symbol)}">Entry 15m</button><button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button></div>
+<div class="strategy-detail-actions"><button type="button" data-strategy-chart-review="${labEsc(row.symbol)}">Trend 1D</button><button type="button" data-strategy-entry-chart="${labEsc(row.symbol)}">Entry 4H</button><button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button></div>
 ${buildPlainHelpPanel(row)}
 <div class="strategy-detail-grid">
 <div><span>Entry</span><strong>${labPrice(row.entry || raw.latestPrice)}</strong></div>
@@ -2738,7 +2740,7 @@ ${scoreRows.length ? scoreRows.map(item => `<div><span>${labEsc(item.label)}</sp
 <div><span>To Box Top</span><strong>${labPct(raw.nearTopPct, 2)}</strong></div>
 <div><span>Inside Box</span><strong>${labPct(raw.closesInsidePct, 1)}</strong></div>
 <div><span>24H / 4H</span><strong>${labPct(raw.change24h, 1)} / ${labPct(raw.move4h, 1)}</strong></div>
-<div><span>15m / 1D</span><strong>${labEsc(raw.candleCount15m || 0)} / ${labEsc(raw.candleCount1d || 0)}</strong></div>
+<div><span>4H / 1D</span><strong>${labEsc(raw.candleCount4h || 0)} / ${labEsc(raw.candleCount1d || 0)}</strong></div>
 </div>
 </details>
 <div class="strategy-report-block">
@@ -2798,17 +2800,17 @@ ${buildPlainHelpPanel(row)}
 </div>
 </div>
 <div class="strategy-report-block">
-<div class="strategy-report-title">15m Timing</div>
+<div class="strategy-report-title">4H Timing</div>
 <div class="strategy-check-grid">
-${buildCheck('15m trigger ready', timing.ready, 'READY', 'WAIT')}
-${buildCheck(isShort ? '15m below 9 EMA' : '15m above 9 EMA', isShort ? Number(timing.ema9 || 0) > 0 && Number(raw.latestPrice || row.entry || 0) < Number(timing.ema9 || 0) : Number(timing.ema9 || 0) > 0 && Number(raw.latestPrice || row.entry || 0) > Number(timing.ema9 || 0), 'EMA', 'WAIT')}
+${buildCheck('4H trigger ready', timing.ready, 'READY', 'WAIT')}
+${buildCheck(isShort ? '4H below 9 EMA' : '4H above 9 EMA', isShort ? Number(timing.ema9 || 0) > 0 && Number(raw.latestPrice || row.entry || 0) < Number(timing.ema9 || 0) : Number(timing.ema9 || 0) > 0 && Number(raw.latestPrice || row.entry || 0) > Number(timing.ema9 || 0), 'EMA', 'WAIT')}
 ${buildCheck(isShort ? 'Lower-high/reject structure' : 'Higher-low/reclaim structure', timing.structureOk, 'STRUCTURE', 'WAIT')}
 ${buildCheck('Clean trigger candle', Number(timing.closePosition || 0) >= 62 && Number(timing.bodyRatio || 0) >= 38, 'CANDLE', 'WAIT')}
 </div>
 <div class="strategy-mini-grid">
-<div><span>15m 9 EMA</span><strong>${labPrice(timing.ema9)}</strong></div>
-<div><span>15m VWAP</span><strong>${labPrice(timing.vwap)}</strong></div>
-<div><span>15m ATR</span><strong>${labPrice(timing.atr15)}</strong></div>
+<div><span>4H 9 EMA</span><strong>${labPrice(timing.ema9)}</strong></div>
+<div><span>4H VWAP</span><strong>${labPrice(timing.vwap)}</strong></div>
+<div><span>4H ATR</span><strong>${labPrice(timing.atr15)}</strong></div>
 <div><span>Trigger Quality</span><strong>${labEsc(timing.ready ? 'Ready' : timing.blockers?.[0] || 'Waiting')}</strong></div>
 </div>
 </div>
@@ -2854,7 +2856,7 @@ ${scoreRows.length ? scoreRows.map(item => `<div><span>${labEsc(item.label)}</sp
 </div>
 <ul>${reasons || '<li>No pullback notes available yet.</li>'}</ul>
 ${buildDecisionNotes(row)}
-<div class="strategy-detail-actions"><button type="button" class="strategy-chart-draft-btn" data-pullback-chart-draft="${labEsc(row.symbol)}">Trend 1D With Plan</button><button type="button" data-strategy-entry-chart="${labEsc(row.symbol)}">Entry 15m</button></div>
+<div class="strategy-detail-actions"><button type="button" class="strategy-chart-draft-btn" data-pullback-chart-draft="${labEsc(row.symbol)}">Trend 1D With Plan</button><button type="button" data-strategy-entry-chart="${labEsc(row.symbol)}">Entry 4H</button></div>
 </aside>`;
 }
 
@@ -2926,7 +2928,7 @@ function buildEarlyDetail(row = null) {
 <div><span>Early Opportunity</span><strong>${labSymbolWithDirection(row)}</strong></div>
 <em class="${rowTone(row)}">${labEsc(row.priorityLabel || labPriorityLabel(row))}</em>
 </div>
-<div class="strategy-detail-actions"><button type="button" data-strategy-chart-review="${labEsc(row.symbol)}">Trend 1D</button><button type="button" data-strategy-entry-chart="${labEsc(row.symbol)}">Entry 15m</button><button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button></div>
+<div class="strategy-detail-actions"><button type="button" data-strategy-chart-review="${labEsc(row.symbol)}">Trend 1D</button><button type="button" data-strategy-entry-chart="${labEsc(row.symbol)}">Entry 4H</button><button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button></div>
 ${buildPlainHelpPanel(row)}
 <div class="strategy-detail-grid">
 <div><span>Early score</span><strong>${labFmt(row.score, 0)}/100</strong></div>
@@ -3230,12 +3232,10 @@ sizeMode: 'contracts',
 orderType: 'market_order',
 entryMode: 'market',
 source: 'strategy-lab-new-coin-scalper',
-note: `${row.raw?.eventLabel || row.setupLabel || 'New Coin Scalper'} draft. Confirm 15m trigger, 4H context, OBV, VWAP, and key levels manually before any order.`,
+note: `${row.raw?.eventLabel || row.setupLabel || 'New Coin Scalper'} draft. Confirm 4H trigger, daily context, OBV, VWAP, and key levels manually before any order.`,
 newCoinScalperLevels: {
 trigger: Number(row.triggerPrice || levels.trigger || 0) || 0,
 vwap: Number(row.targets?.vwap || levels.vwap || 0) || 0,
-support15m: Number(row.targets?.support15m || levels.support15m || 0) || 0,
-resistance15m: Number(row.targets?.resistance15m || levels.resistance15m || 0) || 0,
 support4h: Number(row.targets?.support4h || levels.support4h || 0) || 0,
 resistance4h: Number(row.targets?.resistance4h || levels.resistance4h || 0) || 0,
 },
@@ -3299,7 +3299,7 @@ sizeMode: 'contracts',
 orderType: entryReady ? 'market_order' : 'limit_order',
 entryMode: entryReady ? 'market' : 'limit',
 source: 'strategy-lab-pullback',
-note: `${row.raw?.eventLabel || row.setupLabel || 'EMA Pullback Lab'} draft. ${plan.entryCommand || 'Confirm daily setup and 15m trigger first'}. Scanner-only ${isShort ? 'short-side ' : ''}trend pullback setup; no order is placed automatically.`,
+note: `${row.raw?.eventLabel || row.setupLabel || 'EMA Pullback Lab'} draft. ${plan.entryCommand || 'Confirm daily setup and 4H trigger first'}. Scanner-only ${isShort ? 'short-side ' : ''}trend pullback setup; no order is placed automatically.`,
 pullbackLevels: {
 idealEntry: Number(row.raw?.idealPullback || row.targets?.ema9 || 0) || 0,
  ema9: Number(row.raw?.ema9 || row.targets?.ema9 || 0) || 0,
@@ -3512,8 +3512,8 @@ recordStrategyOutcomeReview(selected);
 ...selected,
 strategyId: 'new_coin_scalper',
 chartTradingDraft: buildNewCoinScalperChartDraft(selected),
-timeframe: '15m',
- }, { reviewTab: true, returnTab: 'strategy', returnSymbol: symbol, strategyId: 'new_coin_scalper', timeframe: '15m', visibleCandleCount: 120 });
+timeframe: '4h',
+ }, { reviewTab: true, returnTab: 'strategy', returnSymbol: symbol, strategyId: 'new_coin_scalper', timeframe: '4h', visibleCandleCount: 120 });
 });
 });
 root.querySelectorAll('[data-pullback-chart-draft]').forEach(button => {

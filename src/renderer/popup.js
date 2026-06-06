@@ -468,7 +468,7 @@ async function openSignalInChartWorkspace(signal = {}, options = {}) {
  const isStageSignal = String(signal?.strategyId || '').toLowerCase() === 'stage' || !!signal?.raw?.stageMetrics;
  await ensureChartWorkspaceLoaded();
  const openAsOverlay = options.overlay !== false;
- const requestedTimeframe = options.timeframe || signal?.timeframe || signal?.raw?.timeframe || (isStageSignal ? '1d' : '15m');
+ const requestedTimeframe = options.timeframe || signal?.timeframe || signal?.raw?.timeframe || (isStageSignal ? '1d' : '4h');
  const reviewTimeframe = openAsOverlay ? requestedTimeframe : requestedTimeframe;
  const requestedVisibleCount = Number(options.visibleCandleCount || 0);
  const chartOptions = {

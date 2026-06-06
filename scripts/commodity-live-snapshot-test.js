@@ -80,6 +80,42 @@ async function main() {
   error: history.error || '',
  }, null, 2));
  if (!history.ok || dailyRows.length < 100) throw new Error(history.error || 'MCX daily rolling history did not return sufficient candles.');
+ const spreadScan = await service.handle({ action: 'commodity_spread_scanner', type: 'all', limit: 6, historyDays: 365 });
+ const spreadRows = Array.isArray(spreadScan.rows) ? spreadScan.rows : [];
+ console.log(JSON.stringify({
+  spreadScanOk: spreadScan.ok,
+  spreadRows: spreadRows.length,
+  widening: spreadScan.widening || 0,
+  narrowing: spreadScan.narrowing || 0,
+  sample: spreadRows.slice(0, 3).map(row => ({
+   label: row.label,
+   spread: row.spread,
+   direction: row.analysis?.direction || '',
+   score: row.analysis?.score || 0,
+   tradeAllowed: row.analysis?.tradeAllowed === true,
+   blockers: row.analysis?.blockers || [],
+  })),
+  error: spreadScan.error || '',
+ }, null, 2));
+ if (!spreadScan.ok || !spreadRows.length) throw new Error(spreadScan.error || 'Commodity spread scanner returned no rows.');
+ const spreadQuotes = await service.handle({ action: 'commodity_spread_quotes', pairs: spreadRows.slice(0, 3) });
+ console.log(JSON.stringify({
+  spreadQuotesOk: spreadQuotes.ok,
+  rows: (spreadQuotes.rows || []).length,
+  executableUpdatedAt: spreadQuotes.rows?.[0]?.executableUpdatedAt || 0,
+  fixedBrokerageAndGst: spreadQuotes.rows?.[0]?.costs?.fixedBrokerageAndGst || 0,
+  error: spreadQuotes.error || '',
+ }, null, 2));
+ if (!spreadQuotes.ok || !(spreadQuotes.rows || []).length) throw new Error(spreadQuotes.error || 'Commodity executable spread refresh returned no rows.');
+ const spreadChart = await service.handle({ ...spreadRows[0], resolution: '1d', start: Date.now() - (365 * 24 * 60 * 60 * 1000), end: Date.now(), action: 'commodity_spread_chart' });
+ console.log(JSON.stringify({
+  spreadChartOk: spreadChart.ok,
+  displayName: spreadChart.displayName || '',
+  candles: Array.isArray(spreadChart.candles) ? spreadChart.candles.length : 0,
+  direction: spreadChart.analysis?.direction || '',
+  error: spreadChart.error || '',
+ }, null, 2));
+ if (!spreadChart.ok || !(spreadChart.candles || []).length) throw new Error(spreadChart.error || 'Synthetic commodity spread chart returned no candles.');
  const lab = await service.handle({ action: 'commodity_analysis', limit: 6, dailyDays: 1095, intradayDays: 90 });
  console.log(JSON.stringify({
   labOk: lab.ok,
@@ -97,25 +133,25 @@ async function main() {
  if (!lab.ok || !(lab.results || []).length || Number(lab.results[0]?.raw?.dailyCandles || 0) < 100) {
   throw new Error(lab.error || 'Commodity Lab did not return a historical trend row.');
  }
- const stock15m = await service.handle({
+ const stock4h = await service.handle({
   action: 'candles',
   symbol: 'AUBANK',
-  resolution: '15m',
+  resolution: '4h',
   start: Date.now() - (90 * 24 * 60 * 60 * 1000),
   end: Date.now(),
   timeoutMs: 45000,
  });
- const stockRows = Array.isArray(stock15m.rows) ? stock15m.rows : [];
+ const stockRows = Array.isArray(stock4h.rows) ? stock4h.rows : [];
  console.log(JSON.stringify({
-  stock15mOk: stock15m.ok,
-  symbol: stock15m.instrument?.tradingSymbol || stock15m.instrument?.symbol || 'AUBANK',
-  exchangeSegment: stock15m.instrument?.exchangeSegment || '',
-  fifteenMinuteRows: stockRows.length,
-  chunks: stock15m.chunks || [],
-  error: stock15m.error || '',
+  stock4hOk: stock4h.ok,
+  symbol: stock4h.instrument?.tradingSymbol || stock4h.instrument?.symbol || 'AUBANK',
+  exchangeSegment: stock4h.instrument?.exchangeSegment || '',
+  fourHourRows: stockRows.length,
+  chunks: stock4h.chunks || [],
+  error: stock4h.error || '',
  }, null, 2));
- if (!stock15m.ok || stockRows.length < 20 || stock15m.instrument?.exchangeSegment !== 'NSE_EQ') {
-  throw new Error(stock15m.error || 'Stock 15-minute history did not return an NSE equity review series.');
+ if (!stock4h.ok || stockRows.length < 20 || stock4h.instrument?.exchangeSegment !== 'NSE_EQ') {
+  throw new Error(stock4h.error || 'Stock 4H history did not return an NSE equity review series.');
  }
  const subscribed = await service.handle({ action: 'live_feed_subscribe', symbols: [rows[0].nearFuture], mode: 'quote' });
  let feed = subscribed;

@@ -37,31 +37,26 @@
  const DS_V17_CHART_CACHE_KEY = 'dsChartCacheV17';
  let chartRuntimeCache = {};
  let chartPersistentCacheCleared = false;
- const RESOLUTIONS = Object.freeze(['15m', '4h', '1d', '1w']);
+ const RESOLUTIONS = Object.freeze(['4h', '1d', '1w']);
  const RESOLUTION_LABELS = Object.freeze({
- '15m': '15m',
  '4h': '4h',
  '1d': '1D',
  '1w': '1W',
  });
  const TTL_MS = Object.freeze({
- '15m': 180000,
  '4h': 1800000,
  '1d': 14400000,
  '1w': 43200000,
  });
  const DEFAULT_VISIBLE_COUNTS = Object.freeze({
- '15m': 360,
  '4h': 520,
  '1d': 520,
  '1w': 520,
  });
  const MAX_RENDER_CANDLES = 20000;
- const MAX_15M_HISTORY_DAYS = 90;
- const MAX_15M_HISTORY_CANDLES = MAX_15M_HISTORY_DAYS * 24 * 4;
+ const MAX_4H_HISTORY_CANDLES = 3000;
  const DEFAULT_OBV_SMA_LENGTH = 100;
  const FETCH_BUFFER_COUNTS = Object.freeze({
- '15m': 100,
  '4h': 140,
  '1d': 140,
  '1w': 80,
@@ -578,8 +573,8 @@
  if (next === 'w' || next === '1wk' || next === 'week' || next === 'weekly') return '1w';
  if (next === '1d') return '1d';
  if (next === '1h' || next === '60m' || next === '60' || next === '240') return '4h';
- if (next === '1m' || next === '3m' || next === '5m' || next === '15') return '15m';
- return RESOLUTIONS.includes(next) ? next : '15m';
+ if (next === '4h' || next === '1m' || next === '3m' || next === '5m' || next === '15') return '4h';
+ return RESOLUTIONS.includes(next) ? next : '4h';
 }
 
  function normalizePreset(value = '') {
@@ -777,17 +772,17 @@
  return Math.round(numeric * 1000);
  }
 
-function resolutionStepMs(resolution = '15m') {
+function resolutionStepMs(resolution = '4h') {
  const map = {
- '15m': 15 * 60 * 1000,
+ '4h': 15 * 60 * 1000,
  '4h': 4 * 60 * 60 * 1000,
  '1d': 24 * 60 * 60 * 1000,
  '1w': 7 * 24 * 60 * 60 * 1000,
  };
- return map[normalizeTimeframe(resolution)] || map['15m'];
+ return map[normalizeTimeframe(resolution)] || map['4h'];
 }
 
-function defaultVisibleCount(resolution = '15m') {
+function defaultVisibleCount(resolution = '4h') {
  const key = normalizeTimeframe(resolution);
  return DEFAULT_VISIBLE_COUNTS[key] || 120;
  }
@@ -903,12 +898,12 @@ function defaultVisibleCount(resolution = '15m') {
  return value === 'clean' ? 'clean' : 'tradingview';
  }
 
- function defaultDarvasLookback(timeframe = '15m') {
- const tf = normalizeTimeframe(timeframe || '15m');
+ function defaultDarvasLookback(timeframe = '4h') {
+ const tf = normalizeTimeframe(timeframe || '4h');
  return tf === '1d' || tf === '1w' ? 50 : 20;
  }
 
- function sanitizeDarvasBoxSettings(value = {}, timeframe = '15m') {
+ function sanitizeDarvasBoxSettings(value = {}, timeframe = '4h') {
  const raw = value && typeof value === 'object' ? value : {};
  return {
  enabled: Object.prototype.hasOwnProperty.call(raw, 'enabled') ? raw.enabled !== false : DARVAS_BOX_DEFAULTS.enabled,
@@ -983,8 +978,8 @@ function defaultVisibleCount(resolution = '15m') {
  const defaults = sanitizeChartDefaults(chartDefaults || {});
  return {
  symbol: '',
- timeframe: '15m',
- visibleCandleCount: defaultVisibleCount('15m'),
+ timeframe: '4h',
+ visibleCandleCount: defaultVisibleCount('4h'),
  preset: 'key',
  showOrders: false,
  showVwap: false,
@@ -1001,8 +996,8 @@ function defaultVisibleCount(resolution = '15m') {
  rightPanelOpen: false,
  intelligenceOverlays: false,
  deskLayoutMode: 'single',
- primaryTimeframe: '15m',
- executionTimeframe: '15m',
+ primaryTimeframe: '4h',
+ executionTimeframe: '4h',
  syncCharts: true,
  contextTab: 'watchlist',
  watchlistTab: '1',
@@ -1017,8 +1012,9 @@ function defaultVisibleCount(resolution = '15m') {
  showIndicatorLegend: true,
  showGrid: false,
  compareWithIndex: true,
+ commoditySpread: null,
  hideEventCandles: true,
- darvasSettings: sanitizeDarvasBoxSettings({}, '15m'),
+ darvasSettings: sanitizeDarvasBoxSettings({}, '4h'),
  chartReviewTabs: [],
  activeChartReviewTabId: '',
  chartReviewOverlayOpen: false,
@@ -1067,7 +1063,7 @@ function defaultVisibleCount(resolution = '15m') {
  intelligenceOverlays: Object.prototype.hasOwnProperty.call(raw, 'intelligenceOverlays') ? raw.intelligenceOverlays !== false : base.intelligenceOverlays !== false,
  deskLayoutMode: String(raw.deskLayoutMode || base.deskLayoutMode || 'threePart').trim() === 'single' ? 'single' : 'threePart',
  primaryTimeframe: normalizeTimeframe(raw.primaryTimeframe || base.primaryTimeframe || '1d'),
- executionTimeframe: normalizeTimeframe(raw.executionTimeframe || raw.timeframe || base.executionTimeframe || '15m'),
+ executionTimeframe: normalizeTimeframe(raw.executionTimeframe || raw.timeframe || base.executionTimeframe || '4h'),
  syncCharts: Object.prototype.hasOwnProperty.call(raw, 'syncCharts') ? raw.syncCharts !== false : true,
  contextTab: normalizeContextTab(raw.contextTab || base.contextTab),
  watchlistTab: normalizeWatchlistTab(raw.watchlistTab || base.watchlistTab),
@@ -1082,6 +1078,7 @@ function defaultVisibleCount(resolution = '15m') {
  showIndicatorLegend: Object.prototype.hasOwnProperty.call(raw, 'showIndicatorLegend') ? raw.showIndicatorLegend !== false : base.showIndicatorLegend !== false,
  showGrid: Object.prototype.hasOwnProperty.call(raw, 'showGrid') ? raw.showGrid === true : base.showGrid === true,
  compareWithIndex: Object.prototype.hasOwnProperty.call(raw, 'compareWithIndex') ? raw.compareWithIndex !== false : base.compareWithIndex !== false,
+ commoditySpread: raw.commoditySpread && typeof raw.commoditySpread === 'object' ? raw.commoditySpread : null,
  hideEventCandles: Object.prototype.hasOwnProperty.call(raw, 'hideEventCandles') ? raw.hideEventCandles === true : base.hideEventCandles === true,
  darvasSettings: sanitizeDarvasBoxSettings(raw.darvasSettings || base.darvasSettings, timeframe),
  chartReviewTabs: sanitizeChartReviewTabs(raw.chartReviewTabs || base.chartReviewTabs),

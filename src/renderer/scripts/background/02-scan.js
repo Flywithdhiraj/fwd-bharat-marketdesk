@@ -39,9 +39,10 @@ function buildDecisionState(results = [], marketIndex = null, manualWatchlist = 
 
 const CLOSED_CANDLE_FETCH_OPTIONS = Object.freeze({ closedOnly: true });
 const SCAN_CANDLE_PACE_MS = 1800;
-const SCAN_CANDLE_FETCH_OPTIONS = Object.freeze({ closedOnly: true, timeoutMs: 20000, paceMs: SCAN_CANDLE_PACE_MS });
+const SCAN_CANDLE_TIMEOUT_MS = 30000;
+const SCAN_CANDLE_FETCH_OPTIONS = Object.freeze({ closedOnly: true, timeoutMs: SCAN_CANDLE_TIMEOUT_MS, paceMs: SCAN_CANDLE_PACE_MS });
 const SCAN_CONTEXT_DAILY_CANDLES = 260;
-const SCANNER_ALLOWED_TIMEFRAMES = new Set(['15m', '4h', '1d', '1w']);
+const SCANNER_ALLOWED_TIMEFRAMES = new Set(['4h', '1d']);
 const SCANNER_UNIVERSE_DEFAULT = 'fno_stocks';
 const SCANNER_UNIVERSE_LIMITS = Object.freeze({
  fno_stocks: 600,
@@ -49,6 +50,17 @@ const SCANNER_UNIVERSE_LIMITS = Object.freeze({
  midcap150: 250,
  smallcap250: 400,
  all_nse: 3500,
+ nse_rest: 1200,
+ nse_af: 900,
+ nse_gl: 900,
+ nse_mr: 900,
+ nse_sz: 900,
+ all_bse: 3500,
+ bse_only: 1200,
+ bse_af: 900,
+ bse_gl: 900,
+ bse_mr: 900,
+ bse_sz: 900,
 });
 const SCANNER_UNIVERSE_LABELS = Object.freeze({
  fno_stocks: 'F&O Stocks',
@@ -56,10 +68,23 @@ const SCANNER_UNIVERSE_LABELS = Object.freeze({
  midcap150: 'Midcap 150',
  smallcap250: 'Smallcap 250',
  all_nse: 'All NSE Equity',
+ nse_rest: 'NSE Rest',
+ nse_af: 'NSE A-F',
+ nse_gl: 'NSE G-L',
+ nse_mr: 'NSE M-R',
+ nse_sz: 'NSE S-Z',
+ all_bse: 'All BSE Equity',
+ bse_only: 'BSE Only',
+ bse_af: 'BSE A-F',
+ bse_gl: 'BSE G-L',
+ bse_mr: 'BSE M-R',
+ bse_sz: 'BSE S-Z',
 });
 const SCANNER_MODE_DEFAULT = 'standard';
 const SCANNER_MODES = new Set(['standard', 'penny_awakening']);
-const ALL_NSE_BREADTH_DEEP_SCAN_LIMIT = 3500;
+const SCAN_UNIVERSE_SNAPSHOTS_KEY = 'scanUniverseSnapshotsV1';
+const FULL_MARKET_BREADTH_DEEP_SCAN_LIMIT = 900;
+const CHUNK_BREADTH_DEEP_SCAN_LIMIT = 650;
 const PENNY_AWAKENING_DEEP_SCAN_LIMIT = 350;
 const PENNY_AWAKENING_PRICE_MAX = 200;
 const PENNY_AWAKENING_PRICE_MIN = 1;
@@ -70,14 +95,14 @@ function sanitizeScanMode(value = '') {
  return SCANNER_MODES.has(raw) ? raw : SCANNER_MODE_DEFAULT;
 }
 
-function sanitizeScanTimeframe(value = '', fallback = '15m') {
+function sanitizeScanTimeframe(value = '', fallback = '4h') {
  const raw = String(value || '').trim().toLowerCase();
  if (SCANNER_ALLOWED_TIMEFRAMES.has(raw)) return raw;
  if (raw === '1h' || raw === '60' || raw === '60m' || raw === '240') return '4h';
- if (raw === '1wk' || raw === 'w' || raw === 'week' || raw === 'weekly') return '1w';
+ if (raw === '1wk' || raw === 'w' || raw === 'week' || raw === 'weekly') return '1d';
  if (raw === 'd' || raw === 'day' || raw === 'daily') return '1d';
- if (raw === '5m' || raw === '3m' || raw === '1m' || raw === '15') return '15m';
- return SCANNER_ALLOWED_TIMEFRAMES.has(fallback) ? fallback : '15m';
+ if (raw === '5m' || raw === '3m' || raw === '1m' || raw === '15') return '4h';
+ return SCANNER_ALLOWED_TIMEFRAMES.has(fallback) ? fallback : '4h';
 }
 
 function sanitizeScanUniverseId(value = '') {
@@ -87,15 +112,34 @@ function sanitizeScanUniverseId(value = '') {
  if (['midcap150', 'midcap_150', 'midcap'].includes(raw)) return 'midcap150';
  if (['smallcap250', 'smallcap_250', 'smallcap'].includes(raw)) return 'smallcap250';
  if (['all_nse', 'all', 'nse'].includes(raw)) return 'all_nse';
+ if (['nse_rest', 'nse_remaining', 'nse_uncovered', 'nse_ex_overlap', 'nse_ex_core'].includes(raw)) return 'nse_rest';
+ if (['all_bse', 'bse'].includes(raw)) return 'all_bse';
+ if (['bse_only', 'bse_unique', 'bse_ex_nse', 'bse_not_nse'].includes(raw)) return 'bse_only';
+ if (['nse_a_f', 'nse_af', 'nse_1', 'nse_chunk_1'].includes(raw)) return 'nse_af';
+ if (['nse_g_l', 'nse_gl', 'nse_2', 'nse_chunk_2'].includes(raw)) return 'nse_gl';
+ if (['nse_m_r', 'nse_mr', 'nse_3', 'nse_chunk_3'].includes(raw)) return 'nse_mr';
+ if (['nse_s_z', 'nse_sz', 'nse_4', 'nse_chunk_4'].includes(raw)) return 'nse_sz';
+ if (['bse_a_f', 'bse_af', 'bse_1', 'bse_chunk_1'].includes(raw)) return 'bse_af';
+ if (['bse_g_l', 'bse_gl', 'bse_2', 'bse_chunk_2'].includes(raw)) return 'bse_gl';
+ if (['bse_m_r', 'bse_mr', 'bse_3', 'bse_chunk_3'].includes(raw)) return 'bse_mr';
+ if (['bse_s_z', 'bse_sz', 'bse_4', 'bse_chunk_4'].includes(raw)) return 'bse_sz';
  return 'fno_stocks';
+}
+
+function isFullMarketUniverse(universe = '') {
+ return ['all_nse', 'all_bse'].includes(sanitizeScanUniverseId(universe));
+}
+
+function isChunkedMarketUniverse(universe = '') {
+ return /^(nse|bse)_(af|gl|mr|sz)$/.test(sanitizeScanUniverseId(universe)) || ['nse_rest', 'bse_only'].includes(sanitizeScanUniverseId(universe));
 }
 
 function resolveScanLimitForUniverse(universe = SCANNER_UNIVERSE_DEFAULT, configuredLimit = 0) {
  const safeUniverse = sanitizeScanUniverseId(universe);
  const cap = SCANNER_UNIVERSE_LIMITS[safeUniverse] || SCANNER_UNIVERSE_LIMITS.fno_stocks;
  const requested = Number(configuredLimit || 0);
- const fallback = safeUniverse === 'all_nse' ? 3000 : safeUniverse === 'nifty500' ? 500 : safeUniverse === 'midcap150' ? 150 : safeUniverse === 'smallcap250' ? 250 : 250;
- if (safeUniverse === 'all_nse') return Math.min(cap, Math.max(fallback, requested > 10 ? requested : fallback));
+ const fallback = isFullMarketUniverse(safeUniverse) ? 900 : isChunkedMarketUniverse(safeUniverse) ? 650 : safeUniverse === 'nifty500' ? 500 : safeUniverse === 'midcap150' ? 150 : safeUniverse === 'smallcap250' ? 250 : 250;
+ if (isFullMarketUniverse(safeUniverse)) return Math.min(cap, Math.max(fallback, requested > 10 ? requested : fallback));
  return Math.min(cap, Math.max(20, requested > 10 ? requested : fallback));
 }
 
@@ -103,13 +147,26 @@ function resolveDeepScanLimitForStrategy(strategy = {}, quoteLimit = 0) {
  const universe = sanitizeScanUniverseId(strategy.scanUniverse || SCANNER_UNIVERSE_DEFAULT);
  const mode = sanitizeScanMode(strategy.scanMode || SCANNER_MODE_DEFAULT);
  const requested = Math.max(20, Number(quoteLimit || strategy.maxCoins || 250) || 250);
- if (mode === 'penny_awakening' && universe !== 'all_nse') return Math.min(requested, PENNY_AWAKENING_DEEP_SCAN_LIMIT);
- if (universe === 'all_nse') return Math.min(requested, ALL_NSE_BREADTH_DEEP_SCAN_LIMIT);
+ if (mode === 'penny_awakening' && !isFullMarketUniverse(universe)) return Math.min(requested, PENNY_AWAKENING_DEEP_SCAN_LIMIT);
+ if (isChunkedMarketUniverse(universe)) return Math.min(requested, CHUNK_BREADTH_DEEP_SCAN_LIMIT);
+ if (isFullMarketUniverse(universe)) return Math.min(requested, FULL_MARKET_BREADTH_DEEP_SCAN_LIMIT);
  return requested;
 }
 
 function getScanUniverseStatusLabel(universe = SCANNER_UNIVERSE_DEFAULT) {
  return SCANNER_UNIVERSE_LABELS[sanitizeScanUniverseId(universe)] || String(universe || 'market universe');
+}
+
+async function buildScanUniverseSnapshotPatch(universe = SCANNER_UNIVERSE_DEFAULT, snapshot = {}) {
+ const key = sanitizeScanUniverseId(universe || SCANNER_UNIVERSE_DEFAULT);
+ const existing = await new Promise(resolve => chrome.storage.local.get([SCAN_UNIVERSE_SNAPSHOTS_KEY], data => resolve(data?.[SCAN_UNIVERSE_SNAPSHOTS_KEY] || {}))).catch(() => ({}));
+ const next = existing && typeof existing === 'object' && !Array.isArray(existing) ? { ...existing } : {};
+ next[key] = {
+  ...(snapshot || {}),
+  universe: key,
+  savedAt: Date.now(),
+ };
+ return { [SCAN_UNIVERSE_SNAPSHOTS_KEY]: next };
 }
 
 function describeScanCandidateInstrument(candidate = {}) {
@@ -127,6 +184,16 @@ function scanFormatInr(value, decimals = 4) {
   minimumFractionDigits: 0,
   maximumFractionDigits: Math.max(0, Number(decimals || 0)),
  })}`;
+}
+
+function resolveScannerSector(symbol = '', candidate = {}) {
+ const instrument = candidate?.dhanInstrument || candidate?.instrument || {};
+ const direct = String(candidate?.sector || instrument?.sector || '').trim();
+ if (direct && !/^(NSE|BSE|NSE_EQ|BSE_EQ|OTHER)$/i.test(direct)) return direct;
+ const resolver = globalThis.FWDTradeDeskShared?.getIndianEquitySector;
+ const fromIndianMap = typeof resolver === 'function' ? resolver(symbol || candidate?.symbol || instrument?.tradingSymbol || instrument?.symbol || '') : '';
+ if (fromIndianMap) return fromIndianMap;
+ return getSector(symbol || candidate?.symbol || instrument?.tradingSymbol || instrument?.symbol || '');
 }
 
 function averageVolumeFromCandles(candles = [], period = 20) {
@@ -257,6 +324,8 @@ function rankScanCandidates(candidates = [], strategy = {}, watchlist = new Set(
  });
 }
 const SCAN_PARTIAL_CHECKPOINT_EVERY = 20;
+const STRATEGY_LAB_PARTIAL_DERIVE_MIN_MS = 75 * 1000;
+let lastStrategyLabPartialDeriveAt = 0;
 const MARKET_INDEX_HISTORY_LIMIT = 5000;
 const MARKET_INDEX_HISTORY_SCHEMA_VERSION = 2;
 const MARKET_INDEX_BASE_VALUE = 10000;
@@ -974,7 +1043,7 @@ function resultsToCSV(results) {
 function defaultStrategy() {
  return {
   ema1: 9, ema2: 30, ema3: 100, obvPeriod: 50,
-  tf1: '1d', tf2: '15m',
+  tf1: '1d', tf2: '4h',
   minScore: 15, alertScore: 65, maxCoins: 500, minVolume: 0,
   scanUniverse: SCANNER_UNIVERSE_DEFAULT,
   scanMode: SCANNER_MODE_DEFAULT,
@@ -1127,6 +1196,7 @@ async function savePartialScanCheckpoint(scanContext, details = {}) {
  await chrome.storage.local.set({
  scanPartialAvailable: true,
  scanPartialTs: Date.now(),
+ scanResults,
  scanPartialProgress: {
  scannedRows,
  candidateRows,
@@ -1134,6 +1204,16 @@ async function savePartialScanCheckpoint(scanContext, details = {}) {
  candleSymbols,
  },
  });
+ const nowMs = Date.now();
+ if (
+ candleSymbols >= 20
+ && nowMs - lastStrategyLabPartialDeriveAt > STRATEGY_LAB_PARTIAL_DERIVE_MIN_MS
+ && globalThis.FWDTradeDeskScanContext?.deriveAll
+ ) {
+ lastStrategyLabPartialDeriveAt = nowMs;
+ globalThis.FWDTradeDeskScanContext.deriveAll({ includeNative: false, source: 'partial_checkpoint' })
+ .catch(error => dlog(`Strategy Lab partial derive failed: ${error?.message || error}`));
+ }
  return context;
  } catch (error) {
  dlog(`Partial scan checkpoint failed: ${error?.message || error}`);
@@ -1171,10 +1251,10 @@ async function runScan() {
   };
   strat.alertTone = sanitizeAlertTone(strat.alertTone);
    strat.tf1 = sanitizeScanTimeframe(strat.tf1, '1d');
-   strat.tf2 = sanitizeScanTimeframe(strat.tf2, '15m');
+   strat.tf2 = sanitizeScanTimeframe(strat.tf2, '4h');
    strat.scanUniverse = sanitizeScanUniverseId(strat.scanUniverse || SCANNER_UNIVERSE_DEFAULT);
    strat.scanMode = sanitizeScanMode(strat.scanMode || SCANNER_MODE_DEFAULT);
-   if (strat.scanUniverse === 'all_nse' && strat.scanMode === 'penny_awakening') {
+   if (isFullMarketUniverse(strat.scanUniverse) && strat.scanMode === 'penny_awakening') {
     strat.scanMode = 'standard';
    }
    const manualWatchlist = mergeWatchlists(storeData.manualWatchlist || storeData.watchlist || []);
@@ -1209,6 +1289,9 @@ async function runScan() {
     label: universeLabelForStatus,
      requested: maxCoins,
      deepScanLimit,
+     deepTotal: deepScanLimit,
+     completed: false,
+     partial: false,
      scanMode: strat.scanMode,
     scanned: 0,
     count: 0,
@@ -1252,6 +1335,9 @@ async function runScan() {
    label: universeMeta.label || strat.scanUniverse,
     requested: maxCoins,
     deepScanLimit,
+    deepTotal: deepScanLimit,
+    completed: false,
+    partial: false,
     scanMode: strat.scanMode,
    count: Number(universeMeta.count || 0),
    returned: Number(universeMeta.returned || Object.keys(tickerMap || {}).length || 0),
@@ -1277,7 +1363,7 @@ async function runScan() {
  name: instrumentDescription,
  description: instrumentDescription,
  instrumentDescription,
- sector: assetInfo.sector || getSector(sym),
+ sector: assetInfo.sector || resolveScannerSector(sym, { dhanInstrument, sector: ticker.sector }),
  assetClass: assetInfo.assetClass,
  assetLabel: assetInfo.assetLabel,
  assetBadge: assetInfo.assetBadge,
@@ -1309,6 +1395,9 @@ async function runScan() {
    label: universeMeta.label || strat.scanUniverse,
    requested: maxCoins,
    deepScanLimit,
+   deepTotal: deepScanLimit,
+   completed: false,
+   partial: false,
    scanMode: strat.scanMode,
    count: Number(universeMeta.count || products.length || 0),
    returned: Number(universeMeta.returned || Object.keys(tickerMap || {}).length || 0),
@@ -1413,7 +1502,7 @@ async function runScan() {
  Object.entries(tickerMap).forEach(([sym, t]) => {
  fundingRates[sym] = t.fundingRate ?? 0;
  fundingHeatmap.push({
- symbol: sym, sector: getSector(sym),
+ symbol: sym, sector: resolveScannerSector(sym, { dhanInstrument: t.dhanInstrument, sector: t.sector }),
  fundingRate: t.fundingRate || 0, change24h: t.change24h || 0,
  nextFundingAt: t.nextFundingAt || 0,
  fundingIntervalSeconds: Number(t.fundingIntervalSeconds || 28800),
@@ -1456,7 +1545,8 @@ async function runScan() {
  candidates = rankScanCandidates(candidates, strat, watchlist);
  if (candidates.length > deepScanLimit) candidates = candidates.slice(0, deepScanLimit);
   dlog(`Candidates: ${candidates.length} deep (${watchlist.size} pinned, mode=${strat.scanMode}, universe=${universeMeta.label || strat.scanUniverse}, breadth=${maxCoins}, returned=${Object.keys(tickerMap || {}).length}, candle pace=${SCAN_CANDLE_PACE_MS}ms)`);
- await chrome.storage.local.set({ scannedCoins: candidates.length, scannedStocks: candidates.length });
+ const deepTotal = candidates.length;
+ await chrome.storage.local.set({ scannedCoins: 0, scannedStocks: 0 });
 
  // Scan each symbol
  const results = [];
@@ -1512,19 +1602,24 @@ async function runScan() {
  const pct = Math.round(8 + (i / candidates.length) * 88);
  if (i % 1 === 0 || i === candidates.length - 1) {
  await chrome.storage.local.set({
-  scanStatus: `Scanning ${universeMeta.label || 'Market'}: ${symbol} (${i + 1}/${candidates.length}, loaded ${i + 1}, pending ${Math.max(0, candidates.length - i - 1)})`,
+  scanStatus: `Scanning ${universeMeta.label || 'Market'}: ${symbol} (${i + 1}/${deepTotal}, completed ${i}, pending ${Math.max(0, deepTotal - i)})`,
  scanProgress: pct,
  scanHeartbeat: Date.now(),
+ scannedCoins: i,
+ scannedStocks: i,
  scannerUniverseMeta: {
   universe: universeMeta.universe || strat.scanUniverse,
    label: universeMeta.label || strat.scanUniverse,
    requested: maxCoins,
    deepScanLimit,
+   deepTotal,
+   completed: false,
+   partial: false,
    scanMode: strat.scanMode,
    count: Number(universeMeta.count || products.length || 0),
   returned: Number(universeMeta.returned || Object.keys(tickerMap || {}).length || 0),
-  scanned: i + 1,
-  pending: Math.max(0, candidates.length - i - 1),
+  scanned: i,
+  pending: Math.max(0, deepTotal - i),
   fetchedAt: universeMeta.fetchedAt || Date.now(),
  },
  });
@@ -1540,10 +1635,10 @@ async function runScan() {
   }
   continue;
  }
-  const m2Candles = await fetchCandles(symbol, strat.tf2 || '15m', 50, candleOptions);
+  const m2Candles = await fetchCandles(symbol, strat.tf2 || '4h', 50, candleOptions);
  if (scanContext) {
  globalThis.FWDTradeDeskScanContext?.recordCandles?.(scanContext, symbol, strat.tf1 || '1d', dCandles || []);
- globalThis.FWDTradeDeskScanContext?.recordCandles?.(scanContext, symbol, strat.tf2 || '15m', m2Candles || []);
+ globalThis.FWDTradeDeskScanContext?.recordCandles?.(scanContext, symbol, strat.tf2 || '4h', m2Candles || []);
  }
  if (!m2Candles) noHistoryCount++;
 
@@ -1586,6 +1681,7 @@ async function runScan() {
  result.assetInfo = result.assetInfo || candidates[i].assetInfo || '';
  result.underlyingSymbol = result.underlyingSymbol || candidates[i].underlyingSymbol || '';
  result.underlyingName = result.underlyingName || candidates[i].underlyingName || '';
+ result.sector = resolveScannerSector(symbol, candidates[i]);
 
  // Always include pinned symbols regardless of minScore
  if (result.score < minScore && !watchlist.has(symbol)) continue;
@@ -1687,6 +1783,33 @@ async function runScan() {
  }
  }
  } catch (e) { dlog(`Error ${symbol}: ${e.message}`); }
+ const completedRows = i + 1;
+ if (completedRows % 10 === 0 || completedRows === deepTotal) {
+ await chrome.storage.local.set({
+ scanStatus: completedRows === deepTotal
+ ? `Finishing ${universeMeta.label || 'Market'} scan (${completedRows}/${deepTotal} scanned)...`
+ : `Scanning ${universeMeta.label || 'Market'}: completed ${completedRows}/${deepTotal}, pending ${Math.max(0, deepTotal - completedRows)}`,
+ scanProgress: Math.round(8 + (completedRows / Math.max(1, deepTotal)) * 88),
+ scanHeartbeat: Date.now(),
+ scannedCoins: completedRows,
+ scannedStocks: completedRows,
+ scannerUniverseMeta: {
+  universe: universeMeta.universe || strat.scanUniverse,
+  label: universeMeta.label || strat.scanUniverse,
+  requested: maxCoins,
+  deepScanLimit,
+  deepTotal,
+  completed: false,
+  partial: false,
+  scanMode: strat.scanMode,
+  count: Number(universeMeta.count || products.length || 0),
+  returned: Number(universeMeta.returned || Object.keys(tickerMap || {}).length || 0),
+  scanned: completedRows,
+  pending: Math.max(0, deepTotal - completedRows),
+  fetchedAt: universeMeta.fetchedAt || Date.now(),
+ },
+ });
+ }
  if (i > 0 && ((i + 1) % SCAN_PARTIAL_CHECKPOINT_EVERY === 0 || i === candidates.length - 1)) {
  await savePartialScanCheckpoint(scanContext, {
  tickerMap,
@@ -1732,6 +1855,9 @@ async function runScan() {
   fallbackCacheHits: Number(globalThis.dhanCandleFetchStats?.fallbackCacheHits || 0),
   apiFetches: Number(globalThis.dhanCandleFetchStats?.apiFetches || 0),
   apiRows: Number(globalThis.dhanCandleFetchStats?.apiRows || 0),
+  rateLimitWaits: Number(globalThis.dhanCandleFetchStats?.rateLimitWaits || 0),
+  persistedRows: Number(globalThis.dhanCandleFetchStats?.persistedRows || 0),
+  incrementalRequests: Number(globalThis.dhanCandleFetchStats?.incrementalRequests || 0),
   noHistory: noHistoryCount,
   deepScanLimit,
   quoteBreadth: Object.keys(tickerMap || {}).length,
@@ -1774,8 +1900,45 @@ async function runScan() {
 
  // -- Save scan results to storage (with quota-exceeded fallback) --
  let storageSaveOk = true;
+ const scanCompletedAt = Date.now();
+ const scanCompletedLabel = new Date(scanCompletedAt).toLocaleTimeString();
+ const scannerUniverseSnapshot = {
+  scanResults: enrichedResults,
+  alerts: currentAlerts,
+  decisionShortlist: decisionState.shortlist,
+  autoWatchlist: decisionState.autoWatchlist,
+  manualWatchlist,
+  watchlist: decisionState.mergedWatchlist,
+  sectorSummary: intelligence.sectorSummary,
+  sectorBreadth: intelligence.sectorBreadth,
+  candleFetchStats,
+  marketIndex,
+  lastScan: scanCompletedLabel,
+  lastScanTs: scanCompletedAt,
+ scannedStocks: deepTotal,
+  totalStocks: products.length,
+  scannerUniverseMeta: {
+   universe: universeMeta.universe || strat.scanUniverse,
+   label: universeMeta.label || strat.scanUniverse,
+   requested: maxCoins,
+   deepScanLimit,
+   deepTotal,
+   completed: true,
+   partial: false,
+   scanMode: strat.scanMode,
+   count: Number(universeMeta.count || products.length || 0),
+   returned: Number(universeMeta.returned || Object.keys(tickerMap || {}).length || 0),
+   scanned: deepTotal,
+   pending: 0,
+   skippedNoHistory: noHistoryCount,
+   candleFetchStats,
+   fetchedAt: universeMeta.fetchedAt || Date.now(),
+  },
+ };
+ const universeSnapshotPatch = await buildScanUniverseSnapshotPatch(universeMeta.universe || strat.scanUniverse, scannerUniverseSnapshot);
  try {
  await chrome.storage.local.set({
+ ...universeSnapshotPatch,
  alerts: currentAlerts,
  alertHistory: alerts,
  scanResults: enrichedResults,
@@ -1790,8 +1953,8 @@ async function runScan() {
   signalHistoryStore: intelligence.signalHistoryStore,
   candleFetchStats,
   marketIndex,
- scanStatus: `OK Done - ${enrichedResults.length} signals from ${candidates.length} ${universeMeta.label || 'symbols'} (${noHistoryCount} skipped no-history)`,
- scanProgress: 100, lastScan: new Date().toLocaleTimeString(), lastScanTs: Date.now(),
+ scanStatus: `OK Done - ${enrichedResults.length} signals from ${deepTotal} ${universeMeta.label || 'symbols'} (${noHistoryCount} skipped no-history)`,
+ scanProgress: 100, lastScan: scanCompletedLabel, lastScanTs: scanCompletedAt,
  totalCoins: products.length, scannedCoins: candidates.length,
  totalStocks: products.length, scannedStocks: candidates.length,
  scannerUniverseMeta: {
@@ -1799,10 +1962,13 @@ async function runScan() {
   label: universeMeta.label || strat.scanUniverse,
   requested: maxCoins,
   deepScanLimit,
+  deepTotal,
+  completed: true,
+  partial: false,
   scanMode: strat.scanMode,
   count: Number(universeMeta.count || products.length || 0),
   returned: Number(universeMeta.returned || Object.keys(tickerMap || {}).length || 0),
-  scanned: candidates.length,
+  scanned: deepTotal,
   pending: 0,
   skippedNoHistory: noHistoryCount,
   candleFetchStats,
@@ -1821,6 +1987,7 @@ async function runScan() {
  try {
  alerts.splice(200);
  await chrome.storage.local.set({
+ ...universeSnapshotPatch,
  alerts: currentAlerts,
  alertHistory: alerts,
  scanResults: enrichedResults,
@@ -1833,7 +2000,7 @@ async function runScan() {
   candleFetchStats,
   marketIndex,
  scanStatus: `OK Done - ${enrichedResults.length} signals (trimmed, ${noHistoryCount} skipped no-history)`,
- scanProgress: 100, lastScan: new Date().toLocaleTimeString(), lastScanTs: Date.now(),
+ scanProgress: 100, lastScan: scanCompletedLabel, lastScanTs: scanCompletedAt,
  totalCoins: products.length, scannedCoins: candidates.length,
  totalStocks: products.length, scannedStocks: candidates.length,
  scannerUniverseMeta: {
@@ -1841,10 +2008,13 @@ async function runScan() {
   label: universeMeta.label || strat.scanUniverse,
   requested: maxCoins,
   deepScanLimit,
+  deepTotal,
+  completed: true,
+  partial: false,
   scanMode: strat.scanMode,
   count: Number(universeMeta.count || products.length || 0),
   returned: Number(universeMeta.returned || Object.keys(tickerMap || {}).length || 0),
-  scanned: candidates.length,
+  scanned: deepTotal,
   pending: 0,
   skippedNoHistory: noHistoryCount,
   candleFetchStats,
@@ -1952,7 +2122,7 @@ async function refreshSingleSymbol(symbol) {
 
  const [dCandles, m2Candles] = await Promise.all([
  fetchCandles(sym, strat.tf1 || '1d', 200, CLOSED_CANDLE_FETCH_OPTIONS),
- fetchCandles(sym, strat.tf2 || '15m', 200, CLOSED_CANDLE_FETCH_OPTIONS),
+ fetchCandles(sym, strat.tf2 || '4h', 200, CLOSED_CANDLE_FETCH_OPTIONS),
  ]);
  if (!dCandles?.length && !m2Candles?.length) {
  return { ok: false, error: `No candles for ${sym}` };

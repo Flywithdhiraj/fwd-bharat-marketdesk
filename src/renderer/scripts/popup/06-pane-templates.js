@@ -78,11 +78,20 @@ const PANE_TEMPLATES = {
  <button class="scanner-universe-btn" type="button" data-scan-universe="nifty500"><span>Nifty 500 Scanner</span><small>Core market</small></button>
  <button class="scanner-universe-btn" type="button" data-scan-universe="midcap150"><span>Midcap 150</span><small>Growth basket</small></button>
  <button class="scanner-universe-btn" type="button" data-scan-universe="smallcap250"><span>Smallcap 250</span><small>Higher breadth</small></button>
- <button class="scanner-universe-btn" type="button" data-scan-universe="all_nse"><span>All NSE</span><small>Slow deep scan</small></button>
+ <button class="scanner-universe-btn" type="button" data-scan-universe="nse_rest"><span>NSE Rest</span><small>No core overlap</small></button>
+ <button class="scanner-universe-btn" type="button" data-scan-universe="bse_only"><span>BSE Only</span><small>Not in NSE</small></button>
+ <button class="scanner-universe-btn" type="button" data-scan-universe="nse_af"><span>NSE A-F</span><small>Chunk 1</small></button>
+ <button class="scanner-universe-btn" type="button" data-scan-universe="nse_gl"><span>NSE G-L</span><small>Chunk 2</small></button>
+ <button class="scanner-universe-btn" type="button" data-scan-universe="nse_mr"><span>NSE M-R</span><small>Chunk 3</small></button>
+ <button class="scanner-universe-btn" type="button" data-scan-universe="nse_sz"><span>NSE S-Z</span><small>Chunk 4</small></button>
+ <button class="scanner-universe-btn" type="button" data-scan-universe="all_nse"><span>All NSE</span><small>Research only</small></button>
  </div>
  <div class="preset-row" id="scannerPresets">
  <button class="preset-btn active" data-preset="">All Flow</button>
  <button class="preset-btn" data-preset="trend">Trend</button>
+ <button class="preset-btn" data-preset="breakout">Breakout</button>
+ <button class="preset-btn" data-preset="ema_obv">EMA + OBV</button>
+ <button class="preset-btn" data-preset="sector_leaders">Sector Leaders</button>
  <button class="preset-btn" data-preset="reversal">Reversal</button>
  <button class="preset-btn" data-preset="volume">Volume</button>
  <button class="preset-btn" data-preset="tracked">Tracked</button>
@@ -97,7 +106,7 @@ const PANE_TEMPLATES = {
  <div class="st-div"></div>
  <div class="st-item"><span id="ssShort">0</span><b class="tip" data-tip="Count of current short-direction signals">SHORT</b></div>
  <div class="st-div"></div>
- <div class="st-item"><span id="ssMTF">0</span><b class="tip" data-tip="Signals confirmed by both 1D and 15m timeframes">MTF OK</b></div>
+ <div class="st-item"><span id="ssMTF">0</span><b class="tip" data-tip="Signals confirmed by both 1D and 4H timeframes">MTF OK</b></div>
  <div class="st-div"></div>
  <div class="st-item"><span id="ssWatch">0</span><b class="tip" data-tip="Watchlist-quality setups, not full execute signals">WATCH</b></div>
  <div class="st-div"></div>
@@ -1314,18 +1323,14 @@ const PANE_TEMPLATES = {
  <div class="srow"><label>OBV SMA Period</label><input type="number" class="si" id="sOBV" value="50"/></div>
  <div class="srow"><label>Primary TF</label>
  <select class="si" id="sTF1">
- <option value="15m">15 Min</option>
  <option value="4h">4 Hours</option>
  <option value="1d" selected>1 Day</option>
- <option value="1w">Weekly</option>
  </select>
  </div>
  <div class="srow"><label>Confirm TF</label>
  <select class="si" id="sTF2">
- <option value="15m" selected>15 Min</option>
- <option value="4h">4 Hours</option>
+ <option value="4h" selected>4 Hours</option>
  <option value="1d">1 Day</option>
- <option value="1w">Weekly</option>
  </select>
  </div>
  </div>
@@ -1337,7 +1342,18 @@ const PANE_TEMPLATES = {
   <option value="nifty500">Nifty 500 Scanner</option>
   <option value="midcap150">Midcap 150 Scanner</option>
   <option value="smallcap250">Smallcap 250 Scanner</option>
+  <option value="nse_rest">NSE Rest - excludes F&amp;O/Nifty/Mid/Small overlap</option>
+  <option value="nse_af">NSE A-F Chunk</option>
+  <option value="nse_gl">NSE G-L Chunk</option>
+  <option value="nse_mr">NSE M-R Chunk</option>
+  <option value="nse_sz">NSE S-Z Chunk</option>
   <option value="all_nse">All NSE Equity Scanner</option>
+  <option value="bse_only">BSE Only - symbols not in NSE</option>
+  <option value="bse_af">BSE A-F Chunk</option>
+  <option value="bse_gl">BSE G-L Chunk</option>
+  <option value="bse_mr">BSE M-R Chunk</option>
+  <option value="bse_sz">BSE S-Z Chunk</option>
+  <option value="all_bse">All BSE Equity Scanner</option>
   </select>
   </div>
   <div class="srow"><label>Scanner Type</label>
@@ -1351,7 +1367,7 @@ const PANE_TEMPLATES = {
  <div class="srow"><label>Max symbols to Scan</label><input type="number" class="si" id="sMaxCoins" value="500" min="5" max="3500"/></div>
  <div class="srow"><label>Min Turnover Filter (INR)</label><input type="number" class="si" id="sMinVol" value="0" min="0"/></div>
  <div class="srow"><label>Activity Min Turnover (INR)</label><input type="number" class="si" id="sFundingMinVol" value="100000" min="0" step="1000"/></div>
- <div class="account-inline-note">All NSE can cover 3000 symbols through quote batches, then deep history analysis runs on the best ranked symbols to protect API limits.</div>
+ <div class="account-inline-note">Use NSE/BSE chunks for daily scans. Full NSE/BSE loads breadth first, then deep history only on the ranked shortlist to avoid four-hour scan cycles.</div>
  </div>
  <div class="sg sg-core" data-settings-panel="scanner-rules" data-settings-subsection="data">
  <div class="sgt">Auto-Scan</div>

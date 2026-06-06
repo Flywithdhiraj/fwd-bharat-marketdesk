@@ -39,31 +39,26 @@
  const DS_V17_CHART_CACHE_KEY = 'dsChartCacheV17';
  let chartRuntimeCache = {};
  let chartPersistentCacheCleared = false;
- const RESOLUTIONS = Object.freeze(['15m', '4h', '1d', '1w']);
+ const RESOLUTIONS = Object.freeze(['4h', '1d', '1w']);
  const RESOLUTION_LABELS = Object.freeze({
- '15m': '15m',
  '4h': '4h',
  '1d': '1D',
  '1w': '1W',
  });
  const TTL_MS = Object.freeze({
- '15m': 180000,
  '4h': 1800000,
  '1d': 14400000,
  '1w': 43200000,
  });
  const DEFAULT_VISIBLE_COUNTS = Object.freeze({
- '15m': 360,
  '4h': 520,
  '1d': 520,
  '1w': 520,
  });
  const MAX_RENDER_CANDLES = 20000;
- const MAX_15M_HISTORY_DAYS = 90;
- const MAX_15M_HISTORY_CANDLES = MAX_15M_HISTORY_DAYS * 24 * 4;
+ const MAX_4H_HISTORY_CANDLES = 3000;
  const DEFAULT_OBV_SMA_LENGTH = 100;
  const FETCH_BUFFER_COUNTS = Object.freeze({
- '15m': 100,
  '4h': 140,
  '1d': 140,
  '1w': 80,
@@ -580,8 +575,8 @@
  if (next === 'w' || next === '1wk' || next === 'week' || next === 'weekly') return '1w';
  if (next === '1d') return '1d';
  if (next === '1h' || next === '60m' || next === '60' || next === '240') return '4h';
- if (next === '1m' || next === '3m' || next === '5m' || next === '15') return '15m';
- return RESOLUTIONS.includes(next) ? next : '15m';
+ if (next === '4h' || next === '1m' || next === '3m' || next === '5m' || next === '15') return '4h';
+ return RESOLUTIONS.includes(next) ? next : '4h';
 }
 
  function normalizePreset(value = '') {
@@ -779,17 +774,17 @@
  return Math.round(numeric * 1000);
  }
 
-function resolutionStepMs(resolution = '15m') {
+function resolutionStepMs(resolution = '4h') {
  const map = {
- '15m': 15 * 60 * 1000,
+ '4h': 15 * 60 * 1000,
  '4h': 4 * 60 * 60 * 1000,
  '1d': 24 * 60 * 60 * 1000,
  '1w': 7 * 24 * 60 * 60 * 1000,
  };
- return map[normalizeTimeframe(resolution)] || map['15m'];
+ return map[normalizeTimeframe(resolution)] || map['4h'];
 }
 
-function defaultVisibleCount(resolution = '15m') {
+function defaultVisibleCount(resolution = '4h') {
  const key = normalizeTimeframe(resolution);
  return DEFAULT_VISIBLE_COUNTS[key] || 120;
  }
@@ -905,12 +900,12 @@ function defaultVisibleCount(resolution = '15m') {
  return value === 'clean' ? 'clean' : 'tradingview';
  }
 
- function defaultDarvasLookback(timeframe = '15m') {
- const tf = normalizeTimeframe(timeframe || '15m');
+ function defaultDarvasLookback(timeframe = '4h') {
+ const tf = normalizeTimeframe(timeframe || '4h');
  return tf === '1d' || tf === '1w' ? 50 : 20;
  }
 
- function sanitizeDarvasBoxSettings(value = {}, timeframe = '15m') {
+ function sanitizeDarvasBoxSettings(value = {}, timeframe = '4h') {
  const raw = value && typeof value === 'object' ? value : {};
  return {
  enabled: Object.prototype.hasOwnProperty.call(raw, 'enabled') ? raw.enabled !== false : DARVAS_BOX_DEFAULTS.enabled,
@@ -985,8 +980,8 @@ function defaultVisibleCount(resolution = '15m') {
  const defaults = sanitizeChartDefaults(chartDefaults || {});
  return {
  symbol: '',
- timeframe: '15m',
- visibleCandleCount: defaultVisibleCount('15m'),
+ timeframe: '4h',
+ visibleCandleCount: defaultVisibleCount('4h'),
  preset: 'key',
  showOrders: false,
  showVwap: false,
@@ -1003,8 +998,8 @@ function defaultVisibleCount(resolution = '15m') {
  rightPanelOpen: false,
  intelligenceOverlays: false,
  deskLayoutMode: 'single',
- primaryTimeframe: '15m',
- executionTimeframe: '15m',
+ primaryTimeframe: '4h',
+ executionTimeframe: '4h',
  syncCharts: true,
  contextTab: 'watchlist',
  watchlistTab: '1',
@@ -1019,8 +1014,9 @@ function defaultVisibleCount(resolution = '15m') {
  showIndicatorLegend: true,
  showGrid: false,
  compareWithIndex: true,
+ commoditySpread: null,
  hideEventCandles: true,
- darvasSettings: sanitizeDarvasBoxSettings({}, '15m'),
+ darvasSettings: sanitizeDarvasBoxSettings({}, '4h'),
  chartReviewTabs: [],
  activeChartReviewTabId: '',
  chartReviewOverlayOpen: false,
@@ -1069,7 +1065,7 @@ function defaultVisibleCount(resolution = '15m') {
  intelligenceOverlays: Object.prototype.hasOwnProperty.call(raw, 'intelligenceOverlays') ? raw.intelligenceOverlays !== false : base.intelligenceOverlays !== false,
  deskLayoutMode: String(raw.deskLayoutMode || base.deskLayoutMode || 'threePart').trim() === 'single' ? 'single' : 'threePart',
  primaryTimeframe: normalizeTimeframe(raw.primaryTimeframe || base.primaryTimeframe || '1d'),
- executionTimeframe: normalizeTimeframe(raw.executionTimeframe || raw.timeframe || base.executionTimeframe || '15m'),
+ executionTimeframe: normalizeTimeframe(raw.executionTimeframe || raw.timeframe || base.executionTimeframe || '4h'),
  syncCharts: Object.prototype.hasOwnProperty.call(raw, 'syncCharts') ? raw.syncCharts !== false : true,
  contextTab: normalizeContextTab(raw.contextTab || base.contextTab),
  watchlistTab: normalizeWatchlistTab(raw.watchlistTab || base.watchlistTab),
@@ -1084,6 +1080,7 @@ function defaultVisibleCount(resolution = '15m') {
  showIndicatorLegend: Object.prototype.hasOwnProperty.call(raw, 'showIndicatorLegend') ? raw.showIndicatorLegend !== false : base.showIndicatorLegend !== false,
  showGrid: Object.prototype.hasOwnProperty.call(raw, 'showGrid') ? raw.showGrid === true : base.showGrid === true,
  compareWithIndex: Object.prototype.hasOwnProperty.call(raw, 'compareWithIndex') ? raw.compareWithIndex !== false : base.compareWithIndex !== false,
+ commoditySpread: raw.commoditySpread && typeof raw.commoditySpread === 'object' ? raw.commoditySpread : null,
  hideEventCandles: Object.prototype.hasOwnProperty.call(raw, 'hideEventCandles') ? raw.hideEventCandles === true : base.hideEventCandles === true,
  darvasSettings: sanitizeDarvasBoxSettings(raw.darvasSettings || base.darvasSettings, timeframe),
  chartReviewTabs: sanitizeChartReviewTabs(raw.chartReviewTabs || base.chartReviewTabs),
@@ -1175,16 +1172,16 @@ function defaultVisibleCount(resolution = '15m') {
  .sort((a, b) => scoreSignalForChart(b) - scoreSignalForChart(a))[0] || null;
  }
 
-function signalTimeframe(signal = {}, fallback = '15m') {
+function signalTimeframe(signal = {}, fallback = '4h') {
  const lowerLabel = String(signal?.lower?.label || '').trim().toLowerCase();
- return normalizeTimeframe(lowerLabel || signal?.timeframe || signal?.raw?.timeframe || fallback || '15m');
+ return normalizeTimeframe(lowerLabel || signal?.timeframe || signal?.raw?.timeframe || fallback || '4h');
 }
 
  async function setChartSymbolFromSignal(signal = {}, options = {}) {
  const symbol = String(signal?.symbol || options.symbol || '').trim().toUpperCase();
  if (!symbol) return null;
  const current = await getChartState();
- const timeframe = normalizeTimeframe(options.timeframe || signalTimeframe(signal, current.timeframe || '15m'));
+ const timeframe = normalizeTimeframe(options.timeframe || signalTimeframe(signal, current.timeframe || '4h'));
  const hasOption = key => Object.prototype.hasOwnProperty.call(options, key);
  const providedDraft = normalizeChartTradingDraft(options.chartTradingDraft || signal.chartTradingDraft);
  const stageMetrics = signal?.raw?.stageMetrics && typeof signal.raw.stageMetrics === 'object' ? signal.raw.stageMetrics : null;
@@ -1216,6 +1213,7 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  return setChartState({
  symbol,
  timeframe,
+ commoditySpread: signal.commoditySpread && typeof signal.commoditySpread === 'object' ? signal.commoditySpread : null,
  visibleCandleCount: hasOption('visibleCandleCount') ? Math.max(24, Math.min(MAX_RENDER_CANDLES, Number(options.visibleCandleCount || 0) || defaultVisibleCount(timeframe))) : (current.visibleCandleCount || defaultVisibleCount(timeframe)),
  preset: normalizePreset(options.preset || current.preset || 'key'),
  showOrders: hasOption('showOrders') ? !!options.showOrders : !!current.showOrders,
@@ -1350,7 +1348,7 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  }, {
  chartViewMode: 'tab',
  preset: current.preset || 'clean',
- timeframe: current.timeframe || '15m',
+ timeframe: current.timeframe || '4h',
  chartTradingDraft: tab.chartTradingDraft || null,
  chartTradingToolsOpen: !!tab.chartTradingDraft,
  showOrders: current.showOrders,
@@ -1359,7 +1357,7 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  intelligenceOverlays: current.intelligenceOverlays,
  deskLayoutMode: current.deskLayoutMode || 'single',
  overlayDensity: current.overlayDensity || 'minimal',
- primaryTimeframe: current.primaryTimeframe || current.timeframe || '15m',
+ primaryTimeframe: current.primaryTimeframe || current.timeframe || '4h',
  });
  const latest = await getChartState();
  return setChartState({
@@ -1411,8 +1409,8 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  if (!best) return current;
  return setChartSymbolFromSignal(best, {
  preset: 'key',
- timeframe: '15m',
- primaryTimeframe: '15m',
+ timeframe: '4h',
+ primaryTimeframe: '4h',
  chartViewMode: 'tab',
  showOrders: false,
  showVwap: false,
@@ -1448,7 +1446,7 @@ function signalTimeframe(signal = {}, fallback = '15m') {
 
  function resolutionCoverageRequirement(state = {}) {
  const timeframe = normalizeTimeframe(state.timeframe);
- const maxHistoryCount = timeframe === '15m' ? MAX_15M_HISTORY_CANDLES : MAX_RENDER_CANDLES;
+ const maxHistoryCount = timeframe === '4h' ? MAX_4H_HISTORY_CANDLES : MAX_RENDER_CANDLES;
  const baseVisible = state.replaySeed?.baselineVisibleCount || defaultVisibleCount(timeframe);
  const visible = Math.max(baseVisible, Math.round(Number(state.visibleCandleCount || baseVisible) || baseVisible));
  const paddedCount = Math.min(maxHistoryCount, Math.max(80, visible + (FETCH_BUFFER_COUNTS[timeframe] || 80)));
@@ -1495,7 +1493,7 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  nextCache[cacheKey] = payload;
  Object.keys(nextCache).forEach(key => {
  const entry = nextCache[key];
- const timeframe = normalizeTimeframe(key.split(':')[1] || '15m');
+ const timeframe = normalizeTimeframe(key.split(':')[1] || '4h');
  const ttl = (TTL_MS[timeframe] || 60000) * 4;
  if ((Date.now() - Number(entry?.fetchedAt || 0)) > ttl) delete nextCache[key];
  });
@@ -1504,7 +1502,7 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  .slice(0, 8));
  }
 
- function cacheEntryFresh(entry = null, timeframe = '15m') {
+ function cacheEntryFresh(entry = null, timeframe = '4h') {
  if (!entry || typeof entry !== 'object') return false;
  return (Date.now() - Number(entry.fetchedAt || 0)) < ((TTL_MS[normalizeTimeframe(timeframe)] || 60000) * 4);
  }
@@ -2307,7 +2305,7 @@ function signalTimeframe(signal = {}, fallback = '15m') {
 
  async function loadChartDataset(state = {}, strategy = {}, options = {}) {
  const symbol = String(state.symbol || '').trim().toUpperCase();
- const timeframe = normalizeTimeframe(state.timeframe || '15m');
+ const timeframe = normalizeTimeframe(state.timeframe || '4h');
  if (!symbol) {
  return {
  ok: false,
@@ -2320,6 +2318,43 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  }
  if (isFwdIndexSymbol(symbol)) {
  return loadFwdIndexChartDataset({ ...state, symbol: normalizeFwdIndexSyntheticSymbol(symbol) || FWD_INDEX_SYMBOL, timeframe: '1d' }, strategy);
+ }
+ if (state.commoditySpread && symbol.startsWith('MCX-SPREAD:')) {
+ const requirement = resolutionCoverageRequirement(state);
+ const bridge = globalThis.fwdDesktopNative;
+ const response = bridge?.sendNativeMessage
+ ? await bridge.sendNativeMessage({
+ ...state.commoditySpread,
+ resolution: timeframe,
+ start: requirement.startMs || undefined,
+ end: requirement.endMs || undefined,
+ force: options.force === true,
+ type: 'dhan_data',
+ action: 'commodity_spread_chart',
+ })
+ : { ok: false, error: 'Desktop market-data bridge is not available.' };
+ if (!response?.ok) {
+ return {
+ ok: false,
+ error: response?.error || 'Failed to load synthetic commodity spread candles.',
+ candles: [],
+ studies: {},
+ keyLevels: null,
+ fetchedAt: 0,
+ };
+ }
+ return {
+ ok: true,
+ symbol,
+ displayName: response.displayName || state.commoditySpread.label || symbol,
+ timeframe,
+ candles: (Array.isArray(response.candles) ? response.candles : []).map(normalizeCandle).filter(candle => candle.time > 0),
+ studies: {},
+ keyLevels: null,
+ fetchedAt: Date.now(),
+ commoditySpread: response.pair || state.commoditySpread,
+ spreadAnalysis: response.analysis || null,
+ };
  }
  const requirement = resolutionCoverageRequirement(state);
  const cacheKey = `${symbol}:${timeframe}`;
@@ -2976,7 +3011,7 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  };
  }
 
- function rankSahiKeyZones(zones = [], settings = {}, referencePrice = 0, chartTimeframe = '15m') {
+ function rankSahiKeyZones(zones = [], settings = {}, referencePrice = 0, chartTimeframe = '4h') {
  const limit = 4;
  const byKind = ['resistance', 'support'].flatMap(kind => {
  return mergeNearbyKeyZones(
@@ -3041,14 +3076,14 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  .sort((a, b) => kind === 'resistance' ? Number(a.price || 0) - Number(b.price || 0) : Number(b.price || 0) - Number(a.price || 0));
  }
 
- function mapChartTfToKeyLevelTf(chartTimeframe = '15m') {
+ function mapChartTfToKeyLevelTf(chartTimeframe = '4h') {
  const tf = normalizeTimeframe(chartTimeframe);
  if (tf === '1d') return '1D';
  if (['4h', '1h'].includes(tf)) return '1D';
- return '15m';
+ return '4h';
  }
 
- function collectVisibleKeyZones(keyLevels = null, settings = {}, referencePrice = 0, chartTimeframe = '15m') {
+ function collectVisibleKeyZones(keyLevels = null, settings = {}, referencePrice = 0, chartTimeframe = '4h') {
  if (!keyLevels || typeof keyLevels !== 'object') return [];
  const smartSettings = { ...settings, chartTimeframe };
  const brokerZones = [
@@ -3170,7 +3205,7 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  const openedAt = normalizeTsMs(trade.openedAt || trade.entryTs || trade.entryTime);
  const closedAt = normalizeTsMs(trade.closedAt || trade.exitTs || trade.exitTime);
  const durationMs = Math.max(0, closedAt - openedAt);
- if (durationMs <= 3 * 24 * 60 * 60 * 1000) return '15m';
+ if (durationMs <= 3 * 24 * 60 * 60 * 1000) return '4h';
  if (durationMs <= 14 * 24 * 60 * 60 * 1000) return '4h';
  return '4h';
 }
@@ -3212,7 +3247,7 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  });
  }
 
- function buildAxisLabels(candles = [], timeframe = '15m', startIndex = 0) {
+ function buildAxisLabels(candles = [], timeframe = '4h', startIndex = 0) {
  const labels = [];
  const verticals = [];
  if (!candles.length) return { labels, verticals };
@@ -3232,7 +3267,7 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  ) : false;
  const yearChanged = prev ? date.getUTCFullYear() !== prev.getUTCFullYear() : false;
  let label = '';
- if (timeframe === '15m') {
+ if (timeframe === '4h') {
  if (dayChanged) {
  label = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
  verticals.push({ leftPct, label });
@@ -3361,7 +3396,7 @@ function signalTimeframe(signal = {}, fallback = '15m') {
  </details>`;
  }
  if (key === 'darvas') {
- const darvas = sanitizeDarvasBoxSettings(state.darvasSettings || {}, state.timeframe || '15m');
+ const darvas = sanitizeDarvasBoxSettings(state.darvasSettings || {}, state.timeframe || '4h');
  const toggle = (toggleKey, label) => `<button class="bsm ${darvas[toggleKey] !== false ? 'active' : ''}" type="button" data-ds-darvas-toggle="${escapeHtml(toggleKey)}">${escapeHtml(label)}</button>`;
  const number = (numberKey, label, value, min, max, step = '1') => `<label class="ds-darvas-number">${escapeHtml(label)}<input type="number" min="${escapeHtml(min)}" max="${escapeHtml(max)}" step="${escapeHtml(step)}" value="${escapeHtml(value)}" data-ds-darvas-number="${escapeHtml(numberKey)}" /></label>`;
  return `<details class="ds-chart-indicator-settings ds-darvas-indicator-settings">
@@ -3763,7 +3798,7 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  }
 
  function buildDeskChartPanel(panelKey, title, panelState = {}, dataset = {}, model = null, intelligence = null, state = {}, calculatedIndicators = {}) {
- const tf = normalizeTimeframe(panelState.timeframe || state.timeframe || '15m');
+ const tf = normalizeTimeframe(panelState.timeframe || state.timeframe || '4h');
  const isFwdIndex = dataset?.syntheticIndex === true;
  const panelResolutions = isFwdIndex ? ['1d'] : RESOLUTIONS;
  const statusText = !panelState.symbol
@@ -4003,7 +4038,7 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  }
 
  function buildChartRangeControls(state = {}) {
- const tf = normalizeTimeframe(state.timeframe || '15m');
+ const tf = normalizeTimeframe(state.timeframe || '4h');
  const activeCount = Number(state.visibleCandleCount || defaultVisibleCount(tf));
  const oneYear = tf === '1d' ? 365 : MAX_RENDER_CANDLES;
  const twoYear = tf === '1d' ? 730 : MAX_RENDER_CANDLES;
@@ -4031,7 +4066,7 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  function buildChartModel(dataset = {}, state = {}, strategy = {}, orderContext = null) {
  const candles = Array.isArray(dataset.candles) ? dataset.candles : [];
  if (!candles.length) return null;
- const timeframe = normalizeTimeframe(state.timeframe || dataset.timeframe || '15m');
+ const timeframe = normalizeTimeframe(state.timeframe || dataset.timeframe || '4h');
  const eventCandleTimes = getEventCandleTimes(candles, state);
  const chartCandles = eventCandleTimes.size
  ? candles.filter(candle => !eventCandleTimes.has(Number(candle.time || 0)))
@@ -4397,7 +4432,7 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  }
 
  function buildQuickReviewControls(state = {}) {
-  const currentTf = normalizeTimeframe(state.timeframe || '15m');
+  const currentTf = normalizeTimeframe(state.timeframe || '4h');
   const reviewTabs = sanitizeChartReviewTabs(state.chartReviewTabs || []);
   const activeReviewId = String(state.activeChartReviewTabId || '').trim();
   const activeReviewTab = reviewTabs.find(tab => tab.id === activeReviewId) || reviewTabs[0] || null;
@@ -4409,7 +4444,6 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
   : '';
   return `<div class="ds-chart-review-controls">
  <div class="ds-chart-review-tfs" aria-label="Quick View timeframe">
- ${tfButton('15m', '15m')}
  ${tfButton('4h', '4H')}
  ${tfButton('1d', '1D')}
  ${tfButton('1w', '1W')}
@@ -4518,7 +4552,7 @@ function buildChartTabPicker(state = {}, options = {}) {
  </div>
  <div class="live-order-chart-timeframes ds-fullscreen-control-group">
  <button class="bsm ds-fullscreen-toggle ${state.chartFullscreen ? 'active' : ''}" type="button" data-ds-chart-fullscreen="1">${state.chartFullscreen ? 'Exit Full Screen' : 'Full Screen'}</button>
- <button class="bsm ${state.deskLayoutMode !== 'single' && normalizeTimeframe(state.primaryTimeframe || '') === '1d' && normalizeTimeframe(state.executionTimeframe || '') === '15m' ? 'active' : ''}" type="button" title="Compare daily structure with the 15 minute execution chart" data-ds-desk-compare="1d-15m">1D + 15m</button>
+ <button class="bsm ${state.deskLayoutMode !== 'single' && normalizeTimeframe(state.primaryTimeframe || '') === '1d' && normalizeTimeframe(state.executionTimeframe || '') === '4h' ? 'active' : ''}" type="button" title="Compare daily structure with the 4 hour execution chart" data-ds-desk-compare="1d-4h">1D + 4h</button>
  </div>
  </div>
  <div class="ds-chart-command-group ds-chart-command-group-tools">
@@ -4563,9 +4597,9 @@ function buildChartTabPicker(state = {}, options = {}) {
 
  function buildDeskMarkup(surface = SURFACE_TAB, state = {}, strategy = {}, primaryPayload = {}, executionPayload = {}, signal = null, marketIndex = null, contextData = {}) {
  const isDetached = surface === SURFACE_DETACHED;
- const primaryTf = normalizeTimeframe(state.primaryTimeframe || state.timeframe || '15m');
- const executionTf = normalizeTimeframe(state.executionTimeframe || state.timeframe || '15m');
- const isCompareLayout = state.deskLayoutMode !== 'single' && primaryTf === '1d' && executionTf === '15m';
+ const primaryTf = normalizeTimeframe(state.primaryTimeframe || state.timeframe || '4h');
+ const executionTf = normalizeTimeframe(state.executionTimeframe || state.timeframe || '4h');
+ const isCompareLayout = state.deskLayoutMode !== 'single' && primaryTf === '1d' && executionTf === '4h';
  const isSingleChart = (state.chartFullscreen === true && !isCompareLayout) || state.deskLayoutMode === 'single';
  const collapsed = sanitizeCollapsedPanels(state.collapsedPanels);
  const maximized = normalizeMaximizedPanel(state.maximizedPanel);
@@ -4948,9 +4982,9 @@ function buildChartTabPicker(state = {}, options = {}) {
  }
 
  async function renderDeskSurface(surface = SURFACE_TAB, surfaceRef, state = {}, strategy = {}, orderContext = null, signalState = {}, activeSignal = null, force = false) {
- const primaryTimeframe = normalizeTimeframe(state.primaryTimeframe || state.timeframe || '15m');
- const executionTimeframe = normalizeTimeframe(state.executionTimeframe || state.timeframe || '15m');
- const isCompareLayout = state.deskLayoutMode !== 'single' && primaryTimeframe === '1d' && executionTimeframe === '15m';
+ const primaryTimeframe = normalizeTimeframe(state.primaryTimeframe || state.timeframe || '4h');
+ const executionTimeframe = normalizeTimeframe(state.executionTimeframe || state.timeframe || '4h');
+ const isCompareLayout = state.deskLayoutMode !== 'single' && primaryTimeframe === '1d' && executionTimeframe === '4h';
  const fastSingle = (state.chartFullscreen === true && !isCompareLayout) || state.deskLayoutMode === 'single';
  const primaryState = {
  ...state,
@@ -5553,7 +5587,7 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  }
  root.querySelectorAll('[data-ds-chart-tf]').forEach(button => {
  button.addEventListener('click', async () => {
- const timeframe = normalizeTimeframe(button.dataset.dsChartTf || '15m');
+ const timeframe = normalizeTimeframe(button.dataset.dsChartTf || '4h');
  const allCandles = button.dataset.dsChartAllCandles === '1';
  await updateChartState(surface, currentState => {
  const nextVisible = allCandles ? MAX_RENDER_CANDLES : (currentState.replaySeed?.baselineVisibleCount || defaultVisibleCount(timeframe));
@@ -5575,7 +5609,7 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  button.addEventListener('click', async () => {
  const range = String(button.dataset.dsChartRange || 'recent').trim().toLowerCase();
  await updateChartState(surface, currentState => {
- const timeframe = normalizeTimeframe(currentState.timeframe || '15m');
+ const timeframe = normalizeTimeframe(currentState.timeframe || '4h');
  const nextVisible = range === 'all'
  ? MAX_RENDER_CANDLES
  : range === '2y'
@@ -5644,13 +5678,13 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  const key = String(button.dataset.dsDarvasToggle || '').trim();
  if (!['enabled', 'showHistoricalBoxes', 'showScannerDetails', 'showEntryLine', 'showTargetLines', 'showTargets', 'showStopLoss', 'showTooltip', 'showFailedBoxes', 'showWeakBreakoutBoxes', 'showOnlyHighQuality'].includes(key)) return;
  await updateChartState(surface, currentState => {
- const currentSettings = sanitizeDarvasBoxSettings(currentState.darvasSettings || {}, currentState.timeframe || '15m');
+ const currentSettings = sanitizeDarvasBoxSettings(currentState.darvasSettings || {}, currentState.timeframe || '4h');
  const nextValue = currentSettings[key] !== true;
  const patch = {
  darvasSettings: sanitizeDarvasBoxSettings({
  ...currentSettings,
  [key]: nextValue,
- }, currentState.timeframe || '15m'),
+ }, currentState.timeframe || '4h'),
  };
  if (key === 'enabled') {
  const currentIndicators = sanitizeIndicatorState(currentState.indicators || {});
@@ -5670,12 +5704,12 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  if (!['lookback', 'confirmationCandles', 'volumeMultiplier', 'atrBreakoutBuffer', 'retestAtrTolerance', 'stopLossAtrBuffer', 'maxBoxesVisible', 'maxIntradayHeightPct', 'maxDailyHeightPct'].includes(key)) return;
  const value = key === 'lookback' && String(input.value || '').trim() === '' ? 0 : Number(input.value || 0);
  await updateChartState(surface, currentState => {
- const currentSettings = sanitizeDarvasBoxSettings(currentState.darvasSettings || {}, currentState.timeframe || '15m');
+ const currentSettings = sanitizeDarvasBoxSettings(currentState.darvasSettings || {}, currentState.timeframe || '4h');
  return {
  darvasSettings: sanitizeDarvasBoxSettings({
  ...currentSettings,
  [key]: value,
- }, currentState.timeframe || '15m'),
+ }, currentState.timeframe || '4h'),
  };
  }, { forceRender: true });
  });
@@ -5789,8 +5823,8 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  indicators: applyIndicatorGroup(currentIndicators, indicator, nextValue),
  };
  if (indicator === 'darvas') {
- const currentSettings = sanitizeDarvasBoxSettings(currentState.darvasSettings || {}, currentState.timeframe || '15m');
- patch.darvasSettings = sanitizeDarvasBoxSettings({ ...currentSettings, enabled: nextValue }, currentState.timeframe || '15m');
+ const currentSettings = sanitizeDarvasBoxSettings(currentState.darvasSettings || {}, currentState.timeframe || '4h');
+ patch.darvasSettings = sanitizeDarvasBoxSettings({ ...currentSettings, enabled: nextValue }, currentState.timeframe || '4h');
  }
  return patch;
  });
@@ -5813,8 +5847,8 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  indicators: applyIndicatorGroup(currentIndicators, target, nextValue),
  };
  if (target === 'darvas') {
- const currentSettings = sanitizeDarvasBoxSettings(currentState.darvasSettings || {}, currentState.timeframe || '15m');
- patch.darvasSettings = sanitizeDarvasBoxSettings({ ...currentSettings, enabled: nextValue }, currentState.timeframe || '15m');
+ const currentSettings = sanitizeDarvasBoxSettings(currentState.darvasSettings || {}, currentState.timeframe || '4h');
+ patch.darvasSettings = sanitizeDarvasBoxSettings({ ...currentSettings, enabled: nextValue }, currentState.timeframe || '4h');
  }
  return patch;
  });
@@ -5899,7 +5933,7 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  root.querySelectorAll('[data-ds-desk-tf]').forEach(select => {
  select.addEventListener('change', async () => {
  const panel = String(select.dataset.dsDeskTf || '').trim();
- const timeframe = normalizeTimeframe(select.value || '15m');
+ const timeframe = normalizeTimeframe(select.value || '4h');
  await updateChartState(surface, currentState => ({
  timeframe: panel === 'execution' ? timeframe : currentState.timeframe,
  primaryTimeframe: panel === 'primary' ? timeframe : currentState.primaryTimeframe,
@@ -5931,15 +5965,15 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  root.querySelectorAll('[data-ds-desk-compare]').forEach(button => {
  button.addEventListener('click', async () => {
  const mode = String(button.dataset.dsDeskCompare || '').trim().toLowerCase();
- if (mode !== '1d-15m') return;
+ if (mode !== '1d-4h') return;
  void setNativeChartFullscreen(false);
  await updateChartState(surface, currentState => ({
  chartFullscreen: false,
  deskLayoutMode: 'threePart',
  primaryTimeframe: '1d',
- executionTimeframe: '15m',
- timeframe: '15m',
- visibleCandleCount: defaultVisibleCount('15m'),
+ executionTimeframe: '4h',
+ timeframe: '4h',
+ visibleCandleCount: defaultVisibleCount('4h'),
  preset: normalizePreset(currentState.preset || 'key'),
  rightPanelOpen: false,
  intelligenceOverlays: currentState.intelligenceOverlays !== false,
@@ -5958,8 +5992,8 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  deskLayoutMode: mode,
  chartFullscreen: false,
  preset: mode === 'single' ? 'clean' : normalizePreset(currentState.preset || 'decision'),
- primaryTimeframe: mode === 'single' ? normalizeTimeframe(currentState.primaryTimeframe || currentState.timeframe || '15m') : (currentState.primaryTimeframe || '1d'),
- executionTimeframe: currentState.executionTimeframe || currentState.timeframe || '15m',
+ primaryTimeframe: mode === 'single' ? normalizeTimeframe(currentState.primaryTimeframe || currentState.timeframe || '4h') : (currentState.primaryTimeframe || '1d'),
+ executionTimeframe: currentState.executionTimeframe || currentState.timeframe || '4h',
  rightPanelOpen: mode === 'threePart' ? currentState.rightPanelOpen !== false : false,
  intelligenceOverlays: mode === 'threePart' ? currentState.intelligenceOverlays !== false : false,
  overlayDensity: mode === 'single' ? 'minimal' : normalizeOverlayDensity(currentState.overlayDensity || 'trade'),
@@ -5975,9 +6009,9 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  void setNativeChartFullscreen(nextFullscreen);
  await updateChartState(surface, currentState => {
  const currentPreset = normalizePreset(currentState.preset || 'key');
- const primaryTimeframe = normalizeTimeframe(currentState.primaryTimeframe || currentState.timeframe || '15m');
- const executionTimeframe = normalizeTimeframe(currentState.executionTimeframe || currentState.timeframe || '15m');
- const keepComparison = currentState.deskLayoutMode !== 'single' && primaryTimeframe === '1d' && executionTimeframe === '15m';
+ const primaryTimeframe = normalizeTimeframe(currentState.primaryTimeframe || currentState.timeframe || '4h');
+ const executionTimeframe = normalizeTimeframe(currentState.executionTimeframe || currentState.timeframe || '4h');
+ const keepComparison = currentState.deskLayoutMode !== 'single' && primaryTimeframe === '1d' && executionTimeframe === '4h';
  return {
  chartFullscreen: nextFullscreen,
  deskLayoutMode: nextFullscreen ? (keepComparison ? 'threePart' : 'single') : (currentState.deskLayoutMode || 'single'),
@@ -6021,7 +6055,7 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  button.addEventListener('click', async () => {
  const symbol = String(button.dataset.dsContextSymbol || '').trim().toUpperCase();
  if (!symbol) return;
- await setChartSymbolFromSignal({ symbol }, { chartViewMode: surface, preset: 'clean', timeframe: '15m', showOrders: false, showVwap: false, rightPanelOpen: false, intelligenceOverlays: false, deskLayoutMode: 'single', overlayDensity: 'minimal' });
+ await setChartSymbolFromSignal({ symbol }, { chartViewMode: surface, preset: 'clean', timeframe: '4h', showOrders: false, showVwap: false, rightPanelOpen: false, intelligenceOverlays: false, deskLayoutMode: 'single', overlayDensity: 'minimal' });
  await queueSurfaceRender(surface, true);
  });
  });
@@ -6100,7 +6134,7 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  if (!symbol) return;
  await setChartSymbolFromSignal({ symbol }, {
  chartViewMode: surface,
- timeframe: '15m',
+ timeframe: '4h',
  showOrders: false,
  showVwap: false,
  rightPanelOpen: false,
@@ -6271,7 +6305,7 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  const replaySeed = normalizeReplaySeed(options.replaySeed);
  const patch = {
  symbol: String(options.symbol || previewSurface.getDisplaySymbol?.() || '').trim().toUpperCase(),
- timeframe: normalizeTimeframe(options.timeframe || '15m'),
+ timeframe: normalizeTimeframe(options.timeframe || '4h'),
  preset: normalizePreset(options.preset || defaults.defaultPreset || 'clean'),
  showOrders: Object.prototype.hasOwnProperty.call(options, 'showOrders') ? !!options.showOrders : !!defaults.showOrders,
  showVwap: Object.prototype.hasOwnProperty.call(options, 'showVwap') ? !!options.showVwap : !!defaults.showVwap,
@@ -6283,7 +6317,7 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  orderContext: normalizeOrderContext(typeof options.getOrderContext === 'function' ? options.getOrderContext() : options.orderContext),
  visibleCandleCount: Math.max(
  24,
- Number(options.visibleCandleCount || replaySeed?.baselineVisibleCount || defaultVisibleCount(options.timeframe || '15m'))
+ Number(options.visibleCandleCount || replaySeed?.baselineVisibleCount || defaultVisibleCount(options.timeframe || '4h'))
  ),
  uiMode: previewSurface.uiMode,
  chartViewMode: 'preview',
@@ -6317,15 +6351,15 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  }
  await setChartState(currentState => ({
  preset: currentState.keyDefaultAppliedV1 ? normalizePreset(currentState.preset || 'clean') : 'clean',
- timeframe: currentState.cleanDefaultAppliedV1 ? normalizeTimeframe(currentState.timeframe || '15m') : '15m',
- visibleCandleCount: currentState.cleanDefaultAppliedV1 ? (currentState.visibleCandleCount || defaultVisibleCount(currentState.timeframe || '15m')) : defaultVisibleCount('15m'),
+ timeframe: currentState.cleanDefaultAppliedV1 ? normalizeTimeframe(currentState.timeframe || '4h') : '4h',
+ visibleCandleCount: currentState.cleanDefaultAppliedV1 ? (currentState.visibleCandleCount || defaultVisibleCount(currentState.timeframe || '4h')) : defaultVisibleCount('4h'),
  chartViewMode: 'tab',
  uiMode: tabSurface.uiMode,
  rightPanelOpen: currentState.cleanDefaultAppliedV1 ? currentState.rightPanelOpen !== false : false,
  intelligenceOverlays: currentState.cleanDefaultAppliedV1 ? currentState.intelligenceOverlays !== false : false,
  deskLayoutMode: currentState.cleanDefaultAppliedV1 ? (currentState.deskLayoutMode || 'single') : 'single',
- primaryTimeframe: currentState.cleanDefaultAppliedV1 ? (currentState.primaryTimeframe || currentState.timeframe || '15m') : '15m',
- executionTimeframe: currentState.cleanDefaultAppliedV1 ? (currentState.executionTimeframe || currentState.timeframe || '15m') : '15m',
+ primaryTimeframe: currentState.cleanDefaultAppliedV1 ? (currentState.primaryTimeframe || currentState.timeframe || '4h') : '4h',
+ executionTimeframe: currentState.cleanDefaultAppliedV1 ? (currentState.executionTimeframe || currentState.timeframe || '4h') : '4h',
  syncCharts: currentState.syncCharts !== false,
  contextTab: currentState.contextTab || 'watchlist',
  watchlistTab: currentState.watchlistTab || '1',
@@ -6441,8 +6475,8 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  rightPanelOpen: hasOption('rightPanelOpen') ? options.rightPanelOpen !== false : current.rightPanelOpen !== false,
  intelligenceOverlays: hasOption('intelligenceOverlays') ? options.intelligenceOverlays !== false : current.intelligenceOverlays !== false,
  deskLayoutMode: options.deskLayoutMode || current.deskLayoutMode || 'single',
- primaryTimeframe: options.primaryTimeframe || current.primaryTimeframe || current.timeframe || '15m',
- executionTimeframe: options.executionTimeframe || current.executionTimeframe || current.timeframe || '15m',
+ primaryTimeframe: options.primaryTimeframe || current.primaryTimeframe || current.timeframe || '4h',
+ executionTimeframe: options.executionTimeframe || current.executionTimeframe || current.timeframe || '4h',
  syncCharts: hasOption('syncCharts') ? options.syncCharts !== false : current.syncCharts !== false,
  contextTab: options.contextTab || current.contextTab || 'watchlist',
  watchlistTab: options.watchlistTab || current.watchlistTab || '1',

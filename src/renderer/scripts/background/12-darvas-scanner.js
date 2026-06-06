@@ -18,8 +18,8 @@
   strongVolumeRatio: 2.2,
  });
 
- const LIVE_15M = Object.freeze({ closedOnly: false });
- const CLOSED_DAILY = Object.freeze({ closedOnly: true });
+ const CLOSED_4H = Object.freeze({ closedOnly: true, timeoutMs: 30000, paceMs: 1800 });
+ const CLOSED_DAILY = Object.freeze({ closedOnly: true, timeoutMs: 30000, paceMs: 1800 });
 
  function darvasNow() { return Date.now(); }
 
@@ -351,7 +351,7 @@ async function darvasLoadSettings() {
     move4h: darvasRound(move4h, 2),
     volumeRatio: darvasRound(volumeRatio, 2),
     latestQuoteVolume: darvasRound(latestQuoteVolume, 0),
-    candleCount15m: intraday.length,
+    candleCount4h: intraday.length,
     candleCount1d: daily.length,
     riskFlags,
     scoreParts: darvasBuildScoreParts(scoreParts),
@@ -412,7 +412,7 @@ async function darvasLoadSettings() {
      skipped.insufficientHistory += 1;
      continue;
     }
-    const intraday = await fetchCandles(item.symbol, '15m', settings.preferredIntradayCandles, LIVE_15M).catch(() => []);
+    const intraday = await fetchCandles(item.symbol, '4h', settings.preferredIntradayCandles, CLOSED_4H).catch(() => []);
     const result = darvasAnalyzeSymbol(item.symbol, daily, Array.isArray(intraday) ? intraday : [], item.ticker, { settings });
     if (result.eventType === 'review') skipped.reviewOnly += 1;
     results.push(result);
@@ -475,7 +475,7 @@ async function darvasLoadSettings() {
      if (!daily.length) skipped.noContextCandles += 1;
      continue;
     }
-    const intraday = getContextCandles?.(context, item.symbol, '15m', settings.preferredIntradayCandles) || [];
+    const intraday = getContextCandles?.(context, item.symbol, '4h', settings.preferredIntradayCandles) || [];
     const result = darvasAnalyzeSymbol(item.symbol, daily, intraday, item.ticker, { settings });
     if (result.eventType === 'review') skipped.reviewOnly += 1;
     results.push(result);

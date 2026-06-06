@@ -310,7 +310,7 @@
  if (role === 'support-deep') return `rgba(255, 216, 78, ${alpha})`;
  if (role === 'support-near') return `rgba(0, 195, 255, ${alpha})`;
  const tf = String(zone.tf || '').trim().toUpperCase();
- const isDaily = tf === '1D' || tf === '1D,15M' || tf === 'COMBINED';
+ const isDaily = tf === '1D' || tf === '1D,4H' || tf === 'COMBINED';
  if (zone.kind === 'resistance') {
  return isDaily ? `rgba(255, 71, 87, ${alpha})` : `rgba(255, 156, 51, ${alpha})`;
  }
@@ -434,8 +434,8 @@
  if (tf === 'w' || tf === '1wk' || tf === 'week' || tf === 'weekly') return '1w';
  if (tf === '1d' || tf === 'day' || tf === 'daily') return '1d';
  if (tf === '1h' || tf === '60m' || tf === '60' || tf === '240') return '4h';
- if (tf === '1m' || tf === '3m' || tf === '5m' || tf === '15') return '15m';
- return ['15m', '4h'].includes(tf) ? tf : '15m';
+ if (tf === '1m' || tf === '3m' || tf === '5m' || tf === '15') return '4h';
+ return ['4h', '1d', '1w'].includes(tf) ? tf : '4h';
  }
 
  function isDailyDarvasTimeframe(value = '') {

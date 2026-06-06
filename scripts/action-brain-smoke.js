@@ -32,7 +32,7 @@ const baseSignal = {
  sl: 97,
  tp1: 108,
  setupFamily: 'breakout',
- timeframe: '15m',
+ timeframe: '4h',
  marketRegime: 'TRENDING',
  reasons: ['Breakout pressure', 'Volume expansion'],
 };
@@ -43,9 +43,9 @@ let model = brain.buildActionBrain({
  v16SetupPerformanceV1: {
   minSample: 20,
   rows: {
-   'breakout|15m|TRENDING': {
+   'breakout|4h|TRENDING': {
     familyKey: 'breakout',
-    timeframe: '15m',
+    timeframe: '4h',
     marketRegime: 'TRENDING',
     trades: 34,
     winRate: 58,
@@ -67,9 +67,9 @@ model = brain.buildActionBrain({
  v16SetupPerformanceV1: {
   minSample: 20,
   rows: {
-   'breakout|15m|TRENDING': {
+   'breakout|4h|TRENDING': {
     familyKey: 'breakout',
-    timeframe: '15m',
+    timeframe: '4h',
     marketRegime: 'TRENDING',
     trades: 24,
     winRate: 33,

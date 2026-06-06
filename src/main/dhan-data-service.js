@@ -71,10 +71,109 @@ const DHAN_SCANNER_UNIVERSE_DEFINITIONS = Object.freeze([
   id: 'all_nse',
   label: 'All NSE Equity',
   shortLabel: 'All NSE',
-  description: 'All active NSE_EQ equity symbols available in the instrument master.',
+  description: 'All active NSE_EQ equity symbols available in the instrument master. Use chunk scans for regular runs.',
   defaultLimit: 750,
   maxLimit: 3500,
   source: `${DHAN_INSTRUMENT_MASTER_URL} + ${NSE_EQUITY_LIST_URL}`,
+ },
+ {
+  id: 'nse_rest',
+  label: 'NSE Rest',
+  shortLabel: 'NSE Rest',
+  description: 'NSE equity symbols not already covered by F&O, Nifty 500, Midcap 150, or Smallcap 250 memberships.',
+  defaultLimit: 650,
+  maxLimit: 1200,
+  source: 'All NSE Equity minus primary scanner baskets',
+ },
+ {
+  id: 'nse_af',
+  label: 'NSE A-F',
+  shortLabel: 'NSE A-F',
+  description: 'Active NSE equity symbols from A to F for faster rotating scans.',
+  defaultLimit: 650,
+  maxLimit: 900,
+  source: 'All NSE Equity alphabet chunk',
+ },
+ {
+  id: 'nse_gl',
+  label: 'NSE G-L',
+  shortLabel: 'NSE G-L',
+  description: 'Active NSE equity symbols from G to L for faster rotating scans.',
+  defaultLimit: 650,
+  maxLimit: 900,
+  source: 'All NSE Equity alphabet chunk',
+ },
+ {
+  id: 'nse_mr',
+  label: 'NSE M-R',
+  shortLabel: 'NSE M-R',
+  description: 'Active NSE equity symbols from M to R for faster rotating scans.',
+  defaultLimit: 650,
+  maxLimit: 900,
+  source: 'All NSE Equity alphabet chunk',
+ },
+ {
+  id: 'nse_sz',
+  label: 'NSE S-Z',
+  shortLabel: 'NSE S-Z',
+  description: 'Active NSE equity symbols from S to Z for faster rotating scans.',
+  defaultLimit: 650,
+  maxLimit: 900,
+  source: 'All NSE Equity alphabet chunk',
+ },
+ {
+  id: 'all_bse',
+  label: 'All BSE Equity',
+  shortLabel: 'All BSE',
+  description: 'All active BSE_EQ equity symbols available in the instrument master. Use chunk scans for regular runs.',
+  defaultLimit: 750,
+  maxLimit: 3500,
+  source: DHAN_INSTRUMENT_MASTER_URL,
+ },
+ {
+  id: 'bse_only',
+  label: 'BSE Only',
+  shortLabel: 'BSE Only',
+  description: 'BSE_EQ equity symbols whose trading symbol is not present in the NSE equity universe.',
+  defaultLimit: 650,
+  maxLimit: 1200,
+  source: 'All BSE Equity minus NSE symbols',
+ },
+ {
+  id: 'bse_af',
+  label: 'BSE A-F',
+  shortLabel: 'BSE A-F',
+  description: 'Active BSE equity symbols from A to F for faster rotating scans.',
+  defaultLimit: 650,
+  maxLimit: 900,
+  source: 'All BSE Equity alphabet chunk',
+ },
+ {
+  id: 'bse_gl',
+  label: 'BSE G-L',
+  shortLabel: 'BSE G-L',
+  description: 'Active BSE equity symbols from G to L for faster rotating scans.',
+  defaultLimit: 650,
+  maxLimit: 900,
+  source: 'All BSE Equity alphabet chunk',
+ },
+ {
+  id: 'bse_mr',
+  label: 'BSE M-R',
+  shortLabel: 'BSE M-R',
+  description: 'Active BSE equity symbols from M to R for faster rotating scans.',
+  defaultLimit: 650,
+  maxLimit: 900,
+  source: 'All BSE Equity alphabet chunk',
+ },
+ {
+  id: 'bse_sz',
+  label: 'BSE S-Z',
+  shortLabel: 'BSE S-Z',
+  description: 'Active BSE equity symbols from S to Z for faster rotating scans.',
+  defaultLimit: 650,
+  maxLimit: 900,
+  source: 'All BSE Equity alphabet chunk',
  },
  {
   id: 'indices',
@@ -88,6 +187,7 @@ const DHAN_SCANNER_UNIVERSE_DEFINITIONS = Object.freeze([
 ]);
 const DHAN_ORDER_DISABLED_ERROR = 'Order placement is disabled. Use your broker app or web terminal for manual trading.';
 const INSTRUMENT_CACHE_FILE = 'dhan-instruments-cache.json';
+const COMMODITY_CANDLE_CACHE_FILE = 'dhan-commodity-candle-cache.json';
 const INSTRUMENT_CACHE_VERSION = 5;
 const INSTRUMENT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const DHAN_QUOTE_BATCH_SIZE = 1000;
@@ -99,6 +199,11 @@ const DHAN_OPTION_CHAIN_MIN_INTERVAL_MS = 3000;
 const DHAN_OPTION_CHAIN_CACHE_TTL_MS = 30000;
 const DHAN_OPTION_EXPIRY_CACHE_TTL_MS = 5 * 60 * 1000;
 const COMMODITY_ANALYSIS_CACHE_TTL_MS = 15 * 60 * 1000;
+const COMMODITY_DAILY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const COMMODITY_INTRADAY_CACHE_TTL_MS = 10 * 60 * 1000;
+const COMMODITY_SPREAD_MAX_DAILY_LOOKBACK_DAYS = 120;
+const DHAN_FUTURES_BROKERAGE_PER_ORDER = 20;
+const GST_RATE = 0.18;
 const DHAN_OPTION_CHAIN_RATE_LIMIT_BACKOFF_MS = 60 * 1000;
 const DHAN_LIVE_FEED_MAX_INSTRUMENTS = 5000;
 const DHAN_LIVE_FEED_SUBSCRIBE_CHUNK = 100;
@@ -320,6 +425,17 @@ function normalizeUniverseId(value = '') {
  const raw = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
  if (['fno', 'fno_stock', 'fno_stocks', 'f_and_o', 'fo', 'f_o'].includes(raw)) return 'fno_stocks';
  if (['all', 'all_nse', 'nse', 'all_equity', 'all_nse_equity'].includes(raw)) return 'all_nse';
+ if (['nse_rest', 'nse_remaining', 'nse_uncovered', 'nse_ex_overlap', 'nse_ex_core'].includes(raw)) return 'nse_rest';
+ if (['all_bse', 'bse', 'bse_equity', 'all_bse_equity'].includes(raw)) return 'all_bse';
+ if (['bse_only', 'bse_unique', 'bse_ex_nse', 'bse_not_nse'].includes(raw)) return 'bse_only';
+ if (['nse_a_f', 'nse_af', 'nse_1', 'nse_chunk_1', 'nse_chunk_af'].includes(raw)) return 'nse_af';
+ if (['nse_g_l', 'nse_gl', 'nse_2', 'nse_chunk_2', 'nse_chunk_gl'].includes(raw)) return 'nse_gl';
+ if (['nse_m_r', 'nse_mr', 'nse_3', 'nse_chunk_3', 'nse_chunk_mr'].includes(raw)) return 'nse_mr';
+ if (['nse_s_z', 'nse_sz', 'nse_4', 'nse_chunk_4', 'nse_chunk_sz'].includes(raw)) return 'nse_sz';
+ if (['bse_a_f', 'bse_af', 'bse_1', 'bse_chunk_1', 'bse_chunk_af'].includes(raw)) return 'bse_af';
+ if (['bse_g_l', 'bse_gl', 'bse_2', 'bse_chunk_2', 'bse_chunk_gl'].includes(raw)) return 'bse_gl';
+ if (['bse_m_r', 'bse_mr', 'bse_3', 'bse_chunk_3', 'bse_chunk_mr'].includes(raw)) return 'bse_mr';
+ if (['bse_s_z', 'bse_sz', 'bse_4', 'bse_chunk_4', 'bse_chunk_sz'].includes(raw)) return 'bse_sz';
  if (['idx', 'index', 'indices', 'dhan_indices', 'dhan_index', 'idx_i'].includes(raw)) return 'indices';
  if (['nifty_500', 'nifty500', 'n500'].includes(raw)) return 'nifty500';
  if (['midcap', 'midcap_150', 'midcap150', 'nifty_midcap_150'].includes(raw)) return 'midcap150';
@@ -412,6 +528,7 @@ function normalizeInstrument(row = {}) {
   optionType,
   instrument: instrumentType,
   series: String(pick(row, ['series', 'sem_series']) || '').trim().toUpperCase(),
+  sector: String(pick(row, ['sector', 'industry', 'industry_name', 'sem_sector', 'sem_industry']) || '').trim(),
   buySellIndicator: String(pick(row, ['buy_sell_indicator']) || '').trim().toUpperCase(),
   underlyingSecurityId,
   underlyingSymbol,
@@ -436,6 +553,7 @@ function compactInstrument(item = {}) {
   optionType: String(item.optionType || '').trim().toUpperCase(),
   instrument: String(item.instrument || '').trim().toUpperCase(),
   series: String(item.series || '').trim().toUpperCase(),
+  sector: String(item.sector || '').trim(),
   buySellIndicator: String(item.buySellIndicator || '').trim().toUpperCase(),
   underlyingSecurityId: String(item.underlyingSecurityId || '').trim(),
   underlyingSymbol: String(item.underlyingSymbol || '').trim().toUpperCase(),
@@ -609,6 +727,7 @@ function buildCommodityFuturePairs(instruments = [], nowMs = Date.now()) {
    symbol: underlying,
    nearFuture: futures[0],
    nextFuture: futures[1] || null,
+   futures,
    expiryCount: futures.length,
   };
  }).sort((a, b) => {
@@ -621,7 +740,21 @@ function buildCommodityFuturePairs(instruments = [], nowMs = Date.now()) {
 const MCX_PRICE_MULTIPLIERS = Object.freeze({
  GOLD: 100,
  GOLDM: 10,
+ SILVER: 30,
+ SILVERM: 5,
+ SILVERMIC: 1,
+ CRUDEOIL: 100,
+ CRUDEOILM: 10,
+ NATURALGAS: 1250,
+ NATGASMINI: 250,
 });
+
+const MCX_MATCHED_SPREAD_FAMILIES = Object.freeze([
+ ['GOLD', 'GOLDM'],
+ ['SILVER', 'SILVERM', 'SILVERMIC'],
+ ['CRUDEOIL', 'CRUDEOILM'],
+ ['NATURALGAS', 'NATGASMINI'],
+]);
 
 function commodityPriceMultiplier(instrument = {}) {
  const symbol = String(instrument.underlyingSymbol || instrument.symbol || '').trim().toUpperCase();
@@ -630,6 +763,315 @@ function commodityPriceMultiplier(instrument = {}) {
   symbol,
   multiplier: known ? MCX_PRICE_MULTIPLIERS[symbol] : 1,
   known,
+ };
+}
+
+function commodityMatchedLotRatio(firstInstrument = {}, secondInstrument = {}) {
+ const first = commodityPriceMultiplier(firstInstrument);
+ const second = commodityPriceMultiplier(secondInstrument);
+ if (!(first.multiplier > 0) || !(second.multiplier > 0)) return { firstLots: 1, secondLots: 1, matched: false };
+ const larger = Math.max(first.multiplier, second.multiplier);
+ const smaller = Math.min(first.multiplier, second.multiplier);
+ const ratio = larger / smaller;
+ if (!Number.isInteger(ratio) || ratio > 100) return { firstLots: 1, secondLots: 1, matched: false };
+ return {
+  firstLots: first.multiplier === larger ? 1 : ratio,
+  secondLots: second.multiplier === larger ? 1 : ratio,
+  matched: true,
+ };
+}
+
+function buildCommoditySpreadPairs(commodityPairs = []) {
+ const primaryCalendarRows = [];
+ const extendedCalendarRows = [];
+ const matchedRows = [];
+ const bySymbol = new Map((Array.isArray(commodityPairs) ? commodityPairs : []).map(pair => [String(pair.symbol || '').toUpperCase(), pair]));
+ (Array.isArray(commodityPairs) ? commodityPairs : []).forEach(pair => {
+  const futures = Array.isArray(pair.futures) ? pair.futures : [pair.nearFuture, pair.nextFuture].filter(Boolean);
+  for (let nearIndex = 0; nearIndex < futures.length; nearIndex += 1) {
+   for (let farIndex = nearIndex + 1; farIndex < futures.length; farIndex += 1) {
+    const nearInstrument = futures[nearIndex];
+    const farInstrument = futures[farIndex];
+    const target = nearIndex === 0 && farIndex === 1 ? primaryCalendarRows : extendedCalendarRows;
+    target.push({
+     key: `calendar:${nearInstrument.securityId}:${farInstrument.securityId}`,
+     type: 'calendar',
+     family: pair.symbol,
+     label: `${pair.symbol} ${nearIndex === 0 && farIndex === 1 ? 'near / next' : 'calendar'}`,
+     firstInstrument: nearInstrument,
+     secondInstrument: farInstrument,
+     firstRole: 'near',
+     secondRole: 'far',
+     firstLots: 1,
+     secondLots: 1,
+     canonicalLabel: 'Far - Near',
+    });
+   }
+  }
+ });
+ MCX_MATCHED_SPREAD_FAMILIES.forEach(family => {
+  for (let firstIndex = 0; firstIndex < family.length; firstIndex += 1) {
+   for (let secondIndex = firstIndex + 1; secondIndex < family.length; secondIndex += 1) {
+    const firstPair = bySymbol.get(family[firstIndex]);
+    const secondPair = bySymbol.get(family[secondIndex]);
+    if (!firstPair || !secondPair) continue;
+    const secondByExpiry = new Map((secondPair.futures || []).map(instrument => [String(instrument.expiry || ''), instrument]));
+    (firstPair.futures || []).forEach(firstInstrument => {
+     const secondInstrument = secondByExpiry.get(String(firstInstrument.expiry || ''));
+     if (!secondInstrument) return;
+     const ratio = commodityMatchedLotRatio(firstInstrument, secondInstrument);
+     if (!ratio.matched) return;
+     matchedRows.push({
+      key: `matched:${firstInstrument.securityId}:${secondInstrument.securityId}`,
+      type: 'matched',
+      family: `${family[firstIndex]} / ${family[secondIndex]}`,
+      label: `${family[firstIndex]} / ${family[secondIndex]} matched`,
+      firstInstrument,
+      secondInstrument,
+      firstRole: family[firstIndex],
+      secondRole: family[secondIndex],
+      firstLots: ratio.firstLots,
+      secondLots: ratio.secondLots,
+      canonicalLabel: `${family[secondIndex]} - ${family[firstIndex]}`,
+     });
+    });
+   }
+  }
+ });
+ return [...primaryCalendarRows, ...matchedRows, ...extendedCalendarRows];
+}
+
+function buildCommoditySpreadCandles(firstRows = [], secondRows = []) {
+ const secondByTime = new Map((Array.isArray(secondRows) ? secondRows : []).map(row => [Number(row.time), row]));
+ return (Array.isArray(firstRows) ? firstRows : []).map(first => {
+  const second = secondByTime.get(Number(first.time));
+  if (!second) return null;
+  const firstOpen = Number(first.open || 0);
+  const firstHigh = Number(first.high || 0);
+  const firstLow = Number(first.low || 0);
+  const firstClose = Number(first.close || 0);
+  const secondOpen = Number(second.open || 0);
+  const secondHigh = Number(second.high || 0);
+  const secondLow = Number(second.low || 0);
+  const secondClose = Number(second.close || 0);
+  if (![firstOpen, firstHigh, firstLow, firstClose, secondOpen, secondHigh, secondLow, secondClose].every(Number.isFinite)) return null;
+  return {
+   time: Number(first.time),
+   open: +(secondOpen - firstOpen).toFixed(4),
+   high: +(secondHigh - firstLow).toFixed(4),
+   low: +(secondLow - firstHigh).toFixed(4),
+   close: +(secondClose - firstClose).toFixed(4),
+   volume: Math.min(Number(first.volume || 0), Number(second.volume || 0)),
+ };
+ }).filter(Boolean).sort((a, b) => a.time - b.time);
+}
+
+function filterCandleRowsByTime(rows = [], startMs = 0, endMs = Date.now()) {
+ const startSec = Math.floor(Math.max(0, Number(startMs || 0)) / 1000);
+ const endSec = Math.ceil(Math.max(Number(startMs || 0), Number(endMs || Date.now())) / 1000);
+ return (Array.isArray(rows) ? rows : []).filter(row => {
+  const time = Number(row?.time || 0);
+  return Number.isFinite(time) && time >= startSec && time <= endSec;
+ });
+}
+
+function commoditySpreadHistoryWindow(pair = {}, resolution = '1d', requestedStart = 0, requestedEnd = Date.now()) {
+ const end = Number(requestedEnd || Date.now()) || Date.now();
+ let start = Number(requestedStart || 0) || (end - 730 * DAY_MS);
+ if (String(resolution || '1d').toLowerCase() !== '1d') return { start, end };
+ const expiryTimes = [pair.firstInstrument?.expiry, pair.secondInstrument?.expiry]
+  .map(parseDerivativeExpiryMs)
+  .filter(value => value > 0);
+ const frontExpiryMs = expiryTimes.length ? Math.min(...expiryTimes) : 0;
+ if (frontExpiryMs > 0) {
+  start = Math.max(start, frontExpiryMs - (COMMODITY_SPREAD_MAX_DAILY_LOOKBACK_DAYS * DAY_MS));
+ }
+ return { start, end };
+}
+
+function clipCommoditySpreadRowsForPair(pair = {}, firstRows = [], secondRows = [], resolution = '1d', requestedStart = 0, requestedEnd = Date.now()) {
+ const window = commoditySpreadHistoryWindow(pair, resolution, requestedStart, requestedEnd);
+ const firstClipped = filterCandleRowsByTime(firstRows, window.start, window.end);
+ const secondClipped = filterCandleRowsByTime(secondRows, window.start, window.end);
+ const firstUnderlying = normalizeUniverseSymbol(pair.firstInstrument?.underlyingSymbol || pair.firstInstrument?.symbol || '');
+ const secondUnderlying = normalizeUniverseSymbol(pair.secondInstrument?.underlyingSymbol || pair.secondInstrument?.symbol || '');
+ const isCalendarPair = firstUnderlying && firstUnderlying === secondUnderlying
+  && String(pair.firstInstrument?.expiry || '') !== String(pair.secondInstrument?.expiry || '');
+ if (!isCalendarPair) {
+  return { ...window, firstRows: firstClipped, secondRows: secondClipped };
+ }
+ const secondByTime = new Map(secondClipped.map(row => [Number(row.time), row]));
+ const duplicateTimes = new Set();
+ firstClipped.forEach(first => {
+  const second = secondByTime.get(Number(first.time));
+  if (!second) return;
+  const firstValues = [first.open, first.high, first.low, first.close, first.volume].map(value => Number(value || 0));
+  const secondValues = [second.open, second.high, second.low, second.close, second.volume].map(value => Number(value || 0));
+  if (firstValues.every((value, index) => Number.isFinite(value) && value === secondValues[index])) {
+   duplicateTimes.add(Number(first.time));
+  }
+ });
+ return {
+  ...window,
+  firstRows: firstClipped.filter(row => !duplicateTimes.has(Number(row.time))),
+  secondRows: secondClipped.filter(row => !duplicateTimes.has(Number(row.time))),
+ };
+}
+
+function analyzeCommoditySpreadCandles(candles = []) {
+ const rows = Array.isArray(candles) ? candles : [];
+ const closes = rows.map(row => Number(row.close)).filter(Number.isFinite);
+ if (closes.length < 100) return { direction: 'range', score: 0, confidence: 'low', reasons: ['At least 100 matched spread candles are required for Three EMA analysis.'] };
+ const spreadEma = (source = [], period = 20) => {
+  const values = source.map(row => Number(row?.close)).filter(Number.isFinite);
+  if (values.length < period) return 0;
+  const multiplier = 2 / (period + 1);
+  let current = values.slice(0, period).reduce((sum, value) => sum + value, 0) / period;
+  values.slice(period).forEach(value => { current = ((value - current) * multiplier) + current; });
+  return current;
+ };
+ const spreadObv = source => {
+  let current = 0;
+  return source.map((row, index) => {
+   if (index > 0) {
+    const close = Number(row?.close || 0);
+    const previous = Number(source[index - 1]?.close || 0);
+    const volume = Math.max(0, Number(row?.volume || 0));
+    if (close > previous) current += volume;
+    else if (close < previous) current -= volume;
+   }
+   return current;
+  });
+ };
+ const spreadAtr = (source = [], period = 14) => {
+  const values = [];
+  for (let index = 1; index < source.length; index += 1) {
+   const high = Number(source[index]?.high || 0);
+   const low = Number(source[index]?.low || 0);
+   const previous = Number(source[index - 1]?.close || 0);
+   if ([high, low, previous].every(Number.isFinite)) values.push(Math.max(high - low, Math.abs(high - previous), Math.abs(low - previous)));
+  }
+  const recent = values.slice(-period);
+  return recent.length ? recent.reduce((sum, value) => sum + value, 0) / recent.length : 0;
+ };
+ const latest = closes[closes.length - 1];
+ const ema9 = spreadEma(rows, 9);
+ const ema30 = spreadEma(rows, 30);
+ const ema100 = spreadEma(rows, 100);
+ const atr14 = spreadAtr(rows, 14);
+ const obv = spreadObv(rows);
+ const obvNow = Number(obv[obv.length - 1] || 0);
+ const obvPrevious = Number(obv[Math.max(0, obv.length - 12)] || 0);
+ const obvSlope = obvNow - obvPrevious;
+ const lookback = closes.slice(-20);
+ const mean = lookback.reduce((sum, value) => sum + value, 0) / lookback.length;
+ const variance = lookback.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / lookback.length;
+ const deviation = Math.sqrt(variance);
+ const zScore = deviation > 0 ? (latest - mean) / deviation : 0;
+ const momentum = latest - closes[Math.max(0, closes.length - 6)];
+ const slope = ema9 - spreadEma(rows.slice(0, -3), 9);
+ const emaBull = latest >= ema9 && ema9 > ema30 && ema30 > ema100;
+ const emaBear = latest <= ema9 && ema9 < ema30 && ema30 < ema100;
+ const obvUp = obvSlope > 0;
+ const obvDown = obvSlope < 0;
+ let score = 0;
+ const reasons = [];
+ if (emaBull) { score += 48; reasons.push('Spread EMA 9/30/100 is aligned upward.'); }
+ if (emaBear) { score -= 48; reasons.push('Spread EMA 9/30/100 is aligned downward.'); }
+ if (obvUp) { score += 22; reasons.push('Spread OBV confirms buyer pressure.'); }
+ if (obvDown) { score -= 22; reasons.push('Spread OBV confirms seller pressure.'); }
+ if (slope > 0) score += 10;
+ if (slope < 0) score -= 10;
+ if (momentum > 0) score += 8;
+ if (momentum < 0) score -= 8;
+ if (zScore > 1.5) reasons.push('Spread is extended above its 20-bar mean.');
+ if (zScore < -1.5) reasons.push('Spread is extended below its 20-bar mean.');
+ const direction = emaBull && obvUp ? 'widening' : emaBear && obvDown ? 'narrowing' : 'range';
+ const triggerBuffer = Math.max(atr14 * 0.1, Math.abs(latest) * 0.0005);
+ const entryTrigger = direction === 'widening' ? latest + triggerBuffer : direction === 'narrowing' ? latest - triggerBuffer : latest;
+ const stopSpread = direction === 'widening'
+  ? Math.min(ema30, latest - atr14)
+  : direction === 'narrowing'
+   ? Math.max(ema30, latest + atr14)
+   : null;
+ const targetSpread = direction === 'widening'
+  ? latest + atr14 * 2
+  : direction === 'narrowing'
+   ? latest - atr14 * 2
+   : null;
+ return {
+  direction,
+  score: Math.round(Math.min(100, Math.abs(score))),
+  confidence: Math.abs(score) >= 55 ? 'high' : Math.abs(score) >= 32 ? 'medium' : 'low',
+  latest: +latest.toFixed(4),
+  ema9: +ema9.toFixed(4),
+  ema30: +ema30.toFixed(4),
+  ema100: +ema100.toFixed(4),
+  atr14: +atr14.toFixed(4),
+  obvSlope: +obvSlope.toFixed(2),
+  emaBull,
+  emaBear,
+  obvUp,
+  obvDown,
+  entryTrigger: +entryTrigger.toFixed(4),
+  stopSpread: stopSpread == null ? null : +stopSpread.toFixed(4),
+  targetSpread: targetSpread == null ? null : +targetSpread.toFixed(4),
+  zScore: +zScore.toFixed(2),
+  momentum: +momentum.toFixed(4),
+  reasons: reasons.slice(0, 4),
+ };
+}
+
+function commoditySpreadCostEstimate(pair = {}, snapshot = {}) {
+ const firstUnits = commodityPriceMultiplier(pair.firstInstrument);
+ const secondUnits = commodityPriceMultiplier(pair.secondInstrument);
+ const firstExposure = Number(pair.firstLots || 1) * firstUnits.multiplier;
+ const secondExposure = Number(pair.secondLots || 1) * secondUnits.multiplier;
+ const matchedExposure = firstExposure === secondExposure;
+ const valuePerSpreadPoint = matchedExposure ? firstExposure : Math.min(firstExposure, secondExposure);
+ const executedOrders = 4;
+ const brokerage = executedOrders * DHAN_FUTURES_BROKERAGE_PER_ORDER;
+ const brokerageGst = brokerage * GST_RATE;
+ const wideningSlippagePoints = snapshot.wideningEntrySpread == null ? null : Math.max(0, Number(snapshot.wideningEntrySpread) - Number(snapshot.spread || 0));
+ const narrowingSlippagePoints = snapshot.narrowingEntrySpread == null ? null : Math.max(0, Number(snapshot.spread || 0) - Number(snapshot.narrowingEntrySpread));
+ return {
+  executedOrders,
+  brokeragePerOrder: DHAN_FUTURES_BROKERAGE_PER_ORDER,
+  brokerage: +brokerage.toFixed(2),
+  brokerageGst: +brokerageGst.toFixed(2),
+  fixedBrokerageAndGst: +(brokerage + brokerageGst).toFixed(2),
+  statutoryChargesIncluded: false,
+  valuePerSpreadPoint: +valuePerSpreadPoint.toFixed(4),
+  matchedExposure,
+  wideningSlippagePoints: wideningSlippagePoints == null ? null : +wideningSlippagePoints.toFixed(4),
+  narrowingSlippagePoints: narrowingSlippagePoints == null ? null : +narrowingSlippagePoints.toFixed(4),
+  brokerageBreakevenPoints: valuePerSpreadPoint > 0 ? +((brokerage + brokerageGst) / valuePerSpreadPoint).toFixed(4) : null,
+ };
+}
+
+function commoditySpreadSafeguards(pair = {}, snapshot = {}, nowMs = Date.now()) {
+ const firstExpiryMs = parseDerivativeExpiryMs(pair.firstInstrument?.expiry);
+ const secondExpiryMs = parseDerivativeExpiryMs(pair.secondInstrument?.expiry);
+ const nearestExpiryMs = Math.min(firstExpiryMs || Number.MAX_SAFE_INTEGER, secondExpiryMs || Number.MAX_SAFE_INTEGER);
+ const daysToNearestExpiry = nearestExpiryMs < Number.MAX_SAFE_INTEGER ? Math.max(0, (nearestExpiryMs - nowMs) / DAY_MS) : 0;
+ const firstPrice = Number(snapshot.firstPrice || 0);
+ const secondPrice = Number(snapshot.secondPrice || 0);
+ const firstWidth = Number(snapshot.firstAsk || 0) > 0 && Number(snapshot.firstBid || 0) > 0 ? Number(snapshot.firstAsk) - Number(snapshot.firstBid) : null;
+ const secondWidth = Number(snapshot.secondAsk || 0) > 0 && Number(snapshot.secondBid || 0) > 0 ? Number(snapshot.secondAsk) - Number(snapshot.secondBid) : null;
+ const firstWidthPct = firstWidth != null && firstPrice > 0 ? firstWidth / firstPrice * 100 : null;
+ const secondWidthPct = secondWidth != null && secondPrice > 0 ? secondWidth / secondPrice * 100 : null;
+ const warnings = [];
+ if (daysToNearestExpiry < 5) warnings.push('Nearest leg expires in less than 5 days.');
+ if (!snapshot.depthConfirmed) warnings.push('Both legs do not have complete executable depth.');
+ if (Number(snapshot.firstVolume || 0) <= 0 || Number(snapshot.secondVolume || 0) <= 0) warnings.push('One or both legs have no reported volume.');
+ if (Number(snapshot.firstOi || 0) <= 0 || Number(snapshot.secondOi || 0) <= 0) warnings.push('One or both legs have no reported open interest.');
+ if (Math.max(firstWidthPct || 0, secondWidthPct || 0) > 0.15) warnings.push('Bid/ask width is above 0.15% on a spread leg.');
+ return {
+  tradeAllowed: warnings.length === 0,
+  warnings,
+  daysToNearestExpiry: +daysToNearestExpiry.toFixed(2),
+  firstWidthPct: firstWidthPct == null ? null : +firstWidthPct.toFixed(4),
+  secondWidthPct: secondWidthPct == null ? null : +secondWidthPct.toFixed(4),
  };
 }
 
@@ -712,6 +1154,47 @@ function isNseEquityInstrument(item = {}) {
   && String(item.instrument || '').trim().toUpperCase() === 'EQUITY'
   && (!item.series || String(item.series || '').trim().toUpperCase() === 'EQ')
   && String(item.securityId || '').trim());
+}
+
+function isBseEquityInstrument(item = {}) {
+ return !!(String(item.exchangeSegment || '').trim().toUpperCase() === 'BSE_EQ'
+  && String(item.instrument || '').trim().toUpperCase() === 'EQUITY'
+  && (!item.series || String(item.series || '').trim().toUpperCase() === 'EQ')
+  && String(item.securityId || '').trim());
+}
+
+const EQUITY_ALPHABET_CHUNKS = Object.freeze({
+ af: /^[A-F]/,
+ gl: /^[G-L]/,
+ mr: /^[M-R]/,
+ sz: /^[S-Z0-9]/,
+});
+
+function getEquityChunkKey(item = {}) {
+ const symbol = normalizeUniverseSymbol(item.tradingSymbol || item.symbol || '');
+ const first = symbol.charAt(0);
+ if (!first) return 'sz';
+ if (EQUITY_ALPHABET_CHUNKS.af.test(first)) return 'af';
+ if (EQUITY_ALPHABET_CHUNKS.gl.test(first)) return 'gl';
+ if (EQUITY_ALPHABET_CHUNKS.mr.test(first)) return 'mr';
+ return 'sz';
+}
+
+function buildBseOnlyUniverse(allBse = [], allNse = []) {
+ const nseSymbols = new Set((Array.isArray(allNse) ? allNse : []).flatMap(getInstrumentSymbolKeys));
+ return (Array.isArray(allBse) ? allBse : []).filter(item => getInstrumentSymbolKeys(item).every(key => !nseSymbols.has(key)));
+}
+
+function buildAlphabetUniverseMemberships(prefix = '', items = []) {
+ const base = {};
+ ['af', 'gl', 'mr', 'sz'].forEach(chunk => {
+  const id = `${prefix}_${chunk}`;
+  base[id] = annotateUniverse(
+   (Array.isArray(items) ? items : []).filter(item => getEquityChunkKey(item) === chunk),
+   id
+  ).map(item => String(item.securityId));
+ });
+ return base;
 }
 
 function sortUniverseInstruments(items = []) {
@@ -807,14 +1290,21 @@ function annotateUniverse(items = [], universeId = '') {
 
 function buildUniverseCatalog({ instruments = [], fnoStockUniverse = [], indexSources = {}, nseAllSource = null } = {}) {
  const allNseBase = sortUniverseInstruments((Array.isArray(instruments) ? instruments : []).filter(isNseEquityInstrument));
+ const allBseBase = sortUniverseInstruments((Array.isArray(instruments) ? instruments : []).filter(isBseEquityInstrument));
  const allNseAllowed = nseAllSource?.ok && nseAllSource.symbols?.size
   ? mapSymbolsToNseInstruments(allNseBase, nseAllSource.symbols)
   : allNseBase;
  const allNse = annotateUniverse(allNseAllowed.length ? allNseAllowed : allNseBase, 'all_nse');
+ const allBse = annotateUniverse(allBseBase, 'all_bse');
+ const bseOnly = annotateUniverse(buildBseOnlyUniverse(allBse, allNse), 'bse_only');
  const fno = annotateUniverse(fnoStockUniverse, 'fno_stocks');
  const indices = annotateUniverse(sortUniverseInstruments((Array.isArray(instruments) ? instruments : []).filter(item => String(item.exchangeSegment || '').toUpperCase() === 'IDX_I')), 'indices');
  const memberships = {
   all_nse: allNse.map(item => String(item.securityId)),
+  ...buildAlphabetUniverseMemberships('nse', allNse),
+  all_bse: allBse.map(item => String(item.securityId)),
+  bse_only: bseOnly.map(item => String(item.securityId)),
+  ...buildAlphabetUniverseMemberships('bse', allBse),
   fno_stocks: fno.map(item => String(item.securityId)),
   indices: indices.map(item => String(item.securityId)),
  };
@@ -840,21 +1330,68 @@ function buildUniverseCatalog({ instruments = [], fnoStockUniverse = [], indexSo
    error: '',
    fallback: false,
   },
+  all_bse: {
+   ok: true,
+   count: allBse.length,
+   url: DHAN_INSTRUMENT_MASTER_URL,
+   error: '',
+   fallback: false,
+  },
+  bse_only: {
+   ok: true,
+   count: bseOnly.length,
+   url: 'All BSE Equity minus NSE symbols',
+   error: '',
+   fallback: false,
+  },
  };
+ Object.entries(buildAlphabetUniverseMemberships('nse', allNse)).forEach(([id, rows]) => {
+  sourceStatus[id] = {
+   ok: true,
+   count: rows.length,
+   url: 'All NSE Equity alphabet chunk',
+   error: '',
+   fallback: false,
+  };
+ });
+ Object.entries(buildAlphabetUniverseMemberships('bse', allBse)).forEach(([id, rows]) => {
+  sourceStatus[id] = {
+   ok: true,
+   count: rows.length,
+   url: 'All BSE Equity alphabet chunk',
+   error: '',
+   fallback: false,
+  };
+ });
  Object.values(NSE_INDEX_CONSTITUENT_SOURCES).forEach(source => {
   const fetched = indexSources[source.id] || {};
   let mapped = mapSymbolsToNseInstruments(allNse, fetched.symbols || new Set());
   const fallback = !mapped.length;
   if (fallback) mapped = fallbackUniverseSlice(allNse, source);
-  memberships[source.id] = annotateUniverse(mapped, source.id).map(item => String(item.securityId));
+ memberships[source.id] = annotateUniverse(mapped, source.id).map(item => String(item.securityId));
   sourceStatus[source.id] = {
    ok: fetched.ok !== false && !fallback,
    count: memberships[source.id].length,
    url: source.url,
    error: fallback ? (fetched.error || 'Using ranked NSE fallback because constituent CSV did not map.') : '',
-   fallback,
+  fallback,
   };
  });
+ const coveredCoreIds = new Set([
+  ...memberships.fno_stocks,
+  ...Object.keys(NSE_INDEX_CONSTITUENT_SOURCES).flatMap(id => memberships[id] || []),
+ ].map(String));
+ memberships.nse_rest = annotateUniverse(
+  allNse.filter(item => !coveredCoreIds.has(String(item.securityId || ''))),
+  'nse_rest'
+ ).map(item => String(item.securityId));
+ sourceStatus.nse_rest = {
+  ok: true,
+  count: memberships.nse_rest.length,
+  url: 'All NSE Equity minus F&O/Nifty/Midcap/Smallcap overlap',
+  error: '',
+  fallback: false,
+ };
  return compactUniverseCatalog({
   fetchedAt: Date.now(),
   memberships,
@@ -875,15 +1412,16 @@ function getUniverseMembershipSet(cache = {}, universe = '') {
 }
 
 function normalizeResolution(resolution = '') {
- const raw = String(resolution || '15m').trim().toLowerCase();
+ const requested = String(resolution || '4h').trim().toLowerCase();
+ const raw = ['4h', '240m', '240', '1h', '60m', '60', '1d', '1w'].includes(requested) ? requested : '4h';
  if (raw === '1d' || raw === '1w') return { kind: 'historical', interval: '1D', seconds: raw === '1w' ? 7 * 86400 : 86400, aggregateSeconds: raw === '1w' ? 7 * 86400 : 0 };
- const minuteMap = { '1m': 1, '1': 1, '5m': 5, '5': 5, '15m': 15, '15': 15, '25m': 25, '25': 25, '1h': 60, '60m': 60, '60': 60 };
- const minutes = raw === '4h' || raw === '240m' || raw === '240' ? 60 : (minuteMap[raw] || 15);
+ const minuteMap = { '1h': 60, '60m': 60, '60': 60 };
+ const minutes = raw === '4h' || raw === '240m' || raw === '240' ? 60 : (minuteMap[raw] || 60);
  const allowed = [1, 5, 15, 25, 60];
  return {
   kind: 'intraday',
   interval: String(allowed.includes(minutes) ? minutes : 15),
-  seconds: raw === '4h' ? 4 * 3600 : (allowed.includes(minutes) ? minutes : 15) * 60,
+  seconds: raw === '4h' || raw === '240m' || raw === '240' ? 4 * 3600 : (allowed.includes(minutes) ? minutes : 60) * 60,
   aggregateSeconds: raw === '4h' || raw === '240m' || raw === '240' ? 4 * 3600 : 0,
  };
 }
@@ -1368,8 +1906,28 @@ function isDhanRateLimitResponse(response = {}) {
  return response.status === 429 || /\b805\b|DH-904|Rate_Limit|too many requests|rate limit|user being blocked/i.test(text);
 }
 
+function dhanErrorMessage(data = null, fallback = '') {
+ if (data && typeof data === 'object') {
+  return data.errorMessage || data.message || data.error || data.remarks?.error_message || fallback;
+ }
+ return String(data || fallback || '');
+}
+
+function isDhanNoHistoricalDataResponse(response = {}) {
+ const text = [
+  response.status,
+  response.error,
+  response.raw?.errorType,
+  response.raw?.errorCode,
+  response.raw?.errorMessage,
+  response.raw?.message,
+ ].map(value => String(value || '')).join(' ');
+ return /DH-905|DH-907|unable to fetch data|incorrect parameters|no data present|Missing required fields/i.test(text);
+}
+
 function createDhanDataService({ app, credentialStore, errorJournal } = {}) {
  const cachePath = () => path.join(app.getPath('userData'), INSTRUMENT_CACHE_FILE);
+ const commodityCandleCachePath = () => path.join(app.getPath('userData'), COMMODITY_CANDLE_CACHE_FILE);
  let nextQuoteRequestAt = 0;
  let nextCandleRequestAt = 0;
  let candleBlockedUntil = 0;
@@ -1379,6 +1937,7 @@ function createDhanDataService({ app, credentialStore, errorJournal } = {}) {
  const optionChainCache = new Map();
  const optionChainInFlight = new Map();
  let commodityAnalysisCache = null;
+ let commodityCandleCacheMemory = null;
  let liveSocket = null;
  let liveFeedMode = 'quote';
  let liveFeedDesired = false;
@@ -1392,6 +1951,52 @@ function createDhanDataService({ app, credentialStore, errorJournal } = {}) {
  const liveFeedTicks = new Map();
  const liveFeedOwners = new Map();
  let instrumentCacheMemory = null;
+
+ async function readCommodityCandleCache() {
+  if (commodityCandleCacheMemory) return commodityCandleCacheMemory;
+  try {
+   const parsed = JSON.parse(await fs.readFile(commodityCandleCachePath(), 'utf8'));
+   commodityCandleCacheMemory = parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (_) {
+   commodityCandleCacheMemory = {};
+  }
+  return commodityCandleCacheMemory;
+ }
+
+ async function writeCommodityCandleCache(cache = {}) {
+  const entries = Object.entries(cache || {})
+   .sort((a, b) => Number(b[1]?.fetchedAt || 0) - Number(a[1]?.fetchedAt || 0))
+   .slice(0, 180);
+  commodityCandleCacheMemory = Object.fromEntries(entries);
+  try {
+   await fs.writeFile(commodityCandleCachePath(), JSON.stringify(commodityCandleCacheMemory));
+  } catch (error) {
+   errorJournal?.append?.('dhan:commodity-candle-cache-write', error);
+  }
+ }
+
+ async function getCommodityCachedCandles(instrument = {}, resolution = '1d', start = 0, end = Date.now(), options = {}) {
+  const key = `${instrument.securityId}:${resolution}`;
+  const cache = await readCommodityCandleCache();
+  const cached = cache[key];
+  const ttl = resolution === '1d' ? COMMODITY_DAILY_CACHE_TTL_MS : COMMODITY_INTRADAY_CACHE_TTL_MS;
+  const covers = Number(cached?.start || 0) <= Number(start || 0) + DAY_MS && Number(cached?.end || 0) >= Number(end || 0) - DAY_MS;
+  if (!options.force && cached && Date.now() - Number(cached.fetchedAt || 0) < ttl && covers && Array.isArray(cached.rows)) {
+   return { ok: true, rows: cached.rows, cached: true };
+  }
+  const cachedRows = Array.isArray(cached?.rows) ? cached.rows : [];
+  const lastCachedTimeMs = cachedRows.length ? Number(cachedRows[cachedRows.length - 1]?.time || 0) * 1000 : 0;
+  const canGapFetch = !options.force && cachedRows.length >= 20 && Number(cached?.start || 0) <= Number(start || 0) + DAY_MS && lastCachedTimeMs > 0;
+  const gapStart = canGapFetch ? Math.max(Number(start || 0), lastCachedTimeMs - (resolution === '1d' ? DAY_MS * 2 : DAY_MS)) : start;
+  const response = await getCandles({ instrument, symbol: instrument.tradingSymbol, resolution, start: gapStart, end, timeoutMs: 45000 });
+  if (response?.ok && Array.isArray(response.rows) && response.rows.length) {
+   const rows = canGapFetch ? mergeCandleRows([{ rows: cachedRows }, { rows: response.rows }]) : response.rows;
+   cache[key] = { fetchedAt: Date.now(), start: canGapFetch ? Math.min(Number(cached?.start || start), Number(start || 0)) : start, end, rows };
+   await writeCommodityCandleCache(cache);
+   return { ...response, rows, cached: false, incremental: canGapFetch };
+  }
+  return response;
+ }
 
  function optionCooldownResponse() {
   const retryAfterMs = Math.max(0, optionChainBlockedUntil - Date.now());
@@ -1450,18 +2055,23 @@ function createDhanDataService({ app, credentialStore, errorJournal } = {}) {
   if (!credentials.clientId || !credentials.accessToken) {
    return { ok: false, status: 401, error: credentials.error || 'Market-data API credentials are not configured.' };
   }
-  const response = await fetch(`${DHAN_API_BASE}${pathname}`, {
-   method: options.method || 'GET',
-   headers: {
-    Accept: 'application/json',
-    'Content-Type': 'application/json',
-    'access-token': credentials.accessToken,
-    'client-id': credentials.clientId,
-    'User-Agent': 'FWD-TradeDesk-Pro-NSE-BSE',
-   },
-   body: options.body ? JSON.stringify(options.body) : undefined,
-   signal: AbortSignal.timeout(Number(options.timeoutMs || 30000)),
-  });
+  let response;
+  try {
+   response = await fetch(`${DHAN_API_BASE}${pathname}`, {
+    method: options.method || 'GET',
+    headers: {
+     Accept: 'application/json',
+     'Content-Type': 'application/json',
+     'access-token': credentials.accessToken,
+     'client-id': credentials.clientId,
+     'User-Agent': 'FWD-TradeDesk-Pro-NSE-BSE',
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+    signal: AbortSignal.timeout(Number(options.timeoutMs || 30000)),
+   });
+  } catch (error) {
+   return { ok: false, status: 0, error: error?.message || 'Dhan network request failed.' };
+  }
   const text = await response.text();
   let data = null;
   try {
@@ -1470,7 +2080,7 @@ function createDhanDataService({ app, credentialStore, errorJournal } = {}) {
    data = text;
   }
   if (!response.ok) {
-   return { ok: false, status: response.status, error: data?.message || data?.error || text || `HTTP ${response.status}`, raw: data };
+   return { ok: false, status: response.status, error: dhanErrorMessage(data, text || `HTTP ${response.status}`), raw: data };
   }
   return { ok: true, status: response.status, data, raw: data };
  }
@@ -1886,6 +2496,200 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
   };
  }
 
+ function buildCommoditySpreadSnapshotRow(pair = {}, quoteResponse = {}) {
+  const firstQuote = extractQuoteForInstrument(quoteResponse, pair.firstInstrument);
+  const secondQuote = extractQuoteForInstrument(quoteResponse, pair.secondInstrument);
+  const firstPrice = Number(firstQuote?.last_price || firstQuote?.lastPrice || firstQuote?.ltp || 0);
+  const secondPrice = Number(secondQuote?.last_price || secondQuote?.lastPrice || secondQuote?.ltp || 0);
+  if (!(firstPrice > 0) || !(secondPrice > 0)) return null;
+  const firstQuantity = Math.max(1, Number(pair.firstInstrument?.lotSize || 1) * Number(pair.firstLots || 1));
+  const secondQuantity = Math.max(1, Number(pair.secondInstrument?.lotSize || 1) * Number(pair.secondLots || 1));
+  const buyFirst = depthFillForQuantity(firstQuote, 'sell', firstQuantity);
+  const sellFirst = depthFillForQuantity(firstQuote, 'buy', firstQuantity);
+  const buySecond = depthFillForQuantity(secondQuote, 'sell', secondQuantity);
+  const sellSecond = depthFillForQuantity(secondQuote, 'buy', secondQuantity);
+  const wideningDepth = sellFirst.complete && buySecond.complete;
+  const narrowingDepth = buyFirst.complete && sellSecond.complete;
+  const snapshot = {
+   ...pair,
+   firstPrice: +firstPrice.toFixed(4),
+   secondPrice: +secondPrice.toFixed(4),
+   spread: +(secondPrice - firstPrice).toFixed(4),
+   wideningEntrySpread: wideningDepth ? +(buySecond.vwap - sellFirst.vwap).toFixed(4) : null,
+   narrowingEntrySpread: narrowingDepth ? +(sellSecond.vwap - buyFirst.vwap).toFixed(4) : null,
+   wideningDepth,
+   narrowingDepth,
+   depthConfirmed: wideningDepth || narrowingDepth,
+   firstQuantity,
+   secondQuantity,
+   firstBid: sellFirst.bestPrice > 0 ? +sellFirst.bestPrice.toFixed(4) : 0,
+   firstAsk: buyFirst.bestPrice > 0 ? +buyFirst.bestPrice.toFixed(4) : 0,
+   secondBid: sellSecond.bestPrice > 0 ? +sellSecond.bestPrice.toFixed(4) : 0,
+   secondAsk: buySecond.bestPrice > 0 ? +buySecond.bestPrice.toFixed(4) : 0,
+   firstVolume: Number(firstQuote?.volume || 0) || 0,
+   secondVolume: Number(secondQuote?.volume || 0) || 0,
+   firstOi: Number(firstQuote?.oi || firstQuote?.open_interest || 0) || 0,
+   secondOi: Number(secondQuote?.oi || secondQuote?.open_interest || 0) || 0,
+   executableUpdatedAt: Date.now(),
+  };
+  return {
+   ...snapshot,
+   costs: commoditySpreadCostEstimate(pair, snapshot),
+   safeguards: commoditySpreadSafeguards(pair, snapshot),
+  };
+ }
+
+ async function resolveCommoditySpreadPair(message = {}) {
+  const firstInstrument = message.firstInstrument && typeof message.firstInstrument === 'object'
+   ? message.firstInstrument
+   : await findInstrument(message.firstSymbol || message.firstSecurityId);
+  const secondInstrument = message.secondInstrument && typeof message.secondInstrument === 'object'
+   ? message.secondInstrument
+   : await findInstrument(message.secondSymbol || message.secondSecurityId);
+  if (!firstInstrument || !secondInstrument
+   || firstInstrument.exchangeSegment !== 'MCX_COMM' || secondInstrument.exchangeSegment !== 'MCX_COMM'
+   || firstInstrument.instrument !== 'FUTCOM' || secondInstrument.instrument !== 'FUTCOM') return null;
+  return {
+   key: String(message.key || `custom:${firstInstrument.securityId}:${secondInstrument.securityId}`),
+   type: String(message.type || 'calendar') === 'matched' ? 'matched' : 'calendar',
+   family: String(message.family || firstInstrument.underlyingSymbol || firstInstrument.symbol || 'MCX'),
+   label: String(message.label || `${firstInstrument.tradingSymbol} / ${secondInstrument.tradingSymbol}`),
+   canonicalLabel: String(message.canonicalLabel || 'Second - First'),
+   firstInstrument,
+   secondInstrument,
+   firstRole: String(message.firstRole || 'first'),
+   secondRole: String(message.secondRole || 'second'),
+   firstLots: Math.max(1, Math.round(Number(message.firstLots || 1))),
+   secondLots: Math.max(1, Math.round(Number(message.secondLots || 1))),
+  };
+ }
+
+ async function getCommoditySpreadChart(message = {}) {
+  const pair = await resolveCommoditySpreadPair(message);
+  if (!pair) return { ok: false, status: 400, error: 'Synthetic spread chart supports two MCX futures contracts only.' };
+  const resolution = String(message.resolution || '1d');
+  const end = Number(message.end || Date.now()) || Date.now();
+  const start = Number(message.start || (end - (resolution === '1d' ? 730 : 90) * DAY_MS)) || (end - 730 * DAY_MS);
+  const [firstHistory, secondHistory] = await Promise.all([
+   getCommodityCachedCandles(pair.firstInstrument, resolution, start, end, { force: message.force === true }),
+   getCommodityCachedCandles(pair.secondInstrument, resolution, start, end, { force: message.force === true }),
+  ]);
+  if (!firstHistory?.ok || !secondHistory?.ok) return !firstHistory?.ok ? firstHistory : secondHistory;
+  const clipped = clipCommoditySpreadRowsForPair(pair, firstHistory.rows, secondHistory.rows, resolution, start, end);
+  const candles = buildCommoditySpreadCandles(clipped.firstRows, clipped.secondRows);
+  const analysis = analyzeCommoditySpreadCandles(candles);
+  return {
+   ok: true,
+   readOnly: true,
+   symbol: `MCX-SPREAD:${pair.key}`,
+   displayName: `${pair.label} | ${pair.canonicalLabel}`,
+   timeframe: resolution,
+   candles,
+   analysis,
+   pair,
+   historyStart: clipped.start,
+   historyEnd: clipped.end,
+   discardedCandles: Math.max(0, Number(firstHistory.rows?.length || 0) - clipped.firstRows.length) + Math.max(0, Number(secondHistory.rows?.length || 0) - clipped.secondRows.length),
+   methodology: 'Synthetic spread candle is second-leg price minus first-leg price. Daily spread history is clipped to the active front-contract window so stale/continuous futures rows are not mixed into the chart. A rising chart is widening; a falling chart is narrowing.',
+  };
+ }
+
+ async function getCommoditySpreadScanner(message = {}) {
+  const cache = await loadInstrumentCache(!!message.forceInstruments);
+  const nowMs = Number(message.at || Date.now()) || Date.now();
+  const limit = Math.max(1, Math.min(40, Number(message.limit || 24)));
+  const type = String(message.spreadType || 'all').toLowerCase();
+  const query = String(message.query || '').trim().toUpperCase();
+  const pairs = buildCommoditySpreadPairs(buildCommodityFuturePairs(cache.instruments, nowMs))
+   .filter(pair => type === 'all' || pair.type === type)
+   .filter(pair => !query || `${pair.family} ${pair.label} ${pair.firstInstrument?.tradingSymbol} ${pair.secondInstrument?.tradingSymbol}`.toUpperCase().includes(query))
+   .slice(0, limit);
+  const instruments = Array.from(new Map(pairs.flatMap(pair => [pair.firstInstrument, pair.secondInstrument]).map(instrument => [String(instrument.securityId), instrument])).values());
+  if (!instruments.length) return { ok: true, rows: [], totalPairs: 0, updatedAt: Date.now() };
+  const quotes = await getMarketFeed({ symbols: instruments, batchSize: DHAN_QUOTE_BATCH_SIZE, paceMs: DHAN_QUOTE_MIN_INTERVAL_MS }, '/marketfeed/quote');
+  if (!quotes?.ok) return quotes;
+  const snapshots = pairs.map(pair => buildCommoditySpreadSnapshotRow(pair, quotes)).filter(Boolean);
+  const start = nowMs - Math.max(120, Number(message.historyDays || 365)) * DAY_MS;
+  const historyBySecurityId = new Map();
+  for (const instrument of instruments) {
+   try {
+    const history = await getCommodityCachedCandles(instrument, '1d', start, nowMs, { force: message.force === true });
+    historyBySecurityId.set(String(instrument.securityId), history?.ok ? (history.rows || []) : []);
+   } catch (_) {
+    historyBySecurityId.set(String(instrument.securityId), []);
+   }
+  }
+  const rows = [];
+  for (const row of snapshots) {
+   const firstRows = historyBySecurityId.get(String(row.firstInstrument?.securityId)) || [];
+   const secondRows = historyBySecurityId.get(String(row.secondInstrument?.securityId)) || [];
+   const clipped = clipCommoditySpreadRowsForPair(row, firstRows, secondRows, '1d', start, nowMs);
+   const candles = buildCommoditySpreadCandles(clipped.firstRows, clipped.secondRows);
+   const analysis = analyzeCommoditySpreadCandles(candles);
+   const targetMove = analysis.direction === 'widening'
+    ? Number(analysis.targetSpread || 0) - Number(row.spread || 0)
+    : analysis.direction === 'narrowing'
+     ? Number(row.spread || 0) - Number(analysis.targetSpread || 0)
+     : 0;
+   const slippagePoints = analysis.direction === 'widening'
+    ? Number(row.costs?.wideningSlippagePoints || 0)
+    : analysis.direction === 'narrowing'
+     ? Number(row.costs?.narrowingSlippagePoints || 0)
+     : 0;
+   const costRequiredMove = Number(row.costs?.brokerageBreakevenPoints || 0) + slippagePoints;
+   const costEdgeAvailable = targetMove > costRequiredMove;
+   const tradeAllowed = row.safeguards?.tradeAllowed === true && analysis.direction !== 'range' && costEdgeAvailable;
+   rows.push({
+    ...row,
+    analysis: {
+     ...analysis,
+     tradeAllowed,
+     blockers: [
+     ...(row.safeguards?.warnings || []),
+      ...(analysis.direction === 'range' ? ['Three EMA and OBV are not aligned.'] : []),
+      ...(!costEdgeAvailable && analysis.direction !== 'range' ? ['Target move does not clear fixed brokerage and visible entry slippage.'] : []),
+     ],
+     targetMove: +targetMove.toFixed(4),
+     costRequiredMove: +costRequiredMove.toFixed(4),
+     costEdgeAvailable,
+    },
+    matchedCandles: candles.length,
+   });
+  }
+  rows.sort((a, b) => Number(b.analysis?.score || 0) - Number(a.analysis?.score || 0) || String(a.label).localeCompare(String(b.label)));
+  return {
+   ok: true,
+   readOnly: true,
+   rows,
+   totalPairs: pairs.length,
+   widening: rows.filter(row => row.analysis?.direction === 'widening').length,
+   narrowing: rows.filter(row => row.analysis?.direction === 'narrowing').length,
+   ranging: rows.filter(row => row.analysis?.direction === 'range').length,
+   updatedAt: Date.now(),
+   methodology: 'Direction is derived from the synthetic spread series, not from the current bid/ask snapshot. No order is placed.',
+  };
+ }
+
+ async function getCommoditySpreadQuotes(message = {}) {
+  const rawPairs = Array.isArray(message.pairs) ? message.pairs.slice(0, 40) : [];
+  const pairs = [];
+  for (const raw of rawPairs) {
+   const pair = await resolveCommoditySpreadPair(raw);
+   if (pair) pairs.push(pair);
+  }
+  const instruments = Array.from(new Map(pairs.flatMap(pair => [pair.firstInstrument, pair.secondInstrument]).map(instrument => [String(instrument.securityId), instrument])).values());
+  if (!instruments.length) return { ok: true, rows: [], updatedAt: Date.now() };
+  const quotes = await getMarketFeed({ symbols: instruments, batchSize: DHAN_QUOTE_BATCH_SIZE, paceMs: DHAN_QUOTE_MIN_INTERVAL_MS }, '/marketfeed/quote');
+  if (!quotes?.ok) return quotes;
+  return {
+   ok: true,
+   readOnly: true,
+   rows: pairs.map(pair => buildCommoditySpreadSnapshotRow(pair, quotes)).filter(Boolean),
+   updatedAt: Date.now(),
+   methodology: 'Executable spread prices are refreshed from Dhan market depth snapshots.',
+  };
+ }
+
  async function getCommodityMarginPreview(message = {}) {
   const rawLegs = Array.isArray(message.legs) ? message.legs.slice(0, 2) : [];
   if (!rawLegs.length) return { ok: false, status: 400, error: 'Select at least one commodity future leg for margin preview.' };
@@ -2031,8 +2835,17 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
     timeoutMs: 45000,
    }),
   ]);
-  if (!buyHistory?.ok) return buyHistory;
-  if (!sellHistory?.ok) return sellHistory;
+  if (!buyHistory?.ok || !sellHistory?.ok) {
+   const failed = !buyHistory?.ok ? buyHistory : sellHistory;
+   const failedInstrument = !buyHistory?.ok ? buyInstrument : sellInstrument;
+   if (isDhanNoHistoricalDataResponse(failed)) {
+    return {
+     ...failed,
+     error: `Dhan did not return daily candles for ${failedInstrument.tradingSymbol || 'the selected MCX future'} in this date range. Use the previous completed trading day, or try again after Dhan publishes today's EOD candle.`,
+    };
+   }
+   return failed;
+  }
   const study = buildCommoditySpreadHistory({
    buyRows: buyHistory.rows,
    sellRows: sellHistory.rows,
@@ -2087,15 +2900,15 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
   const ema20 = commodityEma(daily, 20);
   const ema50 = commodityEma(daily, 50);
   const ema200 = commodityEma(daily, 200);
-  const ema15m = commodityEma(intraday, 20);
+  const ema4h = commodityEma(intraday, 20);
   const atr14 = commodityAtr(daily, 14);
   const expiryMs = new Date(String(row.nearFuture?.expiry || '').replace(' ', 'T')).getTime();
   const daysToExpiry = Number.isFinite(expiryMs) ? Math.max(0, (expiryMs - nowMs) / DAY_MS) : 0;
   const historyDays = daily.length > 1 ? Math.round((Number(daily[daily.length - 1].time) - Number(daily[0].time)) / 86400) : 0;
   const longTrend = ema50 > 0 && ema200 > 0 && current > ema50 && ema50 > ema200;
   const shortTrend = ema50 > 0 && ema200 > 0 && current < ema50 && ema50 < ema200;
-  const bullishTiming = ema15m > 0 && Number(intraday[intraday.length - 1]?.close || current) >= ema15m;
-  const bearishTiming = ema15m > 0 && Number(intraday[intraday.length - 1]?.close || current) <= ema15m;
+  const bullishTiming = ema4h > 0 && Number(intraday[intraday.length - 1]?.close || current) >= ema4h;
+  const bearishTiming = ema4h > 0 && Number(intraday[intraday.length - 1]?.close || current) <= ema4h;
   const distanceToEma20 = ema20 > 0 && current > 0 ? Math.abs(current - ema20) : 0;
   const nearPullback = atr14 > 0 && distanceToEma20 <= atr14 * 1.35;
   const rollRisk = daysToExpiry < 5;
@@ -2147,14 +2960,14 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
     ema20: +ema20.toFixed(4),
     ema50: +ema50.toFixed(4),
     ema200: +ema200.toFixed(4),
-    ema15m: +ema15m.toFixed(4),
+    ema4h: +ema4h.toFixed(4),
     atr14: +atr14.toFixed(4),
     annualizedSpreadPct: Number(row.annualizedSpreadPct || 0),
     indicativeSpread: Number(row.indicativeSpread || 0),
     daysToExpiry: +daysToExpiry.toFixed(1),
     depthConfirmed: !!row.depthConfirmed,
     trendLabel: longTrend ? 'Bull trend' : shortTrend ? 'Bear trend' : 'Range / transition',
-    timingLabel: !intraday.length ? '15m timing queued for leaders' : bullishTiming && longTrend ? '15m bullish confirmation' : bearishTiming && shortTrend ? '15m bearish confirmation' : '15m timing not confirmed',
+    timingLabel: !intraday.length ? '4H timing queued for leaders' : bullishTiming && longTrend ? '4H bullish confirmation' : bearishTiming && shortTrend ? '4H bearish confirmation' : '4H timing not confirmed',
     rollRisk,
    },
    checks: {
@@ -2200,7 +3013,7 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
   const timingSymbols = new Set(rows.filter(row => !row.raw?.rollRisk && row.direction !== 'neutral').slice(0, 3).map(row => row.symbol));
   for (const input of analysisInputs.filter(item => timingSymbols.has(item.row.nearFuture?.tradingSymbol || item.row.symbol))) {
    try {
-    const intradayResponse = await getCandles({ instrument: input.row.nearFuture, symbol: input.row.nearFuture?.tradingSymbol, resolution: '15m', start: intradayStart, end: nowMs, timeoutMs: 45000 });
+    const intradayResponse = await getCandles({ instrument: input.row.nearFuture, symbol: input.row.nearFuture?.tradingSymbol, resolution: '4h', start: intradayStart, end: nowMs, timeoutMs: 45000 });
     if (!intradayResponse.ok || !(intradayResponse.rows || []).length) continue;
     const revised = buildCommodityLabRow(input.row, input.daily, intradayResponse.rows || [], nowMs);
     rows = rows.map(row => row.symbol === revised.symbol ? revised : row);
@@ -2229,7 +3042,7 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
      timedCandidates: timingSymbols.size,
     },
    },
-   methodology: 'Trend uses rolling front-month daily candles requested with expiryCode 0; entry timing uses the active near future 15-minute chart; spread uses near versus next active futures. Manual review only.',
+   methodology: 'Trend uses rolling front-month daily candles requested with expiryCode 0; entry timing uses the active near future 4H chart; spread uses near versus next active futures. Manual review only.',
   };
   commodityAnalysisCache = { key: cacheKey, fetchedAt: Date.now(), response };
   return response;
@@ -2238,7 +3051,7 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
  async function getCandles(message = {}) {
   const instrument = message.instrument && typeof message.instrument === 'object' ? message.instrument : await findInstrument(message.symbol || message.securityId);
   if (!instrument) return { ok: false, status: 404, error: 'Instrument/security ID was not found in the local market-data cache.' };
-  const resolution = normalizeResolution(message.resolution || '15m');
+  const resolution = normalizeResolution(message.resolution || '4h');
   const endMs = Number(message.end || 0) > 1000000000000 ? Number(message.end) : (Number(message.end || 0) > 0 ? Number(message.end) * 1000 : Date.now());
   const requestedStartMs = Number(message.start || 0) > 1000000000000 ? Number(message.start) : (Number(message.start || 0) > 0 ? Number(message.start) * 1000 : endMs - (resolution.kind === 'historical' ? 730 * 86400000 : 30 * 86400000));
   const intradayEarliestMs = endMs - (DHAN_INTRADAY_MAX_HISTORY_DAYS * DAY_MS);
@@ -2256,6 +3069,15 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
    ? buildIntradayChunks(startMs, endMs, Number(message.chunkDays || DHAN_INTRADAY_CHUNK_DAYS))
    : [{ startMs, endMs }];
   const chunks = [];
+  const currentCooldownMs = Math.max(0, candleBlockedUntil - Date.now());
+  if (currentCooldownMs > 0 && message.failFastOnRateLimit === true) {
+   return {
+    ok: false,
+    status: 429,
+    retryAfterMs: currentCooldownMs,
+    error: `Chart data is cooling down after a Dhan rate-limit warning. Retry in ${Math.max(1, Math.ceil(currentCooldownMs / 1000))} seconds.`,
+   };
+  }
   for (const range of ranges) {
    const body = {
     ...baseBody,
@@ -2276,6 +3098,14 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
     const backoffMs = DHAN_CANDLE_RATE_LIMIT_BACKOFF_MS * (attempt + 1);
     candleBlockedUntil = Math.max(candleBlockedUntil, Date.now() + backoffMs);
     nextCandleRequestAt = Math.max(nextCandleRequestAt, candleBlockedUntil);
+    if (message.failFastOnRateLimit === true) {
+     return {
+      ...response,
+      status: 429,
+      retryAfterMs: Math.max(0, candleBlockedUntil - Date.now()),
+      error: `Chart data is cooling down after a Dhan rate-limit warning. Retry in ${Math.max(1, Math.ceil(Math.max(0, candleBlockedUntil - Date.now()) / 1000))} seconds.`,
+     };
+    }
     if (attempt < DHAN_CANDLE_MAX_RETRIES) await sleep(backoffMs);
    }
    if (!response.ok) {
@@ -2309,7 +3139,7 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
     securityId: String(instrument.securityId || ''),
     exchangeSegment: String(instrument.exchangeSegment || ''),
     instrument: String(instrument.instrument || ''),
-    resolution: message.resolution || '15m',
+    resolution: message.resolution || '4h',
     endpoint,
    },
   };
@@ -2686,6 +3516,9 @@ async function testConnection() {
   if (action === 'ohlc') return getMarketFeed(message, '/marketfeed/ohlc');
    if (action === 'fno_carry') return getFnoCarry(message);
    if (action === 'commodity_snapshot') return getCommoditySnapshot(message);
+   if (action === 'commodity_spread_scanner') return getCommoditySpreadScanner(message);
+   if (action === 'commodity_spread_chart') return getCommoditySpreadChart(message);
+   if (action === 'commodity_spread_quotes') return getCommoditySpreadQuotes(message);
    if (action === 'commodity_margin_preview') return getCommodityMarginPreview(message);
    if (action === 'commodity_spread_history') return getCommoditySpreadHistory(message);
    if (action === 'commodity_analysis') return getCommodityAnalysis(message);
@@ -2709,17 +3542,27 @@ module.exports = {
   buildFnoStockUniverse,
   buildFnoCarryContracts,
   buildCommodityFuturePairs,
+  buildCommoditySpreadPairs,
+  buildCommoditySpreadCandles,
+  clipCommoditySpreadRowsForPair,
+  analyzeCommoditySpreadCandles,
+  commoditySpreadCostEstimate,
+  commoditySpreadSafeguards,
   buildCommoditySpreadHistory,
   commodityPriceMultiplier,
+  commodityMatchedLotRatio,
   parseDerivativeExpiryMs,
   buildUniverseCatalog,
   normalizeUniverseId,
   isNseEquityInstrument,
+  isBseEquityInstrument,
   buildIntradayChunks,
   getNseBseMarketSession,
   mergeCandleRows,
   aggregateCandleRows,
   normalizeDhanCandles,
+  dhanErrorMessage,
+  isDhanNoHistoricalDataResponse,
   groupQuoteBatch,
   flattenInstrumentGroups,
   mergeDhanFeedResponses,

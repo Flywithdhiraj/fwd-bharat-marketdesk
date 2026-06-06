@@ -26,7 +26,7 @@
  }
 
  function signalTimeframe(signal = {}) {
-  return lower(signal.timeframe || signal.tf2 || signal.lower?.label || '15m') || '15m';
+  return lower(signal.timeframe || signal.tf2 || signal.lower?.label || '4h') || '4h';
  }
 
  function signalRegime(signal = {}, context = {}) {
