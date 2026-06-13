@@ -34,7 +34,8 @@
 
  function formatPrice(value = 0) {
  const numeric = Number(value || 0);
- if (!Number.isFinite(numeric) || numeric <= 0) return '-';
+ if (!Number.isFinite(numeric)) return '-';
+ if (numeric === 0) return '0';
  if (Math.abs(numeric) >= 1000) return numeric.toFixed(2).replace(/\.00$/, '');
  if (Math.abs(numeric) >= 1) return numeric.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
  return numeric.toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
@@ -228,7 +229,7 @@
 
  function addPriceLine(priceSeries, line = {}, color = COLORS.text) {
  const price = Number(line.price || line.zoneLow || line.zoneHigh || 0);
- if (!priceSeries || !(price > 0)) return;
+ if (!priceSeries || !Number.isFinite(price) || (!line.allowSigned && !(price > 0))) return;
  priceSeries.createPriceLine({
  price,
  color,
@@ -1386,7 +1387,8 @@ ${tooltip}
 
  const chart = globalThis.LightweightCharts.createChart(container, createBaseOptions(container));
  const indicatorApi = globalThis.FWDTradeDeskIndicators;
- const candles = indicatorApi?.normalizeCandles(payload.dataset?.candles || []) || [];
+ const allowSigned = payload.dataset?.signedPriceSeries === true;
+ const candles = indicatorApi?.normalizeCandles(payload.dataset?.candles || [], { allowSigned }) || [];
  const visibleTimes = new Set((payload.model?.candles || []).map(candle => toTime(candle.time)).filter(Boolean));
  const visibleCandles = candles
  .map(candle => ({
@@ -1410,7 +1412,7 @@ ${tooltip}
  });
  const preset = payload.presetMeta || {};
  const active = activeIndicators(state, preset);
- const indicators = payload.indicators || (needsIndicatorData(active) ? indicatorApi?.calculate(candles, payload.dataset?.studies || {}, { only: requestedIndicatorKeys(active), obvSmaLength: Number(state.indicators?.obvSmaLength || 100) || 100 }) : {}) || {};
+ const indicators = payload.indicators || (needsIndicatorData(active) ? indicatorApi?.calculate(candles, payload.dataset?.studies || {}, { only: requestedIndicatorKeys(active), obvSmaLength: Number(state.indicators?.obvSmaLength || 100) || 100, allowSigned }) : {}) || {};
  const readout = state.showReadout === true
  ? createReadout(container, candles, indicators)
  : { update() {} };
@@ -1455,6 +1457,16 @@ ${tooltip}
  ? visibleCandles.map(candle => ({ time: candle.time, value: candle.close }))
  : visibleCandles);
 
+ const spreadBands = payload.dataset?.spreadBands || null;
+ if (allowSigned && spreadBands && Array.isArray(spreadBands.mean) && spreadBands.mean.length === candles.length) {
+  addLine(chart, 'Spread Mean', lineData(candles, spreadBands.mean, visibleTimes), '#ffd277', 0, { lineWidth: 2, showTitle: true });
+  addLine(chart, '+1 SD', lineData(candles, spreadBands.upper1, visibleTimes), 'rgba(121, 221, 255, 0.72)', 0, { lineWidth: 1 });
+  addLine(chart, '-1 SD', lineData(candles, spreadBands.lower1, visibleTimes), 'rgba(121, 221, 255, 0.72)', 0, { lineWidth: 1 });
+  addLine(chart, '+2 SD', lineData(candles, spreadBands.upper2, visibleTimes), 'rgba(255, 93, 122, 0.62)', 0, { lineWidth: 1 });
+  addLine(chart, '-2 SD', lineData(candles, spreadBands.lower2, visibleTimes), 'rgba(29, 233, 182, 0.62)', 0, { lineWidth: 1 });
+  addPriceLine(priceSeries, { price: 0, label: 'Zero spread', allowSigned: true }, 'rgba(255, 210, 119, 0.72)');
+ }
+
  const compareData = state.compareWithIndex !== false
  ? indexComparisonData(candles, payload.indexComparison?.candles || [], visibleTimes)
  : [];
@@ -1494,9 +1506,9 @@ ${tooltip}
  }
 
  if (active.ema) {
- if (active.ema9) addLine(chart, 'EMA 9', lineData(candles, indicators.ema9, visibleTimes, { positiveOnly: true }), COLORS.ema9, 0, { ...indicatorLabelOptions, lineWidth: 2 });
- if (active.ema30) addLine(chart, 'EMA 30', lineData(candles, indicators.ema30, visibleTimes, { positiveOnly: true }), COLORS.ema30, 0, { ...indicatorLabelOptions, lineWidth: 3 });
- if (active.ema100) addLine(chart, 'EMA 100', lineData(candles, indicators.ema100, visibleTimes, { positiveOnly: true }), COLORS.ema100, 0, { ...indicatorLabelOptions, lineWidth: 4 });
+ if (active.ema9) addLine(chart, 'EMA 9', lineData(candles, indicators.ema9, visibleTimes, { positiveOnly: !allowSigned }), COLORS.ema9, 0, { ...indicatorLabelOptions, lineWidth: 2 });
+ if (active.ema30) addLine(chart, 'EMA 30', lineData(candles, indicators.ema30, visibleTimes, { positiveOnly: !allowSigned }), COLORS.ema30, 0, { ...indicatorLabelOptions, lineWidth: 3 });
+ if (active.ema100) addLine(chart, 'EMA 100', lineData(candles, indicators.ema100, visibleTimes, { positiveOnly: !allowSigned }), COLORS.ema100, 0, { ...indicatorLabelOptions, lineWidth: 4 });
  }
  if (active.sma) {
  addLine(chart, 'SMA 20', lineData(candles, indicators.sma20, visibleTimes, { positiveOnly: true }), COLORS.sma20, 0, { ...indicatorLabelOptions, lineWidth: 1 });
@@ -1581,7 +1593,14 @@ ${tooltip}
  shape: marker.shape || 'circle',
  text: String(marker.label || '').slice(0, 18),
  })).filter(marker => marker.time);
- const allMarkers = [...replayMarkers, ...intelligenceMarkers];
+ const spreadRollMarkers = (payload.dataset?.spreadRollEvents || []).map(marker => ({
+  time: toTime(marker.time),
+  position: 'aboveBar',
+  color: COLORS.signal,
+  shape: 'square',
+  text: String(marker.label || 'Roll').slice(0, 18),
+ })).filter(marker => marker.time);
+ const allMarkers = [...replayMarkers, ...intelligenceMarkers, ...spreadRollMarkers];
  if (allMarkers.length && globalThis.LightweightCharts.createSeriesMarkers) {
  globalThis.LightweightCharts.createSeriesMarkers(priceSeries, allMarkers);
  }

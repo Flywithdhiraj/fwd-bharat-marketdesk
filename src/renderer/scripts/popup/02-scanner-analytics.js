@@ -25,6 +25,145 @@ function isScannerUiActive(data = {}) {
  return !!data.scanActive && !failedStatus && !completedStatus;
 }
 
+let selectedScannerSymbol = '';
+let scannerVisibleRows = [];
+let scannerWatchSet = new Set();
+
+function scannerSignalName(signal = {}) {
+ return String(signal.instrumentDescription || signal.description || signal.name || signal.assetDisplayName || normalizeSectorLabel(signal.sector || getSector(signal.symbol)) || 'NSE/BSE equity').trim();
+}
+
+function scannerSignalStop(signal = {}) {
+ return Number(signal.stop ?? signal.sl ?? signal.stopLoss ?? signal.riskTemplate?.stop ?? 0);
+}
+
+function scannerSignalEntry(signal = {}) {
+ return Number(signal.entry ?? signal.price ?? 0);
+}
+
+function scannerSignalVolumeRatio(signal = {}) {
+ return Number(signal.daily?.volumeRatio ?? signal.volumeRatio ?? signal.volumeExpansion ?? (signal.spike ? 2 : 0));
+}
+
+function scannerSignalRelativeStrength(signal = {}) {
+ return Number(signal.marketLeadership?.rsComposite ?? signal.relativeStrength ?? signal.rsComposite ?? signal.tradeQuality?.score ?? 0);
+}
+
+function buildInspectorSparkline(values = []) {
+ const data = Array.isArray(values) ? values.map(Number).filter(Number.isFinite) : [];
+ if (data.length < 2) return '<div class="scanner-evidence-empty"><span>Chart context</span><strong>Waiting for candles</strong><p>Open the full chart for available market history.</p></div>';
+ const width = 280;
+ const height = 108;
+ const min = Math.min(...data);
+ const max = Math.max(...data);
+ const range = max - min || 1;
+ const points = data.map((value, index) => {
+  const x = (index / (data.length - 1)) * width;
+  const y = 8 + (1 - ((value - min) / range)) * (height - 16);
+  return `${x.toFixed(1)},${y.toFixed(1)}`;
+ }).join(' ');
+ const positive = data[data.length - 1] >= data[0];
+ const color = positive ? '#64b98e' : '#cc756c';
+ return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Recent price trend">
+ <line x1="0" y1="${height * .25}" x2="${width}" y2="${height * .25}" stroke="rgba(216,224,211,.08)"/>
+ <line x1="0" y1="${height * .5}" x2="${width}" y2="${height * .5}" stroke="rgba(216,224,211,.08)"/>
+ <line x1="0" y1="${height * .75}" x2="${width}" y2="${height * .75}" stroke="rgba(216,224,211,.08)"/>
+ <polyline points="${points}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/>
+ </svg>`;
+}
+
+function renderScannerEvidence(signal = null, watchSet = scannerWatchSet) {
+ const panel = document.getElementById('scannerEvidencePanel');
+ const workspace = document.getElementById('scannerDecisionWorkspace');
+ if (!panel) return;
+ if (!signal) {
+  panel.innerHTML = `<div class="scanner-evidence-empty"><span>Decision inspector</span><strong>Select a signal</strong><p>Review qualification evidence, price structure, entry, invalidation, and recent signal context without leaving the queue.</p></div>`;
+  workspace?.classList.remove('inspector-open');
+  return;
+ }
+ const score = Number(signal.score || 0);
+ const tq = Number(signal.tradeQuality?.score || 0);
+ const entry = scannerSignalEntry(signal);
+ const stop = scannerSignalStop(signal);
+ const riskPct = entry > 0 && stop > 0 ? Math.abs((entry - stop) / entry) * 100 : 0;
+ const rs = scannerSignalRelativeStrength(signal);
+ const volumeRatio = scannerSignalVolumeRatio(signal);
+ const setup = String(signal.setupFamilyLabel || 'Mixed');
+ const status = score >= 75 ? 'Review now' : score >= 62 ? 'Developing setup' : 'Watch only';
+ const reasons = Array.isArray(signal.reasons) && signal.reasons.length
+  ? signal.reasons.slice(0, 5)
+  : [scannerWhyLine(signal, false)];
+ const isWatched = watchSet.has(signal.symbol);
+ panel.innerHTML = `<article class="scanner-inspector" data-inspector-symbol="${esc(signal.symbol || '')}">
+ <header class="scanner-inspector-head">
+  <button type="button" class="scanner-inspector-close" data-scanner-inspector-action="close" aria-label="Close decision inspector">Close</button>
+  <div class="scanner-inspector-kicker">${esc(setup)} opportunity</div>
+  <div class="scanner-inspector-symbol-row">
+   <div><div class="scanner-inspector-symbol">${esc(signal.symbol || '')}</div><div class="scanner-inspector-name">${esc(scannerSignalName(signal))}</div></div>
+   <div class="scanner-inspector-price">${scannerInr(signal.price || entry)}</div>
+  </div>
+  <div class="scanner-inspector-score-row">
+   <div class="scanner-inspector-score"><span>Score</span><strong>${score}</strong>/100</div>
+   <div class="scanner-inspector-status"><span>Status</span><strong>${esc(status)}</strong></div>
+  </div>
+ </header>
+ <section class="scanner-inspector-section">
+  <div class="scanner-inspector-section-title">Recent price structure</div>
+  <div class="scanner-inspector-chart">${buildInspectorSparkline(signal.sparkline)}</div>
+ </section>
+ <section class="scanner-inspector-section">
+  <div class="scanner-inspector-section-title">Evidence stack</div>
+  <div class="scanner-evidence-row"><span>Trend alignment</span><strong>${signal.mtfConfirmed ? 'MTF confirmed' : 'Developing'}</strong></div>
+  <div class="scanner-evidence-row ${rs < 60 ? 'warn' : ''}"><span>Relative strength</span><strong>${rs ? rs.toFixed(1) : '--'}</strong></div>
+  <div class="scanner-evidence-row ${volumeRatio < 1 ? 'warn' : ''}"><span>Volume confirmation</span><strong>${volumeRatio ? `${volumeRatio.toFixed(2)}x` : signal.spike ? 'Expansion' : '--'}</strong></div>
+  <div class="scanner-evidence-row ${tq < 60 ? 'warn' : ''}"><span>Trade quality</span><strong>${tq || '--'}/100</strong></div>
+  <div class="scanner-evidence-row ${riskPct > 8 ? 'warn' : ''}"><span>Risk distance</span><strong>${riskPct ? `${riskPct.toFixed(1)}%` : '--'}</strong></div>
+ </section>
+ <section class="scanner-inspector-section">
+  <div class="scanner-risk-grid">
+   <div class="scanner-risk-block"><span>Entry reference</span><strong>${entry ? scannerInr(entry) : '--'}</strong></div>
+   <div class="scanner-risk-block invalid"><span>Invalidation</span><strong>${stop ? scannerInr(stop) : '--'}</strong></div>
+  </div>
+ </section>
+ <div class="scanner-inspector-actions">
+  <button type="button" class="ui-btn ui-btn--primary" data-scanner-inspector-action="chart">Open chart</button>
+  <button type="button" class="ui-btn ui-btn--ghost" data-scanner-inspector-action="watch">${isWatched ? 'Remove watch' : 'Add to watchlist'}</button>
+ </div>
+ <div class="scanner-inspector-safety">Analysis only. Orders stay with your broker.</div>
+ <section class="scanner-inspector-section">
+  <div class="scanner-inspector-section-title">Why this is ranked</div>
+  <ul class="scanner-inspector-reasons">${reasons.map(reason => `<li>${esc(String(reason))}</li>`).join('')}</ul>
+ </section>
+ </article>`;
+ panel.querySelector('[data-scanner-inspector-action="chart"]')?.addEventListener('click', () => {
+  globalThis.openSignalInChartWorkspace?.(signal);
+ });
+ panel.querySelector('[data-scanner-inspector-action="watch"]')?.addEventListener('click', async () => {
+  await toggleWatchlist(signal.symbol);
+  const data = await storeGet(['manualWatchlist', 'watchlist']);
+  scannerWatchSet = new Set(data.manualWatchlist || data.watchlist || []);
+  renderScannerEvidence(signal, scannerWatchSet);
+ });
+ panel.querySelector('[data-scanner-inspector-action="close"]')?.addEventListener('click', () => {
+  workspace?.classList.remove('inspector-open');
+  document.querySelector(`#cardList [data-sym="${CSS.escape(signal.symbol)}"]`)?.focus({ preventScroll: true });
+ });
+}
+
+function selectScannerSignal(signal = null, options = {}) {
+ if (!signal?.symbol) return;
+ selectedScannerSymbol = signal.symbol;
+ document.querySelectorAll('#cardList [data-sym]').forEach(row => {
+  const selected = row.dataset.sym === selectedScannerSymbol;
+  row.classList.toggle('scanner-row-selected', selected);
+  row.setAttribute('aria-selected', String(selected));
+  if (row.matches('.scanner-front-row, .scanner-compact-row')) row.tabIndex = selected ? 0 : -1;
+  if (selected && options.focus) row.focus({ preventScroll: !!options.preventScroll });
+ });
+ renderScannerEvidence(signal, scannerWatchSet);
+ if (options.openInspector) document.getElementById('scannerDecisionWorkspace')?.classList.add('inspector-open');
+}
+
 async function renderScanner(preloaded = null) {
   const d = preloaded ?? await storeGet(['scanResults', 'watchlist', 'manualWatchlist', 'autoWatchlist', 'decisionShortlist', 'alerts', 'analyticsPositions', 'scanStatus', 'scanActive', 'scanProgress', 'scanHeartbeat', 'lastScan', 'lastScanTs', 'strategy', 'marketIndex', 'sectorBreadth', 'scannerUniverseMeta', 'candleFetchStats']);
  const list = d.scanResults || [];
@@ -39,12 +178,16 @@ async function renderScanner(preloaded = null) {
  renderScannerInsightsRail(list);
  renderScannerSpotlightV2(list, liveAlerts, currentWatchlist, d.decisionShortlist || []);
  renderTradeTape(liveAlerts, list);
+ scannerWatchSet = new Set(currentWatchlist);
 
 
  if (!list.length) {
+ scannerVisibleRows = [];
+ selectedScannerSymbol = '';
  if (isScannerUiActive(d)) {
  cont.innerHTML = buildSkeletonMarkup(6, 'cards');
  strip.style.display = 'none';
+ renderScannerEvidence(null);
  return;
  }
 
@@ -53,6 +196,7 @@ async function renderScanner(preloaded = null) {
  <div class="es">Click <b>SCAN NOW</b> to scan liquid NSE/BSE symbols<br/>EMA+OBV+RSI+MACD+VWAP+VP &middot; MTF &middot; Sparklines</div></div>`;
 
  strip.style.display = 'none';
+ renderScannerEvidence(null);
 
  return;
 
@@ -160,7 +304,7 @@ function renderScannerFeedStatus(data = {}) {
  ? globalThis.FWDTradeDeskShared.formatThresholdSummary(marketIndex?.thresholds || {})
  : 'Execute >= 65 | Setup >= 60 | Watch >= 45');
  const autoWatchlist = Array.isArray(data?.autoWatchlist) ? data.autoWatchlist : [];
-  wrap.innerHTML = (globalThis.buildMarketDataStatusPills || (() => ''))([
+ wrap.innerHTML = (globalThis.buildMarketDataStatusPills || (() => ''))([
   { label: 'Universe', value: universeLabel, tone: ['all_nse', 'all_bse'].includes(String(data?.strategy?.scanUniverse || '').toLowerCase()) ? 'warn' : 'ok' },
   { label: 'Quotes', value: quoteReturned || quoteTotal ? `${quoteReturned || 0}/${quoteTotal || '?'}` : 'Waiting', tone: quoteReturned ? 'ok' : 'warn' },
   { label: 'Type', value: scanMode === 'penny_awakening' ? 'Penny Awakening' : 'Standard', tone: scanMode === 'penny_awakening' ? 'warn' : 'ok' },
@@ -177,6 +321,22 @@ function renderScannerFeedStatus(data = {}) {
  { label: 'Thresholds', value: thresholds, tone: scanActive ? 'warn' : 'ok' },
  { label: 'Last Scan', value: updated, tone: data?.lastScan ? 'ok' : 'fail' },
  ]);
+ const statusStrip = document.getElementById('scannerStatusStrip');
+ if (statusStrip) {
+  const durationSeconds = Number(universeMeta.durationMs || universeMeta.scanDurationMs || 0) / 1000;
+  const cacheTotal = cacheHits + apiFetches;
+  const cachePct = cacheTotal ? Math.round((cacheHits / cacheTotal) * 100) : 0;
+  const connectionLabel = scanActive ? 'Scanning' : data?.lastScan ? 'Data ready' : 'Waiting for scan';
+  statusStrip.innerHTML = `<span><kbd>/</kbd> Search</span>
+  <span><kbd>&uarr;</kbd><kbd>&darr;</kbd> Select</span>
+  <span><kbd>Enter</kbd> Open chart</span>
+  <span><kbd>W</kbd> Watchlist</span>
+  <span>Updated ${esc(updated)}</span>
+  <span>${durationSeconds ? `${durationSeconds.toFixed(1)}s scan` : 'Duration --'}</span>
+  <span>${cacheTotal ? `${cachePct}% candle cache` : 'Cache --'}</span>
+  <span>${esc(connectionLabel)}</span>
+  <span class="scanner-status-safety">Analysis only. Orders stay with your broker.</span>`;
+ }
 }
 
 function renderSectorBar(list = [], sectorBreadth = null) {
@@ -831,6 +991,8 @@ function buildScannerResultToolbar(filtered, visibleRows, viewMode, isChoppy, wa
  const shown = visibleRows.length;
  const total = filtered.length;
  const activeCount = filtered.filter(r => scannerActionTier(r, isChoppy) !== 'dimmed').length;
+ const executeCount = filtered.filter(r => scannerActionTier(r, isChoppy) === 'execute').length;
+ const developingCount = filtered.filter(r => ['setup', 'watch'].includes(scannerActionTier(r, isChoppy))).length;
  const notices = [];
  if (isChoppy && watchCount > 0) {
  notices.push(`<div class="scanner-notice warning"><strong>Choppy regime</strong><span>${watchCount} watch/setup signal${watchCount > 1 ? 's' : ''} dimmed; execute-quality names stay first.</span></div>`);
@@ -841,8 +1003,13 @@ function buildScannerResultToolbar(filtered, visibleRows, viewMode, isChoppy, wa
  const viewButton = (mode, label) => `<button class="scanner-view-btn ${viewMode === mode ? 'active' : ''}" type="button" data-scanner-view="${mode}" aria-pressed="${viewMode === mode}">${label}</button>`;
  return `<div class="scanner-result-head">
  <div class="scanner-result-copy">
- <strong>${shown} shown</strong>
- <span>${total} matched | ${activeCount} actionable view | ${watchCount} watch/setup</span>
+ <strong>Today's decision queue</strong>
+ <div class="scanner-decision-metrics" aria-label="Scanner result summary">
+  <span class="scanner-decision-metric"><strong>${executeCount}</strong><span>Actionable</span></span>
+  <span class="scanner-decision-metric"><strong>${developingCount}</strong><span>Developing</span></span>
+  <span class="scanner-decision-metric"><strong>${total}</strong><span>Matched</span></span>
+ </div>
+ <span>${shown} shown | ${activeCount} active | ${watchCount} watch/setup</span>
  </div>
  <div class="scanner-view-switch" role="group" aria-label="Scanner result view">
  ${viewButton('cards', 'Cards')}
@@ -878,6 +1045,7 @@ async function renderCards(list, cont, watchlist) {
  && typeof workspaceGroup !== 'undefined' && workspaceGroup === 'markets';
  const usePresetFilter = !desktopMarketsScanner && !!scannerPreset;
  const watchSet = new Set(wl);
+ scannerWatchSet = watchSet;
 
 
 
@@ -918,12 +1086,19 @@ async function renderCards(list, cont, watchlist) {
 
  if (!filtered.length) {
  cont.innerHTML = `<div class="empty"><div class="ei">SEARCH</div><div class="eh">No matches</div>
- <div class="es">Try different filters</div></div>`;
+ <div class="es">No symbols match the active filters. Clear search, direction, setup, or sector filters to widen the queue.</div></div>`;
+ scannerVisibleRows = [];
+ selectedScannerSymbol = '';
+ renderScannerEvidence(null);
  return;
  }
 
  const renderLimit = viewMode === 'compact' || viewMode === 'table' ? 300 : 120;
  const visibleRows = filtered.slice(0, renderLimit);
+ scannerVisibleRows = visibleRows;
+ if (!selectedScannerSymbol || !visibleRows.some(row => row.symbol === selectedScannerSymbol)) {
+  selectedScannerSymbol = visibleRows[0]?.symbol || '';
+ }
  const resultToolbar = buildScannerResultToolbar(filtered, visibleRows, viewMode, isChoppy, watchCount);
  const resultHtml = viewMode === 'compact'
  ? `<div class="scanner-table-wrap compact"><table class="scanner-compact-table"><thead><tr><th>Symbol</th><th>Action</th><th>Score</th><th title="Trade Quality">TQ</th><th>Setup</th><th>24H</th><th title="Funding Rate">FR</th><th>Vol</th></tr></thead><tbody>${visibleRows.map(r => buildCompactRow(r, watchSet.has(r.symbol), isChoppy)).join('')}</tbody></table></div>`
@@ -945,9 +1120,19 @@ async function renderCards(list, cont, watchlist) {
 
  el.addEventListener('click', e => {
  if (e.target.closest('.star-btn') || e.target.closest('[data-v16-card-action]') || e.target.closest('[data-scanner-view]')) return;
- if (match) openModal(match);
+ if (!match) return;
+ if (el.matches('.scanner-front-row, .scanner-compact-row')) {
+  selectScannerSignal(match, { openInspector: true });
+ } else {
+  openModal(match);
+ }
 
  });
+ if (el.matches('.scanner-front-row, .scanner-compact-row')) {
+  el.tabIndex = el.dataset.sym === selectedScannerSymbol ? 0 : -1;
+  el.setAttribute('role', 'row');
+  el.addEventListener('dblclick', () => match && openModal(match));
+ }
 
  });
 
@@ -1024,6 +1209,8 @@ async function renderCards(list, cont, watchlist) {
  renderSectorBar(d.scanResults || [], d.sectorBreadth || null);
  });
  });
+ const selected = visibleRows.find(row => row.symbol === selectedScannerSymbol) || visibleRows[0] || null;
+ if (selected) selectScannerSignal(selected);
 
  });
 
@@ -1069,29 +1256,39 @@ function buildCompactRow(r, isPinned, isChoppyRegime = false) {
 function buildScannerTable(rows, watchSet, isChoppyRegime = false) {
  return `<div class="scanner-table-wrap"><table class="scanner-front-table">
  <thead><tr>
- <th>Symbol</th><th>Action</th><th>Score</th><th title="Trade Quality">TQ</th><th>Setup</th><th>24H</th><th title="Funding Rate">FR</th><th>Volume</th><th>Why shown</th>
+ <th>#</th><th>Symbol</th><th>Direction</th><th>Setup</th><th>Score</th><th title="Trade Quality">TQ</th><th>Trend</th><th title="Relative strength">RS</th><th title="Volume expansion">Vol exp</th><th>24H</th><th title="Funding Rate">FR</th><th>Volume</th><th>Entry</th><th>Invalidation</th><th>Freshness</th>
  </tr></thead>
- <tbody>${rows.map(r => {
+ <tbody>${rows.map((r, index) => {
  const assetInfo = resolveScannerAssetInfo(r);
  const isRwa = isRwaScannerAsset(assetInfo);
  const score = Number(r.score || 0);
- const tq = Number(r.tradeQuality?.score || 0);
- const ch = Number(r.change24h || 0);
- const fr = Number(r.fundingRate || 0);
  const tier = scannerActionTier(r, isChoppyRegime);
- const dirClass = r.direction?.includes('short') ? 'short' : r.direction?.includes('watch') ? 'watch' : 'long';
- const frClass = fr > 0 ? 'funding-pos' : fr < 0 ? 'funding-neg' : '';
  const age = r.ts ? timeAgo(r.ts) : '';
- return `<tr class="scanner-front-row ${tier === 'dimmed' ? 'regime-dimmed' : ''} ${isRwa ? 'scanner-rwa-row' : ''}" data-sym="${esc(r.symbol)}">
- <td><strong>${esc(r.symbol || '')}</strong>${isRwa ? `<span class="scanner-rwa-mini">RWA</span>` : ''}${watchSet.has(r.symbol) ? '<span class="table-pin">PIN</span>' : ''}${age ? `<small>${age}</small>` : ''}</td>
- <td><span class="card-dir ${dirClass}">${esc(scannerDirectionLabel(r.direction))}</span></td>
- <td><span class="table-score">${score}/100</span></td>
+ const tq = Number(r.tradeQuality?.score || 0);
+ const change = Number(r.change24h || 0);
+ const funding = Number(r.fundingRate || 0);
+ const dirClass = r.direction?.includes('short') ? 'short' : r.direction?.includes('watch') ? 'watch' : 'long';
+ const rs = scannerSignalRelativeStrength(r);
+ const volumeRatio = scannerSignalVolumeRatio(r);
+ const entry = scannerSignalEntry(r);
+ const stop = scannerSignalStop(r);
+ const trend = buildSparklineSVG(r.sparkline, r.direction);
+ return `<tr class="scanner-front-row ${tier === 'dimmed' ? 'regime-dimmed' : ''} ${isRwa ? 'scanner-rwa-row' : ''} ${selectedScannerSymbol === r.symbol ? 'scanner-row-selected' : ''}" data-sym="${esc(r.symbol)}" aria-selected="${selectedScannerSymbol === r.symbol}">
+ <td class="scanner-rank-cell">${index + 1}</td>
+ <td class="scanner-symbol-cell" title="${esc(scannerWhyLine(r, isChoppyRegime))}"><strong>${esc(r.symbol || '')}</strong>${isRwa ? `<span class="scanner-rwa-mini">RWA</span>` : ''}${watchSet.has(r.symbol) ? '<span class="table-pin">PIN</span>' : ''}<small>${esc(scannerSignalName(r))}</small></td>
+ <td><span class="card-dir ${dirClass}">${esc(scannerDirectionLabel(r.direction, true))}</span></td>
+ <td><span class="scanner-setup-label">${esc(String(r.setupFamilyLabel || 'Mixed'))}</span></td>
+ <td><span class="table-score">${score}</span></td>
  <td>${tq || '--'}</td>
- <td>${esc(String(r.setupFamilyLabel || 'Mixed'))}</td>
- <td class="${ch >= 0 ? 'up' : 'dn'}">${ch >= 0 ? '+' : ''}${ch.toFixed(2)}%</td>
- <td class="${frClass}">${fr !== 0 ? `${fr > 0 ? '+' : ''}${fr.toFixed(4)}%` : '--'}</td>
+ <td><div class="scanner-trend-spark">${trend || '--'}</div></td>
+ <td>${rs ? rs.toFixed(1) : '--'}</td>
+ <td>${volumeRatio ? `${volumeRatio.toFixed(2)}x` : r.spike ? 'Expansion' : '--'}</td>
+ <td class="${change >= 0 ? 'up' : 'dn'}">${change >= 0 ? '+' : ''}${change.toFixed(2)}%</td>
+ <td class="${funding > 0 ? 'funding-pos' : funding < 0 ? 'funding-neg' : ''}">${funding ? `${funding > 0 ? '+' : ''}${funding.toFixed(4)}%` : '--'}</td>
  <td>${fmtLarge(r.volume24h)}</td>
- <td class="scanner-why-cell">${esc(scannerWhyLine(r, isChoppyRegime))}</td>
+ <td>${entry ? scannerInr(entry) : '--'}</td>
+ <td>${stop ? scannerInr(stop) : '--'}</td>
+ <td>${age || 'Now'}</td>
  </tr>`;
  }).join('')}</tbody>
  </table></div>`;
@@ -1581,6 +1778,46 @@ document.addEventListener('click', async (e) => {
 document.addEventListener('change', async (e) => {
  if (e.target?.id !== 'fSetup') return;
  scheduleScannerFilterRefresh();
+});
+
+document.addEventListener('keydown', async event => {
+ const pane = document.getElementById('pane-scanner');
+ if (!pane?.classList.contains('active')) return;
+ const target = event.target;
+ const isEditable = target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement || target?.isContentEditable;
+ const isInteractive = !!target?.closest?.('button, a, summary, [role="button"], [role="menuitem"], [contenteditable="true"]');
+ if (event.key === '/' && !isEditable) {
+  event.preventDefault();
+  document.getElementById('fSearch')?.focus();
+  return;
+ }
+ if (event.key === 'Escape') {
+  document.getElementById('scannerDecisionWorkspace')?.classList.remove('inspector-open');
+  return;
+ }
+ if (isEditable || isInteractive || !scannerVisibleRows.length) return;
+ const currentIndex = Math.max(0, scannerVisibleRows.findIndex(row => row.symbol === selectedScannerSymbol));
+ if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+  event.preventDefault();
+  const delta = event.key === 'ArrowDown' ? 1 : -1;
+  const nextIndex = Math.max(0, Math.min(scannerVisibleRows.length - 1, currentIndex + delta));
+  selectScannerSignal(scannerVisibleRows[nextIndex], { focus: true });
+  return;
+ }
+ const selected = scannerVisibleRows[currentIndex] || scannerVisibleRows[0];
+ if (!selected) return;
+ if (event.key === 'Enter') {
+  event.preventDefault();
+  await globalThis.openSignalInChartWorkspace?.(selected);
+  return;
+ }
+ if (event.key.toLowerCase() === 'w') {
+  event.preventDefault();
+  await toggleWatchlist(selected.symbol);
+  const data = await storeGet(['manualWatchlist', 'watchlist']);
+  scannerWatchSet = new Set(data.manualWatchlist || data.watchlist || []);
+  renderScannerEvidence(selected, scannerWatchSet);
+ }
 });
 
 

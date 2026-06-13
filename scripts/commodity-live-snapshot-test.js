@@ -116,6 +116,59 @@ async function main() {
   error: spreadChart.error || '',
  }, null, 2));
  if (!spreadChart.ok || !(spreadChart.candles || []).length) throw new Error(spreadChart.error || 'Synthetic commodity spread chart returned no candles.');
+ const silvermic = rows.find(row => row.symbol === 'SILVERMIC' && row.nearFuture && row.nextFuture);
+ if (!silvermic) throw new Error('SILVERMIC active near/next futures were not found in the MCX snapshot.');
+ const silvermicDaily = await service.handle({
+  action: 'commodity_spread_continuous_chart',
+  underlying: 'SILVERMIC',
+  resolution: '1d',
+  view: 'continuous',
+  force: true,
+ });
+ const validActions = new Set(['BUY_SPREAD', 'SELL_SPREAD', 'WAIT']);
+ console.log(JSON.stringify({
+  silvermicDailyOk: silvermicDaily.ok,
+  dailyPoints: Array.isArray(silvermicDaily.points) ? silvermicDaily.points.length : 0,
+  action: silvermicDaily.action || '',
+  regime: silvermicDaily.regime || '',
+  confidence: silvermicDaily.confidence || '',
+  sourceQuality: silvermicDaily.sourceQuality || {},
+  rollEvents: Array.isArray(silvermicDaily.rollEvents) ? silvermicDaily.rollEvents.length : 0,
+  blockers: silvermicDaily.blockers || [],
+  error: silvermicDaily.error || '',
+ }, null, 2));
+ if (
+  !silvermicDaily.ok
+  || !(silvermicDaily.points || []).length
+  || silvermicDaily.chartType !== 'line'
+  || !validActions.has(silvermicDaily.action)
+  || !silvermicDaily.coverage
+  || !silvermicDaily.sourceQuality
+  || (silvermicDaily.action === 'WAIT' && !(silvermicDaily.blockers || []).length)
+ ) {
+  throw new Error(silvermicDaily.error || 'SILVERMIC continuous daily spread decision chart was incomplete.');
+ }
+ const silvermicHourly = await service.handle({
+  action: 'commodity_spread_continuous_chart',
+  underlying: 'SILVERMIC',
+  resolution: '1h',
+  view: 'continuous',
+ });
+ console.log(JSON.stringify({
+  silvermicHourlyOk: silvermicHourly.ok,
+  hourlyCandles: Array.isArray(silvermicHourly.candles) ? silvermicHourly.candles.length : 0,
+  chartType: silvermicHourly.chartType || '',
+  action: silvermicHourly.action || '',
+  error: silvermicHourly.error || '',
+ }, null, 2));
+ if (
+  !silvermicHourly.ok
+  || !(silvermicHourly.candles || []).length
+  || silvermicHourly.chartType !== 'candles'
+  || !validActions.has(silvermicHourly.action)
+ ) {
+  throw new Error(silvermicHourly.error || 'SILVERMIC synchronized hourly spread chart was incomplete.');
+ }
  const lab = await service.handle({ action: 'commodity_analysis', limit: 6, dailyDays: 1095, intradayDays: 90 });
  console.log(JSON.stringify({
   labOk: lab.ok,

@@ -553,6 +553,103 @@
 .commodity-spread-brief strong { font-size: 14px; letter-spacing: -.01em; }
 .commodity-spread-brief small { max-width: 44ch; color: var(--muted); font-size: 10px; line-height: 1.45; }
 
+.commodity-spread-backfill,
+.commodity-spread-action-card {
+ display: grid;
+ gap: 10px;
+ margin-bottom: 12px;
+ padding: 14px;
+ border: 1px solid rgba(132, 152, 172, .22);
+ border-radius: 7px;
+ background: rgba(5, 15, 16, .64);
+}
+
+.commodity-spread-backfill {
+ grid-template-columns: minmax(0, 1fr) auto;
+ align-items: center;
+}
+
+.commodity-spread-backfill span,
+.commodity-spread-action-card span {
+ display: block;
+ color: var(--muted);
+ font-size: 10px;
+ letter-spacing: .08em;
+ text-transform: uppercase;
+}
+
+.commodity-spread-backfill strong,
+.commodity-spread-action-card strong {
+ display: block;
+ margin-top: 4px;
+ color: var(--text);
+}
+
+.commodity-spread-backfill small,
+.commodity-spread-action-card small {
+ display: block;
+ margin-top: 4px;
+ color: var(--muted);
+}
+
+.commodity-spread-backfill.loading { border-color: rgba(255, 210, 119, .36); }
+.commodity-spread-backfill.ready { border-color: rgba(36, 218, 177, .34); }
+.commodity-spread-backfill.warn { border-color: rgba(255, 113, 133, .34); }
+
+.commodity-spread-action-card {
+ grid-template-columns: repeat(3, minmax(0, 1fr));
+ background: linear-gradient(135deg, rgba(18, 31, 43, .82), rgba(5, 15, 16, .7));
+}
+
+.commodity-spread-action-card.widening { border-color: rgba(36, 218, 177, .4); }
+.commodity-spread-action-card.narrowing { border-color: rgba(255, 113, 133, .4); }
+.commodity-spread-action-card.blocked { border-color: rgba(255, 210, 119, .32); }
+.commodity-spread-view-toggle { margin-top: 12px; }
+
+.commodity-spread-expiry-catalog {
+ margin: 12px 0;
+ border: 1px solid rgba(148, 163, 184, .18);
+ border-radius: 7px;
+ padding: 12px;
+ background: rgba(5, 15, 16, .64);
+}
+
+.commodity-spread-expiry-catalog > header {
+ display: flex;
+ align-items: flex-end;
+ justify-content: space-between;
+ gap: 12px;
+ margin-bottom: 9px;
+}
+
+.commodity-spread-expiry-catalog header span,
+.commodity-spread-expiry-catalog header small,
+.commodity-spread-expiry-catalog article small {
+ display: block;
+ color: var(--muted);
+ font-size: 10px;
+}
+
+.commodity-spread-expiry-catalog > div {
+ display: grid;
+ grid-template-columns: repeat(2, minmax(0, 1fr));
+ gap: 8px;
+}
+
+.commodity-spread-expiry-catalog article {
+ display: grid;
+ gap: 3px;
+ padding: 9px 10px;
+ border-radius: 6px;
+ background: rgba(18, 31, 43, .72);
+}
+
+.commodity-spread-expiry-catalog.loading,
+.commodity-spread-expiry-catalog.empty {
+ color: var(--muted);
+ font-size: 11px;
+}
+
 .commodity-spread-state-panel {
  display: grid;
  grid-template-columns: minmax(0, 1fr) auto;
@@ -1224,6 +1321,10 @@
 }
 
 @media (max-width: 1000px) {
+ .commodity-spread-action-card,
+ .commodity-spread-backfill {
+  grid-template-columns: 1fr;
+ }
  .commodity-head {
   display: grid;
  }

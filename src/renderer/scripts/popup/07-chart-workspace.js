@@ -40,17 +40,21 @@
  let chartRuntimeCache = {};
  let chartPersistentCacheCleared = false;
  const RESOLUTIONS = Object.freeze(['4h', '1d', '1w']);
+ const SUPPORTED_RESOLUTIONS = Object.freeze(['1h', ...RESOLUTIONS]);
  const RESOLUTION_LABELS = Object.freeze({
+ '1h': '1H',
  '4h': '4h',
  '1d': '1D',
  '1w': '1W',
  });
  const TTL_MS = Object.freeze({
+ '1h': 600000,
  '4h': 1800000,
  '1d': 14400000,
  '1w': 43200000,
  });
  const DEFAULT_VISIBLE_COUNTS = Object.freeze({
+ '1h': 720,
  '4h': 520,
  '1d': 520,
  '1w': 520,
@@ -59,6 +63,7 @@
  const MAX_4H_HISTORY_CANDLES = 3000;
  const DEFAULT_OBV_SMA_LENGTH = 100;
  const FETCH_BUFFER_COUNTS = Object.freeze({
+ '1h': 180,
  '4h': 140,
  '1d': 140,
  '1w': 80,
@@ -574,9 +579,10 @@
  const next = String(value || '').trim().toLowerCase();
  if (next === 'w' || next === '1wk' || next === 'week' || next === 'weekly') return '1w';
  if (next === '1d') return '1d';
- if (next === '1h' || next === '60m' || next === '60' || next === '240') return '4h';
+ if (next === '1h' || next === '60m' || next === '60') return '1h';
+ if (next === '240') return '4h';
  if (next === '4h' || next === '1m' || next === '3m' || next === '5m' || next === '15') return '4h';
- return RESOLUTIONS.includes(next) ? next : '4h';
+ return SUPPORTED_RESOLUTIONS.includes(next) ? next : '4h';
 }
 
  function normalizePreset(value = '') {
@@ -776,7 +782,7 @@
 
 function resolutionStepMs(resolution = '4h') {
  const map = {
- '4h': 15 * 60 * 1000,
+ '1h': 60 * 60 * 1000,
  '4h': 4 * 60 * 60 * 1000,
  '1d': 24 * 60 * 60 * 1000,
  '1w': 7 * 24 * 60 * 60 * 1000,
@@ -1427,7 +1433,8 @@ function signalTimeframe(signal = {}, fallback = '4h') {
 
  function formatPrice(value = 0) {
  const numeric = Number(value || 0);
- if (!Number.isFinite(numeric) || numeric <= 0) return '-';
+ if (!Number.isFinite(numeric)) return '-';
+ if (numeric === 0) return '0';
  if (Math.abs(numeric) >= 1000) return numeric.toFixed(2).replace(/\.00$/, '');
  if (Math.abs(numeric) >= 1) return numeric.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
  return numeric.toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
@@ -2330,7 +2337,7 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  end: requirement.endMs || undefined,
  force: options.force === true,
  type: 'dhan_data',
- action: 'commodity_spread_chart',
+ action: 'commodity_spread_continuous_chart',
  })
  : { ok: false, error: 'Desktop market-data bridge is not available.' };
  if (!response?.ok) {
@@ -2353,7 +2360,17 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  keyLevels: null,
  fetchedAt: Date.now(),
  commoditySpread: response.pair || state.commoditySpread,
- spreadAnalysis: response.analysis || null,
+ signedPriceSeries: true,
+ spreadAnalysis: response.decision || response.analysis || null,
+ spreadDecision: response.decision || null,
+ spreadBands: response.bands || null,
+ spreadRollEvents: response.rollEvents || [],
+ spreadCoverage: response.coverage || null,
+ spreadSourceQuality: response.sourceQuality || null,
+ historyMode: response.historyMode || state.commoditySpread.view || 'continuous',
+ spreadExpiryCatalog: response.expiryCatalog || [],
+ spreadPairSnapshots: response.pairSnapshots || [],
+ chartType: response.chartType || (timeframe === '1d' ? 'line' : 'candles'),
  };
  }
  const requirement = resolutionCoverageRequirement(state);
@@ -3267,14 +3284,14 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  ) : false;
  const yearChanged = prev ? date.getUTCFullYear() !== prev.getUTCFullYear() : false;
  let label = '';
- if (timeframe === '4h') {
+ if (timeframe === '1h' || timeframe === '4h') {
  if (dayChanged) {
  label = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
  verticals.push({ leftPct, label });
  } else if (index % every === 0 || index === candles.length - 1) {
  label = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
  }
- } else if (timeframe === '4h') {
+ } else if (timeframe === '1d') {
  if (monthChanged || index % every === 0 || index === candles.length - 1) {
  label = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
  }
@@ -3800,7 +3817,7 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  function buildDeskChartPanel(panelKey, title, panelState = {}, dataset = {}, model = null, intelligence = null, state = {}, calculatedIndicators = {}) {
  const tf = normalizeTimeframe(panelState.timeframe || state.timeframe || '4h');
  const isFwdIndex = dataset?.syntheticIndex === true;
- const panelResolutions = isFwdIndex ? ['1d'] : RESOLUTIONS;
+ const panelResolutions = isFwdIndex ? ['1d'] : state.commoditySpread ? ['1h', ...RESOLUTIONS] : RESOLUTIONS;
  const statusText = !panelState.symbol
  ? 'Choose a symbol'
  : dataset?.ok
@@ -4066,6 +4083,7 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  function buildChartModel(dataset = {}, state = {}, strategy = {}, orderContext = null) {
  const candles = Array.isArray(dataset.candles) ? dataset.candles : [];
  if (!candles.length) return null;
+ const isSignedPriceSeries = dataset?.signedPriceSeries === true;
  const timeframe = normalizeTimeframe(state.timeframe || dataset.timeframe || '4h');
  const eventCandleTimes = getEventCandleTimes(candles, state);
  const chartCandles = eventCandleTimes.size
@@ -4075,6 +4093,7 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  const visibleCandles = visibleWindow.visibleCandles;
  if (!visibleCandles.length) return null;
  const isSyntheticIndex = dataset?.syntheticIndex === true;
+ const isCommoditySpread = dataset?.commoditySpread != null;
  const presetMeta = getPresetMeta(state.preset);
  const settings = {
  ...sanitizeKeyLevelSettings(dataset?.keyLevels?.config || strategy.keyLevelSettings || {}),
@@ -4087,7 +4106,7 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  const keyLevelCandles = visibleCandles.slice(-Math.min(visibleCandles.length, keyMemoryCount));
  const keyLevelAtr = chartAtrValue(keyLevelCandles, 14) || visibleAtr;
  const backendKeyZones = [];
- const fallbackKeyZones = !isSyntheticIndex && presetMeta.showKeyLevels ? detectVisiblePivotLevels(keyLevelCandles, keyLevelAtr, referencePrice, settings) : [];
+ const fallbackKeyZones = !isSyntheticIndex && !isCommoditySpread && presetMeta.showKeyLevels ? detectVisiblePivotLevels(keyLevelCandles, keyLevelAtr, referencePrice, settings) : [];
  const mergeTolerance = Math.max(referencePrice > 0 ? referencePrice * 0.0015 : 0, keyLevelAtr * 0.25);
  const visibleKeyZones = [];
  [...backendKeyZones, ...fallbackKeyZones].forEach(zone => {
@@ -4190,12 +4209,13 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  });
  chartLines.forEach(line => priceCandidates.push(Number(line.price || 0)));
  replayMarkers.forEach(marker => priceCandidates.push(Number(marker.price || 0)));
- const filteredPrices = priceCandidates.filter(value => Number.isFinite(value) && value > 0);
+ const filteredPrices = priceCandidates.filter(value => Number.isFinite(value) && (isSignedPriceSeries || value > 0));
+ if (!filteredPrices.length) return null;
  const minPrice = Math.min(...filteredPrices);
  const maxPrice = Math.max(...filteredPrices);
  const range = Math.max(1e-8, maxPrice - minPrice);
  const pad = range * 0.08;
- const chartMin = Math.max(1e-8, minPrice - pad);
+ const chartMin = isSignedPriceSeries ? minPrice - pad : Math.max(1e-8, minPrice - pad);
  const chartMax = maxPrice + pad;
  const width = 960;
  const height = 360;
@@ -4661,7 +4681,7 @@ function buildChartTabPicker(state = {}, options = {}) {
  const isTab = surface === SURFACE_TAB || isReview;
  const isAdvancedSurface = isDetached || isTab;
  const isFwdIndex = dataset?.syntheticIndex === true;
- const chartResolutions = isFwdIndex ? ['1d'] : RESOLUTIONS;
+ const chartResolutions = isFwdIndex ? ['1d'] : state.commoditySpread ? ['1h', ...RESOLUTIONS] : RESOLUTIONS;
  const statusClass = !state.symbol
  ? 'account-inline-note'
  : dataset?.ok
@@ -4915,6 +4935,15 @@ function buildChartTabPicker(state = {}, options = {}) {
  }
 
  function chartStateForDataset(state = {}, dataset = {}) {
+ if (dataset?.commoditySpread) {
+  return {
+   ...state,
+   chartType: dataset.chartType || (normalizeTimeframe(state.timeframe) === '1d' ? 'line' : 'candles'),
+   compareWithIndex: false,
+   showOrders: false,
+   intelligenceOverlays: false,
+  };
+ }
  if (!dataset?.syntheticIndex) return state;
  if (!dataset?.syntheticMetric) {
  const chartType = normalizeChartType(state.chartType || 'candles');
@@ -4947,7 +4976,8 @@ function buildChartTabPicker(state = {}, options = {}) {
  const chartState = chartStateForDataset(state, dataset);
  const model = dataset?.ok ? buildChartModel(dataset, chartState, strategy, orderContext) : null;
  const indicatorApi = globalThis.FWDTradeDeskIndicators;
- const normalizedCandles = indicatorApi?.normalizeCandles(dataset?.candles || []) || [];
+ const allowSigned = dataset?.signedPriceSeries === true;
+ const normalizedCandles = indicatorApi?.normalizeCandles(dataset?.candles || [], { allowSigned }) || [];
  const presetMeta = getPresetMeta(chartState.preset);
  const shouldBuildIntelligence = model
  && indicatorApi?.buildAdvancedChartIntelligence
@@ -4955,7 +4985,7 @@ function buildChartTabPicker(state = {}, options = {}) {
  && normalizePreset(chartState.preset) !== 'clean'
  && normalizePreset(chartState.preset) !== 'key';
  const indicators = normalizedCandles.length && indicatorApi?.calculate && (chartNeedsIndicators(chartState, presetMeta) || shouldBuildIntelligence)
- ? indicatorApi.calculate(normalizedCandles, dataset?.studies || {}, { only: requestedIndicatorKeys(chartState, presetMeta), obvSmaLength: sanitizeIndicatorState(chartState.indicators || {}).obvSmaLength })
+ ? indicatorApi.calculate(normalizedCandles, dataset?.studies || {}, { only: requestedIndicatorKeys(chartState, presetMeta), obvSmaLength: sanitizeIndicatorState(chartState.indicators || {}).obvSmaLength, allowSigned })
  : {};
  const intelligence = shouldBuildIntelligence
  ? indicatorApi.buildAdvancedChartIntelligence(normalizedCandles, indicators, {
@@ -5080,7 +5110,8 @@ function buildChartTabPicker(state = {}, options = {}) {
  const chartState = chartStateForDataset(state, dataset);
  const model = dataset?.ok ? buildChartModel(dataset, chartState, strategy, orderContext) : null;
  const indicatorApi = globalThis.FWDTradeDeskIndicators;
- const normalizedCandles = indicatorApi?.normalizeCandles(dataset?.candles || []) || [];
+ const allowSigned = dataset?.signedPriceSeries === true;
+ const normalizedCandles = indicatorApi?.normalizeCandles(dataset?.candles || [], { allowSigned }) || [];
  const presetMeta = getPresetMeta(chartState.preset);
  const shouldBuildIntelligence = model
  && indicatorApi?.buildAdvancedChartIntelligence
@@ -5088,7 +5119,7 @@ function buildChartTabPicker(state = {}, options = {}) {
  && normalizePreset(chartState.preset) !== 'clean'
  && normalizePreset(chartState.preset) !== 'key';
  const calculatedIndicators = normalizedCandles.length && indicatorApi?.calculate && (chartNeedsIndicators(chartState, presetMeta) || shouldBuildIntelligence)
- ? indicatorApi.calculate(normalizedCandles, dataset?.studies || {}, { only: requestedIndicatorKeys(chartState, presetMeta), obvSmaLength: sanitizeIndicatorState(chartState.indicators || {}).obvSmaLength })
+ ? indicatorApi.calculate(normalizedCandles, dataset?.studies || {}, { only: requestedIndicatorKeys(chartState, presetMeta), obvSmaLength: sanitizeIndicatorState(chartState.indicators || {}).obvSmaLength, allowSigned })
  : {};
  const intelligence = shouldBuildIntelligence
  ? indicatorApi.buildAdvancedChartIntelligence(normalizedCandles, calculatedIndicators, {

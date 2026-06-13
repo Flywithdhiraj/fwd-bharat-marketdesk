@@ -6,7 +6,8 @@
  return Number.isFinite(numeric) ? numeric : fallback;
  }
 
- function normalizeCandles(candles = []) {
+ function normalizeCandles(candles = [], options = {}) {
+ const allowSigned = options.allowSigned === true;
  return (Array.isArray(candles) ? candles : [])
  .map(candle => ({
  time: finiteNumber(candle?.time || candle?.t, 0),
@@ -16,7 +17,11 @@
  close: finiteNumber(candle?.close, 0),
  volume: finiteNumber(candle?.volume, 0),
  }))
- .filter(candle => candle.time > 0 && candle.open > 0 && candle.high > 0 && candle.low > 0 && candle.close > 0)
+ .filter(candle => candle.time > 0
+ && [candle.open, candle.high, candle.low, candle.close].every(Number.isFinite)
+ && (allowSigned || (candle.open > 0 && candle.high > 0 && candle.low > 0 && candle.close > 0))
+ && candle.high >= Math.max(candle.open, candle.close)
+ && candle.low <= Math.min(candle.open, candle.close))
  .sort((a, b) => a.time - b.time);
  }
 
@@ -545,8 +550,9 @@
  }
 
  function buildAdvancedChartIntelligence(candleInput = [], indicatorsInput = {}, context = {}) {
- const candles = normalizeCandles(candleInput);
- const indicators = indicatorsInput && typeof indicatorsInput === 'object' ? indicatorsInput : calculate(candles, context.dataset?.studies || {});
+ const allowSigned = context.dataset?.commoditySpread != null;
+ const candles = normalizeCandles(candleInput, { allowSigned });
+ const indicators = indicatorsInput && typeof indicatorsInput === 'object' ? indicatorsInput : calculate(candles, context.dataset?.studies || {}, { allowSigned });
  const model = context.model || {};
  const signal = context.signal || {};
  const marketIndex = context.marketIndex || {};
@@ -627,7 +633,7 @@
  }
 
  function calculate(candleInput = [], providedStudies = {}, options = {}) {
- const candles = normalizeCandles(candleInput);
+ const candles = normalizeCandles(candleInput, { allowSigned: options.allowSigned === true });
  const closes = candles.map(candle => candle.close);
  const only = Array.isArray(options.only) && options.only.length
  ? new Set(options.only.map(key => String(key || '').trim().toLowerCase()).filter(Boolean))

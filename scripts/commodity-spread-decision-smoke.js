@@ -1,0 +1,190 @@
+const assert = require('assert');
+const { __private } = require('../src/main/dhan-data-service');
+
+const {
+ buildCommoditySpreadClosePoints,
+ buildCommoditySynchronizedSpreadCandles,
+ buildCommoditySpreadRollEvents,
+ buildCommoditySpreadDecision,
+} = __private;
+
+function rowsFromCloses(closes = [], start = 1700000000, step = 86400) {
+ return closes.map((close, index) => ({
+  time: start + index * step,
+  open: close,
+  high: close + 1,
+  low: close - 1,
+  close,
+  volume: 1000 + index,
+  oi: 5000 + index,
+ }));
+}
+
+function snapshot(overrides = {}) {
+ return {
+  spread: 120,
+  wideningEntrySpread: 121,
+  narrowingEntrySpread: 119,
+  wideningDepth: true,
+  narrowingDepth: true,
+  depthConfirmed: true,
+  safeguards: { tradeAllowed: true, warnings: [] },
+  costs: {
+   valuePerSpreadPoint: 1,
+   fixedBrokerageAndGst: 94.4,
+   brokerageBreakevenPoints: 0.5,
+   wideningSlippagePoints: 0.2,
+   narrowingSlippagePoints: 0.2,
+  },
+  ...overrides,
+ };
+}
+
+const pair = {
+ firstRole: 'near',
+ secondRole: 'far',
+ firstInstrument: { expiry: '2026-12-31', securityId: '1' },
+ secondInstrument: { expiry: '2027-02-28', securityId: '2' },
+};
+
+{
+ const first = rowsFromCloses([100, 102, 99]);
+ const second = rowsFromCloses([90, 105, 101]);
+ const points = buildCommoditySpreadClosePoints(first, second);
+ assert.deepStrictEqual(points.map(row => row.close), [-10, 3, 2]);
+ assert(points.every(row => row.open === row.high && row.high === row.low && row.low === row.close));
+ console.log('PASS daily spread history is close-only and supports negative/zero-crossing values');
+}
+
+{
+ const first = rowsFromCloses([100, 101, 102, 103], 1700000000, 300);
+ const second = rowsFromCloses([110, 114, 111, 118], 1700000000, 300);
+ const hourly = buildCommoditySynchronizedSpreadCandles(first, second, 3600);
+ assert.strictEqual(hourly.length, 1);
+ assert.deepStrictEqual(
+  [hourly[0].open, hourly[0].high, hourly[0].low, hourly[0].close],
+  [10, 15, 9, 15]
+ );
+ console.log('PASS synchronized five-minute observations aggregate into honest hourly OHLC');
+}
+
+{
+ const first = rowsFromCloses([100, 999, 102], 1700000000, 300);
+ first[1].time = first[0].time;
+ const second = rowsFromCloses([110, 112], 1700000000, 600);
+ const hourly = buildCommoditySynchronizedSpreadCandles(first, second, 3600);
+ assert.strictEqual(hourly[0].synchronizedObservations, 2);
+ assert.deepStrictEqual(
+  [hourly[0].open, hourly[0].close],
+  [-889, 10]
+ );
+ console.log('PASS duplicate timestamps are de-duplicated and incomplete legs are skipped');
+}
+
+{
+ const points = rowsFromCloses([1, 2, 3, 4]).map((row, index) => ({
+  ...row,
+  firstOi: index < 2 ? 100 : 90,
+  secondOi: index < 2 ? 80 : 120,
+ }));
+ const events = buildCommoditySpreadRollEvents(points, {});
+ assert(events.some(event => event.type === 'liquidity_oi'));
+ console.log('PASS two-session OI crossover creates a liquidity roll signal');
+}
+
+{
+ const points = rowsFromCloses([1, 2, 3]).map((row, index) => ({
+  ...row,
+  firstOi: 0,
+  secondOi: 0,
+  firstVolume: index === 0 ? 100 : 90,
+  secondVolume: index === 0 ? 80 : 120,
+ }));
+ const events = buildCommoditySpreadRollEvents(points, {});
+ assert(events.some(event => event.type === 'liquidity_volume'));
+ console.log('PASS volume crossover is used when OI is unavailable');
+}
+
+{
+ const start = Math.floor(Date.parse('2026-06-20T00:00:00Z') / 1000);
+ const points = rowsFromCloses([1, 2, 3, 4, 5, 6, 7], start, 86400);
+ const events = buildCommoditySpreadRollEvents(points, {
+  firstInstrument: { expiry: '2026-06-28' },
+ });
+ assert(events.some(event => event.type === 'expiry_fallback' && event.time === start + 3 * 86400));
+ console.log('PASS five-calendar-day expiry fallback creates a forced roll marker');
+}
+
+{
+ const daily = rowsFromCloses(Array.from({ length: 130 }, (_, index) => 20 + index * 1.5));
+ const intraday = rowsFromCloses(Array.from({ length: 30 }, (_, index) => 100 + index), 1700000000, 3600);
+ const decision = buildCommoditySpreadDecision({ dailyRows: daily, intradayRows: intraday, pair, snapshot: snapshot({ spread: 214, wideningEntrySpread: 215 }) });
+ assert.strictEqual(decision.action, 'BUY_SPREAD');
+ assert.strictEqual(decision.regime, 'trend');
+ console.log('PASS widening trend produces BUY_SPREAD with synchronized confirmation');
+}
+
+{
+ const daily = rowsFromCloses(Array.from({ length: 130 }, (_, index) => 300 - index * 1.5));
+ const intraday = rowsFromCloses(Array.from({ length: 30 }, (_, index) => 100 - index), 1700000000, 3600);
+ const decision = buildCommoditySpreadDecision({ dailyRows: daily, intradayRows: intraday, pair, snapshot: snapshot({ spread: 106, narrowingEntrySpread: 105 }) });
+ assert.strictEqual(decision.action, 'SELL_SPREAD');
+ assert.strictEqual(decision.regime, 'trend');
+ console.log('PASS narrowing trend produces SELL_SPREAD with synchronized confirmation');
+}
+
+{
+ const base = Array.from({ length: 119 }, (_, index) => 100 + Math.sin(index / 3) * 4);
+ const daily = rowsFromCloses([...base, 82]);
+ const intraday = rowsFromCloses(Array.from({ length: 30 }, (_, index) => 80 + index * 0.5), 1700000000, 3600);
+ const decision = buildCommoditySpreadDecision({ dailyRows: daily, intradayRows: intraday, pair, snapshot: snapshot({ spread: 82, wideningEntrySpread: 83 }) });
+ assert.strictEqual(decision.regime, 'range');
+ assert.strictEqual(decision.action, 'BUY_SPREAD');
+ console.log('PASS unusually narrow range spread with reversal produces BUY_SPREAD');
+}
+
+{
+ const daily = rowsFromCloses(Array.from({ length: 130 }, (_, index) => 20 + index));
+ const intraday = rowsFromCloses(Array.from({ length: 30 }, (_, index) => 100 + index), 1700000000, 3600);
+ const blocked = buildCommoditySpreadDecision({
+  dailyRows: daily,
+  intradayRows: intraday,
+  pair,
+  snapshot: snapshot({
+   wideningEntrySpread: 150,
+   costs: {
+    valuePerSpreadPoint: 1,
+    fixedBrokerageAndGst: 94.4,
+    brokerageBreakevenPoints: 10000,
+    wideningSlippagePoints: 5000,
+    narrowingSlippagePoints: 5000,
+   },
+  }),
+ });
+ assert.strictEqual(blocked.action, 'WAIT');
+ assert(blocked.blockers.some(reason => /brokerage/i.test(reason)));
+ console.log('PASS cost edge blocks an otherwise directional spread');
+}
+
+{
+ const short = buildCommoditySpreadDecision({
+  dailyRows: rowsFromCloses(Array.from({ length: 40 }, (_, index) => index)),
+  intradayRows: [],
+  pair,
+  snapshot: snapshot(),
+ });
+ assert.strictEqual(short.action, 'WAIT');
+ assert(short.blockers.some(reason => /100 matched daily/i.test(reason)));
+ console.log('PASS insufficient history degrades to explainable WAIT');
+}
+
+{
+ const daily = rowsFromCloses(Array.from({ length: 130 }, (_, index) => 100 + Math.sin(index / 4)));
+ const intraday = rowsFromCloses(Array.from({ length: 30 }, (_, index) => 100 + Math.sin(index / 3)), 1700000000, 3600);
+ const neutral = buildCommoditySpreadDecision({ dailyRows: daily, intradayRows: intraday, pair, snapshot: snapshot() });
+ assert.strictEqual(neutral.action, 'WAIT');
+ assert(neutral.blockers.some(reason => /no trend or mean-reversion trigger/i.test(reason)));
+ console.log('PASS neutral WAIT includes a plain-language blocker');
+}
+
+console.log('Commodity spread decision smoke checks passed.');

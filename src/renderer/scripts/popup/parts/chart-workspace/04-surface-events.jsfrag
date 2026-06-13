@@ -87,6 +87,15 @@
  }
 
  function chartStateForDataset(state = {}, dataset = {}) {
+ if (dataset?.commoditySpread) {
+  return {
+   ...state,
+   chartType: dataset.chartType || (normalizeTimeframe(state.timeframe) === '1d' ? 'line' : 'candles'),
+   compareWithIndex: false,
+   showOrders: false,
+   intelligenceOverlays: false,
+  };
+ }
  if (!dataset?.syntheticIndex) return state;
  if (!dataset?.syntheticMetric) {
  const chartType = normalizeChartType(state.chartType || 'candles');
@@ -119,7 +128,8 @@
  const chartState = chartStateForDataset(state, dataset);
  const model = dataset?.ok ? buildChartModel(dataset, chartState, strategy, orderContext) : null;
  const indicatorApi = globalThis.FWDTradeDeskIndicators;
- const normalizedCandles = indicatorApi?.normalizeCandles(dataset?.candles || []) || [];
+ const allowSigned = dataset?.signedPriceSeries === true;
+ const normalizedCandles = indicatorApi?.normalizeCandles(dataset?.candles || [], { allowSigned }) || [];
  const presetMeta = getPresetMeta(chartState.preset);
  const shouldBuildIntelligence = model
  && indicatorApi?.buildAdvancedChartIntelligence
@@ -127,7 +137,7 @@
  && normalizePreset(chartState.preset) !== 'clean'
  && normalizePreset(chartState.preset) !== 'key';
  const indicators = normalizedCandles.length && indicatorApi?.calculate && (chartNeedsIndicators(chartState, presetMeta) || shouldBuildIntelligence)
- ? indicatorApi.calculate(normalizedCandles, dataset?.studies || {}, { only: requestedIndicatorKeys(chartState, presetMeta), obvSmaLength: sanitizeIndicatorState(chartState.indicators || {}).obvSmaLength })
+ ? indicatorApi.calculate(normalizedCandles, dataset?.studies || {}, { only: requestedIndicatorKeys(chartState, presetMeta), obvSmaLength: sanitizeIndicatorState(chartState.indicators || {}).obvSmaLength, allowSigned })
  : {};
  const intelligence = shouldBuildIntelligence
  ? indicatorApi.buildAdvancedChartIntelligence(normalizedCandles, indicators, {
@@ -252,7 +262,8 @@
  const chartState = chartStateForDataset(state, dataset);
  const model = dataset?.ok ? buildChartModel(dataset, chartState, strategy, orderContext) : null;
  const indicatorApi = globalThis.FWDTradeDeskIndicators;
- const normalizedCandles = indicatorApi?.normalizeCandles(dataset?.candles || []) || [];
+ const allowSigned = dataset?.signedPriceSeries === true;
+ const normalizedCandles = indicatorApi?.normalizeCandles(dataset?.candles || [], { allowSigned }) || [];
  const presetMeta = getPresetMeta(chartState.preset);
  const shouldBuildIntelligence = model
  && indicatorApi?.buildAdvancedChartIntelligence
@@ -260,7 +271,7 @@
  && normalizePreset(chartState.preset) !== 'clean'
  && normalizePreset(chartState.preset) !== 'key';
  const calculatedIndicators = normalizedCandles.length && indicatorApi?.calculate && (chartNeedsIndicators(chartState, presetMeta) || shouldBuildIntelligence)
- ? indicatorApi.calculate(normalizedCandles, dataset?.studies || {}, { only: requestedIndicatorKeys(chartState, presetMeta), obvSmaLength: sanitizeIndicatorState(chartState.indicators || {}).obvSmaLength })
+ ? indicatorApi.calculate(normalizedCandles, dataset?.studies || {}, { only: requestedIndicatorKeys(chartState, presetMeta), obvSmaLength: sanitizeIndicatorState(chartState.indicators || {}).obvSmaLength, allowSigned })
  : {};
  const intelligence = shouldBuildIntelligence
  ? indicatorApi.buildAdvancedChartIntelligence(normalizedCandles, calculatedIndicators, {

@@ -188,6 +188,8 @@ const DHAN_SCANNER_UNIVERSE_DEFINITIONS = Object.freeze([
 const DHAN_ORDER_DISABLED_ERROR = 'Order placement is disabled. Use your broker app or web terminal for manual trading.';
 const INSTRUMENT_CACHE_FILE = 'dhan-instruments-cache.json';
 const COMMODITY_CANDLE_CACHE_FILE = 'dhan-commodity-candle-cache.json';
+const COMMODITY_CONTRACT_ARCHIVE_FILE = 'dhan-commodity-contract-archive.json';
+const COMMODITY_SPREAD_HISTORY_FILE = 'dhan-commodity-spread-history.json';
 const INSTRUMENT_CACHE_VERSION = 5;
 const INSTRUMENT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const DHAN_QUOTE_BATCH_SIZE = 1000;
@@ -202,6 +204,21 @@ const COMMODITY_ANALYSIS_CACHE_TTL_MS = 15 * 60 * 1000;
 const COMMODITY_DAILY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const COMMODITY_INTRADAY_CACHE_TTL_MS = 10 * 60 * 1000;
 const COMMODITY_SPREAD_MAX_DAILY_LOOKBACK_DAYS = 120;
+const COMMODITY_SPREAD_DAILY_HISTORY_DAYS = 3 * 365;
+const COMMODITY_SPREAD_INTRADAY_HISTORY_DAYS = 90;
+const COMMODITY_SPREAD_HISTORY_VERSION = 1;
+const COMMODITY_SPREAD_MIN_DECISION_CANDLES = 100;
+const COMMODITY_SPREAD_FEATURED_UNDERLYINGS = Object.freeze([
+ 'SILVERMIC',
+ 'GOLD',
+ 'GOLDM',
+ 'SILVER',
+ 'SILVERM',
+ 'CRUDEOIL',
+ 'CRUDEOILM',
+ 'NATURALGAS',
+ 'NATGASMINI',
+]);
 const DHAN_FUTURES_BROKERAGE_PER_ORDER = 20;
 const GST_RATE = 0.18;
 const DHAN_OPTION_CHAIN_RATE_LIMIT_BACKOFF_MS = 60 * 1000;
@@ -866,6 +883,314 @@ function buildCommoditySpreadCandles(firstRows = [], secondRows = []) {
  }).filter(Boolean).sort((a, b) => a.time - b.time);
 }
 
+function buildCommoditySpreadClosePoints(firstRows = [], secondRows = []) {
+ const firstByTime = new Map((Array.isArray(firstRows) ? firstRows : [])
+  .filter(row => Number.isFinite(Number(row?.time)))
+  .map(row => [Number(row.time), row]));
+ const secondByTime = new Map((Array.isArray(secondRows) ? secondRows : []).map(row => [Number(row.time), row]));
+ return [...firstByTime.values()].map(first => {
+  const second = secondByTime.get(Number(first.time));
+  if (!second) return null;
+  const firstClose = Number(first.close);
+  const secondClose = Number(second.close);
+  if (!Number.isFinite(firstClose) || !Number.isFinite(secondClose)) return null;
+  const close = +(secondClose - firstClose).toFixed(4);
+  return {
+   time: Number(first.time),
+   open: close,
+   high: close,
+   low: close,
+   close,
+   value: close,
+   volume: Math.min(Number(first.volume || 0), Number(second.volume || 0)),
+   firstVolume: Number(first.volume || 0),
+   secondVolume: Number(second.volume || 0),
+   firstOi: Number(first.oi || 0),
+   secondOi: Number(second.oi || 0),
+  };
+ }).filter(Boolean).sort((a, b) => a.time - b.time);
+}
+
+function buildCommoditySynchronizedSpreadCandles(firstRows = [], secondRows = [], bucketSeconds = 3600) {
+ const firstByTime = new Map((Array.isArray(firstRows) ? firstRows : [])
+  .filter(row => Number.isFinite(Number(row?.time)))
+  .map(row => [Number(row.time), row]));
+ const secondByTime = new Map((Array.isArray(secondRows) ? secondRows : []).map(row => [Number(row.time), row]));
+ const observations = [...firstByTime.values()].map(first => {
+  const second = secondByTime.get(Number(first.time));
+  if (!second) return null;
+  const firstClose = Number(first.close);
+  const secondClose = Number(second.close);
+  if (!Number.isFinite(firstClose) || !Number.isFinite(secondClose)) return null;
+  return {
+   time: Number(first.time),
+   close: +(secondClose - firstClose).toFixed(4),
+   volume: Math.min(Number(first.volume || 0), Number(second.volume || 0)),
+  };
+ }).filter(Boolean).sort((a, b) => a.time - b.time);
+ const buckets = new Map();
+ observations.forEach(row => {
+  const time = Math.floor(Number(row.time) / bucketSeconds) * bucketSeconds;
+  const active = buckets.get(time);
+  if (!active) {
+   buckets.set(time, {
+    time,
+    open: row.close,
+    high: row.close,
+    low: row.close,
+    close: row.close,
+    volume: row.volume,
+    synchronizedObservations: 1,
+   });
+   return;
+  }
+  active.high = Math.max(active.high, row.close);
+  active.low = Math.min(active.low, row.close);
+  active.close = row.close;
+  active.volume += row.volume;
+  active.synchronizedObservations += 1;
+ });
+ return [...buckets.values()]
+  .filter(row => row.synchronizedObservations > 0)
+  .sort((a, b) => a.time - b.time);
+}
+
+function commoditySpreadEma(values = [], period = 20) {
+ const rows = (Array.isArray(values) ? values : []).map(Number).filter(Number.isFinite);
+ if (rows.length < period) return null;
+ const multiplier = 2 / (period + 1);
+ let current = rows.slice(0, period).reduce((sum, value) => sum + value, 0) / period;
+ rows.slice(period).forEach(value => { current = ((value - current) * multiplier) + current; });
+ return current;
+}
+
+function commoditySpreadStats(rows = [], lookback = 60) {
+ const closes = (Array.isArray(rows) ? rows : []).map(row => Number(row.close)).filter(Number.isFinite);
+ if (!closes.length) return null;
+ const sample = closes.slice(-Math.max(20, Number(lookback || 60)));
+ const mean = sample.reduce((sum, value) => sum + value, 0) / sample.length;
+ const variance = sample.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / sample.length;
+ const deviation = Math.sqrt(variance);
+ const latest = closes[closes.length - 1];
+ const sorted = sample.slice().sort((a, b) => a - b);
+ const percentile = sorted.length > 1
+  ? sorted.filter(value => value <= latest).length / sorted.length * 100
+  : 50;
+ const trueRanges = rows.map((row, index) => {
+  const high = Number(row.high);
+  const low = Number(row.low);
+  const previous = Number(rows[index - 1]?.close);
+  if (!Number.isFinite(high) || !Number.isFinite(low)) return null;
+  return index === 0 || !Number.isFinite(previous)
+   ? high - low
+   : Math.max(high - low, Math.abs(high - previous), Math.abs(low - previous));
+ }).filter(value => Number.isFinite(value) && value >= 0);
+ const atrRows = trueRanges.slice(-14);
+ const atr14 = atrRows.length ? atrRows.reduce((sum, value) => sum + value, 0) / atrRows.length : 0;
+ const recentChanges = closes.slice(-7).slice(1).map((value, index) => value - closes.slice(-7)[index]);
+ return {
+  latest,
+  mean,
+  deviation,
+  zScore: deviation > 0 ? (latest - mean) / deviation : 0,
+  percentile,
+  ema9: commoditySpreadEma(closes, 9),
+  ema30: commoditySpreadEma(closes, 30),
+  ema100: commoditySpreadEma(closes, 100),
+  atr14,
+  momentum5: closes.length >= 6 ? latest - closes[closes.length - 6] : 0,
+  risingSessions: recentChanges.filter(value => value > 0).length,
+  fallingSessions: recentChanges.filter(value => value < 0).length,
+  previous: closes.length >= 2 ? closes[closes.length - 2] : latest,
+  count: closes.length,
+ };
+}
+
+function buildCommoditySpreadBands(rows = [], period = 60) {
+ const closes = (Array.isArray(rows) ? rows : []).map(row => Number(row.close));
+ const mean = new Array(closes.length).fill(null);
+ const upper1 = new Array(closes.length).fill(null);
+ const lower1 = new Array(closes.length).fill(null);
+ const upper2 = new Array(closes.length).fill(null);
+ const lower2 = new Array(closes.length).fill(null);
+ const zScore = new Array(closes.length).fill(null);
+ for (let index = period - 1; index < closes.length; index += 1) {
+  const sample = closes.slice(index - period + 1, index + 1).filter(Number.isFinite);
+  if (sample.length < period) continue;
+  const average = sample.reduce((sum, value) => sum + value, 0) / sample.length;
+  const variance = sample.reduce((sum, value) => sum + ((value - average) ** 2), 0) / sample.length;
+  const deviation = Math.sqrt(variance);
+  mean[index] = average;
+  upper1[index] = average + deviation;
+  lower1[index] = average - deviation;
+  upper2[index] = average + deviation * 2;
+  lower2[index] = average - deviation * 2;
+  zScore[index] = deviation > 0 ? (closes[index] - average) / deviation : 0;
+ }
+ return { mean, upper1, lower1, upper2, lower2, zScore };
+}
+
+function buildCommoditySpreadRollEvents(points = [], pair = {}) {
+ const rows = Array.isArray(points) ? points : [];
+ const events = [];
+ let oiCrossoverStreak = 0;
+ let volumeCrossoverStreak = 0;
+ rows.forEach((row, index) => {
+  const firstOi = Number(row.firstOi || 0);
+  const secondOi = Number(row.secondOi || 0);
+  const firstVolume = Number(row.firstVolume || 0);
+  const secondVolume = Number(row.secondVolume || 0);
+  oiCrossoverStreak = firstOi > 0 && secondOi > firstOi ? oiCrossoverStreak + 1 : 0;
+  volumeCrossoverStreak = !(firstOi > 0 && secondOi > 0) && secondVolume > firstVolume ? volumeCrossoverStreak + 1 : 0;
+  if (oiCrossoverStreak === 2 || volumeCrossoverStreak === 2) {
+   events.push({
+    time: Number(row.time),
+    type: oiCrossoverStreak === 2 ? 'liquidity_oi' : 'liquidity_volume',
+    label: oiCrossoverStreak === 2 ? 'OI liquidity roll signal' : 'Volume liquidity roll signal',
+    sourceQuality: 'dhan_rolling_expiry_code',
+   });
+  }
+ });
+ const firstExpiryMs = parseDerivativeExpiryMs(pair.firstInstrument?.expiry);
+ if (firstExpiryMs > 0) {
+  const forcedTime = Math.floor((firstExpiryMs - 5 * DAY_MS) / 1000);
+  const nearest = rows.find(row => Number(row.time) >= forcedTime);
+  if (nearest && !events.some(event => Math.abs(event.time - Number(nearest.time)) < 3 * DAY_MS / 1000)) {
+   events.push({
+    time: Number(nearest.time),
+    type: 'expiry_fallback',
+    label: 'Five-day expiry roll fallback',
+    sourceQuality: 'exact_active_contract',
+   });
+  }
+ }
+ return events.sort((a, b) => a.time - b.time);
+}
+
+function buildCommoditySpreadDecision({
+ dailyRows = [],
+ intradayRows = [],
+ pair = {},
+ snapshot = {},
+ minimumHistory = COMMODITY_SPREAD_MIN_DECISION_CANDLES,
+} = {}) {
+ const daily = commoditySpreadStats(dailyRows, 60);
+ const intraday = commoditySpreadStats(intradayRows, 30);
+ const blockers = [];
+ if (!daily || daily.count < minimumHistory) blockers.push(`At least ${minimumHistory} matched daily spread closes are required.`);
+ const separation = daily
+  ? Math.min(Math.abs(Number(daily.ema9) - Number(daily.ema30)), Math.abs(Number(daily.ema30) - Number(daily.ema100)))
+  : 0;
+ const meaningfulSeparation = daily
+  ? separation >= Math.max(Number(daily.atr14 || 0) * 0.1, Math.abs(Number(daily.latest || 0)) * 0.001)
+  : false;
+ const trendUp = !!daily && [daily.ema9, daily.ema30, daily.ema100].every(Number.isFinite)
+  && daily.latest >= daily.ema9 && daily.ema9 > daily.ema30 && daily.ema30 > daily.ema100
+  && daily.momentum5 > 0 && daily.risingSessions >= 4 && meaningfulSeparation;
+ const trendDown = !!daily && [daily.ema9, daily.ema30, daily.ema100].every(Number.isFinite)
+  && daily.latest <= daily.ema9 && daily.ema9 < daily.ema30 && daily.ema30 < daily.ema100
+  && daily.momentum5 < 0 && daily.fallingSessions >= 4 && meaningfulSeparation;
+ const regime = trendUp || trendDown ? 'trend' : 'range';
+ const intradayUp = !!intraday && intraday.count >= 9 && intraday.latest > intraday.previous && intraday.momentum5 > 0;
+ const intradayDown = !!intraday && intraday.count >= 9 && intraday.latest < intraday.previous && intraday.momentum5 < 0;
+ let action = 'WAIT';
+ let reason = 'No trend or mean-reversion trigger is confirmed.';
+ if (regime === 'trend' && trendUp && intradayUp) {
+  action = 'BUY_SPREAD';
+  reason = 'Daily spread trend is widening and synchronized 60-minute momentum confirms.';
+ } else if (regime === 'trend' && trendDown && intradayDown) {
+  action = 'SELL_SPREAD';
+  reason = 'Daily spread trend is narrowing and synchronized 60-minute momentum confirms.';
+ } else if (regime === 'range' && daily?.zScore <= -1.5 && intradayUp) {
+  action = 'BUY_SPREAD';
+  reason = 'Spread is unusually narrow and synchronized 60-minute prices are reversing upward.';
+ } else if (regime === 'range' && daily?.zScore >= 1.5 && intradayDown) {
+  action = 'SELL_SPREAD';
+  reason = 'Spread is unusually wide and synchronized 60-minute prices are reversing downward.';
+ }
+ if (!intraday || intraday.count < 9) blockers.push('Synchronized 60-minute confirmation is not available yet.');
+ const safeguards = snapshot.safeguards || commoditySpreadSafeguards(pair, snapshot);
+ blockers.push(...(safeguards.warnings || []));
+ const costs = snapshot.costs || commoditySpreadCostEstimate(pair, snapshot);
+ const entry = action === 'BUY_SPREAD'
+  ? Number(snapshot.wideningEntrySpread)
+  : action === 'SELL_SPREAD'
+   ? Number(snapshot.narrowingEntrySpread)
+   : Number(snapshot.spread ?? daily?.latest);
+ if (action === 'BUY_SPREAD' && !snapshot.wideningDepth) blockers.push('Executable depth is incomplete for BUY far / SELL near.');
+ if (action === 'SELL_SPREAD' && !snapshot.narrowingDepth) blockers.push('Executable depth is incomplete for SELL far / BUY near.');
+ const atr = Math.max(Number(daily?.atr14 || 0), Number(daily?.deviation || 0) * 0.25);
+ const mean = Number(daily?.mean || entry || 0);
+ const deviation = Number(daily?.deviation || 0);
+ const trendTarget = action === 'BUY_SPREAD' ? entry + atr * 2 : action === 'SELL_SPREAD' ? entry - atr * 2 : null;
+ const target = action === 'WAIT' ? null : regime === 'range' ? mean : trendTarget;
+ const zBoundary = action === 'BUY_SPREAD'
+  ? mean - deviation * 2.5
+  : action === 'SELL_SPREAD'
+   ? mean + deviation * 2.5
+   : null;
+ const atrStop = action === 'BUY_SPREAD' ? entry - atr : action === 'SELL_SPREAD' ? entry + atr : null;
+ const stop = action === 'BUY_SPREAD'
+  ? Math.max(Number(zBoundary), Number(atrStop))
+  : action === 'SELL_SPREAD'
+   ? Math.min(Number(zBoundary), Number(atrStop))
+   : null;
+ const targetMove = target == null || !Number.isFinite(entry) ? 0 : Math.abs(target - entry);
+ const slippage = action === 'BUY_SPREAD'
+  ? Number(costs.wideningSlippagePoints || 0)
+  : action === 'SELL_SPREAD'
+   ? Number(costs.narrowingSlippagePoints || 0)
+   : 0;
+ const costRequiredMove = (Number(costs.brokerageBreakevenPoints || 0) + slippage) * 1.1;
+ const costEdgeAvailable = action !== 'WAIT' && targetMove > costRequiredMove;
+ if (action !== 'WAIT' && !costEdgeAvailable) blockers.push('Expected target does not clear brokerage, GST, visible slippage, and the safety buffer.');
+ if (blockers.length) action = 'WAIT';
+ if (action === 'WAIT' && !blockers.length) blockers.push(reason);
+ const valuePerPoint = Number(costs.valuePerSpreadPoint || 0);
+ const expectedGrossPnl = targetMove * valuePerPoint;
+ const expectedNetPnl = Math.max(0, expectedGrossPnl - Number(costs.fixedBrokerageAndGst || 0) - slippage * valuePerPoint);
+ const rawConfidence = daily
+  ? Math.min(100, Math.round(
+   Math.min(35, daily.count / minimumHistory * 35)
+   + (intraday?.count >= 30 ? 25 : intraday?.count >= 9 ? 15 : 0)
+   + (regime === 'trend' ? meaningfulSeparation ? 25 : 10 : Math.min(25, Math.abs(daily.zScore) * 12))
+   + (snapshot.depthConfirmed ? 15 : 0)
+  ))
+  : 0;
+ return {
+  action,
+  regime,
+  confidence: rawConfidence >= 75 ? 'high' : rawConfidence >= 50 ? 'medium' : 'low',
+  confidenceScore: rawConfidence,
+  reason,
+  blockers: Array.from(new Set(blockers)),
+  zScore: daily ? +daily.zScore.toFixed(2) : null,
+  percentile: daily ? +daily.percentile.toFixed(1) : null,
+  mean: daily ? +daily.mean.toFixed(4) : null,
+  deviation: daily ? +daily.deviation.toFixed(4) : null,
+  ema9: daily?.ema9 == null ? null : +daily.ema9.toFixed(4),
+  ema30: daily?.ema30 == null ? null : +daily.ema30.toFixed(4),
+  ema100: daily?.ema100 == null ? null : +daily.ema100.toFixed(4),
+  atr14: daily ? +daily.atr14.toFixed(4) : null,
+  entry: Number.isFinite(entry) ? +entry.toFixed(4) : null,
+  stop: stop == null || !Number.isFinite(stop) ? null : +stop.toFixed(4),
+  target: target == null || !Number.isFinite(target) ? null : +target.toFixed(4),
+  targetMove: +targetMove.toFixed(4),
+  costRequiredMove: +costRequiredMove.toFixed(4),
+  costEdgeAvailable,
+  expectedGrossPnl: +expectedGrossPnl.toFixed(2),
+  expectedNetPnl: +expectedNetPnl.toFixed(2),
+  breakevenPoints: costs.brokerageBreakevenPoints ?? null,
+  legs: action === 'BUY_SPREAD'
+   ? { first: 'SELL', second: 'BUY', label: `BUY ${pair.secondRole || 'far'} / SELL ${pair.firstRole || 'near'}` }
+   : action === 'SELL_SPREAD'
+    ? { first: 'BUY', second: 'SELL', label: `SELL ${pair.secondRole || 'far'} / BUY ${pair.firstRole || 'near'}` }
+    : { first: '', second: '', label: 'WAIT' },
+  dailyCandles: daily?.count || 0,
+  intradayCandles: intraday?.count || 0,
+ };
+}
+
 function filterCandleRowsByTime(rows = [], startMs = 0, endMs = Date.now()) {
  const startSec = Math.floor(Math.max(0, Number(startMs || 0)) / 1000);
  const endSec = Math.ceil(Math.max(Number(startMs || 0), Number(endMs || Date.now())) / 1000);
@@ -1413,9 +1738,9 @@ function getUniverseMembershipSet(cache = {}, universe = '') {
 
 function normalizeResolution(resolution = '') {
  const requested = String(resolution || '4h').trim().toLowerCase();
- const raw = ['4h', '240m', '240', '1h', '60m', '60', '1d', '1w'].includes(requested) ? requested : '4h';
+ const raw = ['5m', '5', '4h', '240m', '240', '1h', '60m', '60', '1d', '1w'].includes(requested) ? requested : '4h';
  if (raw === '1d' || raw === '1w') return { kind: 'historical', interval: '1D', seconds: raw === '1w' ? 7 * 86400 : 86400, aggregateSeconds: raw === '1w' ? 7 * 86400 : 0 };
- const minuteMap = { '1h': 60, '60m': 60, '60': 60 };
+ const minuteMap = { '5m': 5, '5': 5, '1h': 60, '60m': 60, '60': 60 };
  const minutes = raw === '4h' || raw === '240m' || raw === '240' ? 60 : (minuteMap[raw] || 60);
  const allowed = [1, 5, 15, 25, 60];
  return {
@@ -1447,6 +1772,11 @@ function normalizeDhanCandles(payload = {}) {
  const low = Array.isArray(payload.low) ? payload.low : [];
  const close = Array.isArray(payload.close) ? payload.close : [];
  const volume = Array.isArray(payload.volume) ? payload.volume : [];
+ const oi = Array.isArray(payload.open_interest)
+  ? payload.open_interest
+  : Array.isArray(payload.oi)
+   ? payload.oi
+   : [];
  const timestamp = Array.isArray(payload.timestamp) ? payload.timestamp : [];
  return timestamp.map((ts, index) => {
   const rawTime = Number(ts || 0);
@@ -1458,6 +1788,7 @@ function normalizeDhanCandles(payload = {}) {
    low: Number(low[index] || 0),
    close: Number(close[index] || 0),
    volume: Number(volume[index] || 0),
+   oi: Number(oi[index] || 0),
   };
  }).filter(row => row.time > 0 && row.open > 0 && row.high > 0 && row.low > 0 && row.close > 0);
 }
@@ -1928,6 +2259,8 @@ function isDhanNoHistoricalDataResponse(response = {}) {
 function createDhanDataService({ app, credentialStore, errorJournal } = {}) {
  const cachePath = () => path.join(app.getPath('userData'), INSTRUMENT_CACHE_FILE);
  const commodityCandleCachePath = () => path.join(app.getPath('userData'), COMMODITY_CANDLE_CACHE_FILE);
+ const commodityContractArchivePath = () => path.join(app.getPath('userData'), COMMODITY_CONTRACT_ARCHIVE_FILE);
+ const commoditySpreadHistoryPath = () => path.join(app.getPath('userData'), COMMODITY_SPREAD_HISTORY_FILE);
  let nextQuoteRequestAt = 0;
  let nextCandleRequestAt = 0;
  let candleBlockedUntil = 0;
@@ -1938,6 +2271,19 @@ function createDhanDataService({ app, credentialStore, errorJournal } = {}) {
  const optionChainInFlight = new Map();
  let commodityAnalysisCache = null;
  let commodityCandleCacheMemory = null;
+ let commodityContractArchiveMemory = null;
+ let commoditySpreadHistoryMemory = null;
+ let commoditySpreadBackfillPromise = null;
+ let commoditySpreadBackfillStatus = {
+  running: false,
+  cancelRequested: false,
+  startedAt: 0,
+  completedAt: 0,
+  currentUnderlying: '',
+  completed: 0,
+  total: 0,
+  errors: [],
+ };
  let liveSocket = null;
  let liveFeedMode = 'quote';
  let liveFeedDesired = false;
@@ -1951,6 +2297,103 @@ function createDhanDataService({ app, credentialStore, errorJournal } = {}) {
  const liveFeedTicks = new Map();
  const liveFeedOwners = new Map();
  let instrumentCacheMemory = null;
+
+ async function readCommodityContractArchive() {
+  if (commodityContractArchiveMemory) return commodityContractArchiveMemory;
+  try {
+   const parsed = JSON.parse(await fs.readFile(commodityContractArchivePath(), 'utf8'));
+   commodityContractArchiveMemory = parsed && typeof parsed === 'object'
+    ? parsed
+    : { version: 1, updatedAt: 0, contracts: {}, pairSnapshots: {} };
+  } catch (_) {
+   commodityContractArchiveMemory = { version: 1, updatedAt: 0, contracts: {}, pairSnapshots: {} };
+  }
+  return commodityContractArchiveMemory;
+ }
+
+ async function writeCommodityContractArchive(archive = {}) {
+  commodityContractArchiveMemory = archive;
+  try {
+   await fs.writeFile(commodityContractArchivePath(), JSON.stringify(archive));
+  } catch (error) {
+   errorJournal?.append?.('dhan:commodity-contract-archive-write', error);
+  }
+ }
+
+ async function archiveCommodityContracts(instruments = [], nowMs = Date.now()) {
+  const archive = await readCommodityContractArchive();
+  archive.contracts = archive.contracts && typeof archive.contracts === 'object' ? archive.contracts : {};
+  archive.pairSnapshots = archive.pairSnapshots && typeof archive.pairSnapshots === 'object' ? archive.pairSnapshots : {};
+  const commodityInstruments = (Array.isArray(instruments) ? instruments : []).filter(item => (
+   item?.exchangeSegment === 'MCX_COMM' && item?.instrument === 'FUTCOM' && item?.securityId
+  ));
+  commodityInstruments.forEach(item => {
+   const key = String(item.securityId);
+   const previous = archive.contracts[key] || {};
+   archive.contracts[key] = {
+    securityId: key,
+    exchangeSegment: 'MCX_COMM',
+    instrument: 'FUTCOM',
+    underlyingSymbol: String(item.underlyingSymbol || item.symbol || '').toUpperCase(),
+    symbol: item.symbol || '',
+    tradingSymbol: item.tradingSymbol || '',
+    expiry: item.expiry || '',
+    lotSize: Number(item.lotSize || 1),
+    firstSeenAt: Number(previous.firstSeenAt || nowMs),
+    lastSeenAt: nowMs,
+   };
+  });
+  buildCommodityFuturePairs(commodityInstruments, nowMs)
+   .filter(pair => COMMODITY_SPREAD_FEATURED_UNDERLYINGS.includes(pair.symbol) && pair.nextFuture)
+   .forEach(pair => {
+    const list = Array.isArray(archive.pairSnapshots[pair.symbol]) ? archive.pairSnapshots[pair.symbol] : [];
+    const snapshot = {
+     observedAt: nowMs,
+     nearSecurityId: String(pair.nearFuture.securityId),
+     farSecurityId: String(pair.nextFuture.securityId),
+     nearExpiry: pair.nearFuture.expiry || '',
+     farExpiry: pair.nextFuture.expiry || '',
+    };
+    const previous = list[list.length - 1];
+    if (!previous || previous.nearSecurityId !== snapshot.nearSecurityId || previous.farSecurityId !== snapshot.farSecurityId) {
+     list.push(snapshot);
+    } else {
+     previous.observedAt = nowMs;
+    }
+    archive.pairSnapshots[pair.symbol] = list.slice(-60);
+   });
+  archive.version = 1;
+  archive.updatedAt = nowMs;
+  await writeCommodityContractArchive(archive);
+  return archive;
+ }
+
+ async function readCommoditySpreadHistory() {
+  if (commoditySpreadHistoryMemory) return commoditySpreadHistoryMemory;
+  try {
+   const parsed = JSON.parse(await fs.readFile(commoditySpreadHistoryPath(), 'utf8'));
+   commoditySpreadHistoryMemory = parsed && typeof parsed === 'object'
+    ? parsed
+    : { version: COMMODITY_SPREAD_HISTORY_VERSION, updatedAt: 0, families: {} };
+  } catch (_) {
+   commoditySpreadHistoryMemory = { version: COMMODITY_SPREAD_HISTORY_VERSION, updatedAt: 0, families: {} };
+  }
+  commoditySpreadHistoryMemory.families = commoditySpreadHistoryMemory.families && typeof commoditySpreadHistoryMemory.families === 'object'
+   ? commoditySpreadHistoryMemory.families
+   : {};
+  return commoditySpreadHistoryMemory;
+ }
+
+ async function writeCommoditySpreadHistory(store = {}) {
+  store.version = COMMODITY_SPREAD_HISTORY_VERSION;
+  store.updatedAt = Date.now();
+  commoditySpreadHistoryMemory = store;
+  try {
+   await fs.writeFile(commoditySpreadHistoryPath(), JSON.stringify(store));
+  } catch (error) {
+   errorJournal?.append?.('dhan:commodity-spread-history-write', error);
+  }
+ }
 
  async function readCommodityCandleCache() {
   if (commodityCandleCacheMemory) return commodityCandleCacheMemory;
@@ -2102,6 +2545,7 @@ function createDhanDataService({ app, credentialStore, errorJournal } = {}) {
      && Date.now() - Number(cached.fetchedAt || 0) < INSTRUMENT_CACHE_TTL_MS
     ) {
      instrumentCacheMemory = cached;
+     await archiveCommodityContracts(cached.instruments, Date.now());
      if (rawVersion < INSTRUMENT_CACHE_VERSION || rawHadHeavyRows) {
       try {
        await fs.writeFile(cachePath(), JSON.stringify(cached));
@@ -2159,6 +2603,7 @@ function createDhanDataService({ app, credentialStore, errorJournal } = {}) {
   });
   instrumentCacheMemory = cache;
   await fs.writeFile(cachePath(), JSON.stringify(cache));
+  await archiveCommodityContracts(cache.instruments, Date.now());
   return instrumentCacheMemory;
  }
 
@@ -2564,6 +3009,282 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
   };
  }
 
+ async function resolveCommodityCalendarPairByUnderlying(underlying = '', options = {}) {
+  const symbol = String(underlying || '').trim().toUpperCase();
+  if (!symbol) return null;
+  const cache = await loadInstrumentCache(options.forceInstruments === true);
+  const family = buildCommodityFuturePairs(cache.instruments, Number(options.at || Date.now()) || Date.now())
+   .find(item => item.symbol === symbol && item.nearFuture && item.nextFuture);
+  if (!family) return null;
+  return {
+   key: `calendar:${family.nearFuture.securityId}:${family.nextFuture.securityId}`,
+   type: 'calendar',
+   family: symbol,
+   label: `${symbol} near / next`,
+   canonicalLabel: 'Far - Near',
+   firstInstrument: family.nearFuture,
+   secondInstrument: family.nextFuture,
+   firstRole: 'near',
+   secondRole: 'far',
+   firstLots: 1,
+   secondLots: 1,
+  };
+ }
+
+ async function fetchCommoditySpreadHistoryEntry(pair = {}, options = {}) {
+  const nowMs = Number(options.end || Date.now()) || Date.now();
+  const dailyStart = Number(options.dailyStart || nowMs - COMMODITY_SPREAD_DAILY_HISTORY_DAYS * DAY_MS);
+  const intradayStart = Number(options.intradayStart || nowMs - COMMODITY_SPREAD_INTRADAY_HISTORY_DAYS * DAY_MS);
+  const nearDaily = await getCandles({
+    instrument: pair.firstInstrument,
+    resolution: '1d',
+    expiryCode: 0,
+    oi: true,
+    start: dailyStart,
+    end: nowMs,
+    timeoutMs: 45000,
+   });
+  const farDaily = await getCandles({
+    instrument: pair.firstInstrument,
+    resolution: '1d',
+    expiryCode: 1,
+    oi: true,
+    start: dailyStart,
+    end: nowMs,
+    timeoutMs: 45000,
+   });
+  if (!nearDaily?.ok || !farDaily?.ok) {
+   throw new Error(nearDaily?.error || farDaily?.error || `${pair.family} rolling daily history failed.`);
+  }
+  const daily = buildCommoditySpreadClosePoints(nearDaily.rows, farDaily.rows);
+  const nearIntraday = await getCommodityCachedCandles(pair.firstInstrument, '5m', intradayStart, nowMs, { force: options.force === true });
+  const farIntraday = await getCommodityCachedCandles(pair.secondInstrument, '5m', intradayStart, nowMs, { force: options.force === true });
+  const intraday = nearIntraday?.ok && farIntraday?.ok
+   ? buildCommoditySynchronizedSpreadCandles(nearIntraday.rows, farIntraday.rows, 3600)
+   : [];
+  const rollEvents = buildCommoditySpreadRollEvents(daily, pair);
+  return {
+   family: pair.family,
+   pair,
+   daily,
+   intraday,
+   bands: buildCommoditySpreadBands(daily, 60),
+   rollEvents,
+   coverage: {
+    requestedDailyDays: COMMODITY_SPREAD_DAILY_HISTORY_DAYS,
+    requestedIntradayDays: COMMODITY_SPREAD_INTRADAY_HISTORY_DAYS,
+    dailyCandles: daily.length,
+    intradayCandles: intraday.length,
+    dailyStart: daily[0]?.time || 0,
+    dailyEnd: daily[daily.length - 1]?.time || 0,
+    intradayStart: intraday[0]?.time || 0,
+    intradayEnd: intraday[intraday.length - 1]?.time || 0,
+   },
+   sourceQuality: {
+    daily: 'dhan_rolling_expiry_code',
+    intraday: intraday.length ? 'exact_active_contract_synchronized_5m' : 'unavailable',
+    exactHistoricalContractArchive: false,
+    note: 'Daily history uses Dhan rolling expiry codes. Exact contract identities are archived prospectively from this release.',
+   },
+   fetchedAt: Date.now(),
+  };
+ }
+
+ async function runCommoditySpreadBackfill(options = {}) {
+  const force = options.force === true;
+  const requested = Array.isArray(options.underlyings) && options.underlyings.length
+   ? options.underlyings
+   : COMMODITY_SPREAD_FEATURED_UNDERLYINGS;
+  const underlyings = Array.from(new Set(requested.map(value => String(value || '').trim().toUpperCase()).filter(Boolean)));
+  const store = await readCommoditySpreadHistory();
+  commoditySpreadBackfillStatus = {
+   running: true,
+   cancelRequested: false,
+   startedAt: Date.now(),
+   completedAt: 0,
+   currentUnderlying: '',
+   completed: 0,
+   total: underlyings.length,
+   errors: [],
+  };
+  for (const underlying of underlyings) {
+   if (commoditySpreadBackfillStatus.cancelRequested) break;
+   commoditySpreadBackfillStatus.currentUnderlying = underlying;
+   try {
+    const existing = store.families[underlying];
+    const pair = await resolveCommodityCalendarPairByUnderlying(underlying);
+    if (!pair) throw new Error('Active near/next MCX contracts were not found.');
+    const pairChanged = String(existing?.pair?.firstInstrument?.securityId || '') !== String(pair.firstInstrument.securityId)
+     || String(existing?.pair?.secondInstrument?.securityId || '') !== String(pair.secondInstrument.securityId);
+    const fresh = existing && !pairChanged && Date.now() - Number(existing.fetchedAt || 0) < COMMODITY_DAILY_CACHE_TTL_MS;
+    if (!force && fresh) {
+     commoditySpreadBackfillStatus.completed += 1;
+     continue;
+    }
+    store.families[underlying] = await fetchCommoditySpreadHistoryEntry(pair, { force });
+    await writeCommoditySpreadHistory(store);
+   } catch (error) {
+    commoditySpreadBackfillStatus.errors.push({ underlying, error: error?.message || String(error) });
+    errorJournal?.append?.('dhan:commodity-spread-backfill', error, { underlying });
+   }
+   commoditySpreadBackfillStatus.completed += 1;
+  }
+  commoditySpreadBackfillStatus.running = false;
+  commoditySpreadBackfillStatus.completedAt = Date.now();
+  commoditySpreadBackfillStatus.currentUnderlying = '';
+  return { ...commoditySpreadBackfillStatus };
+ }
+
+async function startCommoditySpreadBackfill(message = {}) {
+  if (commoditySpreadBackfillPromise) {
+   return { ok: true, started: false, status: { ...commoditySpreadBackfillStatus } };
+  }
+  const requested = Array.isArray(message.underlyings) && message.underlyings.length
+   ? message.underlyings
+   : COMMODITY_SPREAD_FEATURED_UNDERLYINGS;
+  commoditySpreadBackfillStatus = {
+   running: true,
+   cancelRequested: false,
+   startedAt: Date.now(),
+   completedAt: 0,
+   currentUnderlying: '',
+   completed: 0,
+   total: Array.from(new Set(requested.map(value => String(value || '').trim().toUpperCase()).filter(Boolean))).length,
+   errors: [],
+  };
+  commoditySpreadBackfillPromise = runCommoditySpreadBackfill(message)
+   .catch(error => {
+    commoditySpreadBackfillStatus.running = false;
+    commoditySpreadBackfillStatus.completedAt = Date.now();
+    commoditySpreadBackfillStatus.errors.push({ underlying: commoditySpreadBackfillStatus.currentUnderlying, error: error?.message || String(error) });
+   })
+   .finally(() => {
+    commoditySpreadBackfillPromise = null;
+   });
+  return { ok: true, started: true, status: { ...commoditySpreadBackfillStatus } };
+ }
+
+ async function getCommoditySpreadBackfillStatus() {
+  const store = await readCommoditySpreadHistory();
+  const storedFamilies = Object.keys(store.families || {}).filter(key => Number(store.families[key]?.coverage?.dailyCandles || 0) > 0);
+  const status = { ...commoditySpreadBackfillStatus };
+  if (!status.running && !status.startedAt && storedFamilies.length) {
+   status.completed = storedFamilies.length;
+   status.total = COMMODITY_SPREAD_FEATURED_UNDERLYINGS.length;
+   status.completedAt = Number(store.updatedAt || 0);
+  }
+  return { ok: true, status, storedFamilies };
+ }
+
+ function cancelCommoditySpreadBackfill() {
+  commoditySpreadBackfillStatus.cancelRequested = true;
+  return { ok: true, status: { ...commoditySpreadBackfillStatus } };
+ }
+
+ async function getCommoditySpreadExpiryCatalog(message = {}) {
+  const underlying = String(message.underlying || message.family || '').trim().toUpperCase();
+  const archive = await readCommodityContractArchive();
+  const contracts = Object.values(archive.contracts || {})
+   .filter(item => !underlying || item.underlyingSymbol === underlying)
+   .sort((a, b) => parseDerivativeExpiryMs(a.expiry) - parseDerivativeExpiryMs(b.expiry));
+  return {
+   ok: true,
+   underlying,
+   contracts,
+   pairSnapshots: underlying ? (archive.pairSnapshots?.[underlying] || []) : archive.pairSnapshots || {},
+   updatedAt: Number(archive.updatedAt || 0),
+   methodology: 'Contract identities are retained prospectively. Historical Dhan rolling expiry-code segments are labelled separately.',
+  };
+ }
+
+ async function getCommoditySpreadContinuousChart(message = {}) {
+  const underlying = String(message.underlying || message.family || message.firstInstrument?.underlyingSymbol || '').trim().toUpperCase();
+  const view = ['current', 'historical', 'continuous'].includes(String(message.view || '').toLowerCase())
+   ? String(message.view).toLowerCase()
+   : 'continuous';
+  const resolution = String(message.resolution || '1d').toLowerCase();
+  const pair = await resolveCommoditySpreadPair(message) || await resolveCommodityCalendarPairByUnderlying(underlying);
+  if (!pair) return { ok: false, status: 404, error: 'Active near/next commodity contracts were not found.' };
+  const store = await readCommoditySpreadHistory();
+  let entry = store.families[pair.family];
+  const pairChanged = String(entry?.pair?.firstInstrument?.securityId || '') !== String(pair.firstInstrument.securityId)
+   || String(entry?.pair?.secondInstrument?.securityId || '') !== String(pair.secondInstrument.securityId);
+  if (!entry || pairChanged || message.force === true) {
+   try {
+    entry = await fetchCommoditySpreadHistoryEntry(pair, { force: message.force === true });
+    store.families[pair.family] = entry;
+    await writeCommoditySpreadHistory(store);
+   } catch (error) {
+    return { ok: false, status: 502, error: error?.message || 'Commodity spread history could not be built.' };
+   }
+  }
+  const quoteResponse = await getMarketFeed({ symbols: [pair.firstInstrument, pair.secondInstrument] }, '/marketfeed/quote');
+  const snapshot = quoteResponse?.ok ? buildCommoditySpreadSnapshotRow(pair, quoteResponse) : { ...pair };
+  let rows = resolution === '1d' ? entry.daily : entry.intraday;
+  if (view === 'current') {
+   const currentStart = parseDerivativeExpiryMs(pair.firstInstrument.expiry) - COMMODITY_SPREAD_MAX_DAILY_LOOKBACK_DAYS * DAY_MS;
+   rows = rows.filter(row => Number(row.time) * 1000 >= currentStart);
+  }
+  const decision = buildCommoditySpreadDecision({
+   dailyRows: entry.daily,
+   intradayRows: entry.intraday,
+   pair,
+   snapshot,
+  });
+  const archive = await readCommodityContractArchive();
+  const pairSnapshots = archive.pairSnapshots?.[pair.family] || [];
+  const sourceQuality = {
+   ...entry.sourceQuality,
+   exactHistoricalContractArchive: pairSnapshots.length > 1,
+   archivedPairSnapshots: pairSnapshots.length,
+  };
+  return {
+   ok: true,
+   readOnly: true,
+   symbol: `MCX-SPREAD:${pair.key}`,
+   displayName: `${pair.label} | ${pair.canonicalLabel}`,
+   timeframe: resolution === '1d' ? '1d' : '1h',
+   chartType: resolution === '1d' ? 'line' : 'candles',
+   candles: rows,
+   points: resolution === '1d' ? rows : [],
+   bands: entry.bands,
+   rollEvents: entry.rollEvents,
+   coverage: entry.coverage,
+   sourceQuality,
+   regime: decision.regime,
+   zScore: decision.zScore,
+   percentile: decision.percentile,
+   action: decision.action,
+   decision,
+   legs: decision.legs,
+   executableEntry: decision.entry,
+   stop: decision.stop,
+   target: decision.target,
+   costAdjustedEdge: {
+    targetMove: decision.targetMove,
+    requiredMove: decision.costRequiredMove,
+    available: decision.costEdgeAvailable,
+    expectedNetPnl: decision.expectedNetPnl,
+   },
+   confidence: decision.confidence,
+   blockers: decision.blockers,
+   pair,
+   snapshot,
+   view,
+   historyMode: view === 'current'
+    ? 'active_contract_pair'
+    : view === 'historical'
+     ? 'archived_contract_catalog_with_dhan_rolling_chart'
+     : 'continuous_dhan_rolling',
+   expiryCatalog: Object.values(archive.contracts || {}).filter(item => item.underlyingSymbol === pair.family),
+   pairSnapshots,
+   expiryCatalogCount: Object.values(archive.contracts || {}).filter(item => item.underlyingSymbol === pair.family).length,
+   methodology: resolution === '1d'
+    ? `${view === 'historical' ? 'Archived contract identities are shown separately; unavailable expired-contract candles are not fabricated. ' : ''}Daily continuous spread uses Far close minus Near close. It does not fabricate synthetic daily highs or lows.`
+    : 'Hourly spread candles aggregate synchronized five-minute Far-close minus Near-close observations.',
+  };
+ }
+
  async function getCommoditySpreadChart(message = {}) {
   const pair = await resolveCommoditySpreadPair(message);
   if (!pair) return { ok: false, status: 400, error: 'Synthetic spread chart supports two MCX futures contracts only.' };
@@ -2620,40 +3341,35 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
    }
   }
   const rows = [];
+  const spreadHistoryStore = await readCommoditySpreadHistory();
   for (const row of snapshots) {
    const firstRows = historyBySecurityId.get(String(row.firstInstrument?.securityId)) || [];
    const secondRows = historyBySecurityId.get(String(row.secondInstrument?.securityId)) || [];
    const clipped = clipCommoditySpreadRowsForPair(row, firstRows, secondRows, '1d', start, nowMs);
    const candles = buildCommoditySpreadCandles(clipped.firstRows, clipped.secondRows);
-   const analysis = analyzeCommoditySpreadCandles(candles);
-   const targetMove = analysis.direction === 'widening'
-    ? Number(analysis.targetSpread || 0) - Number(row.spread || 0)
-    : analysis.direction === 'narrowing'
-     ? Number(row.spread || 0) - Number(analysis.targetSpread || 0)
-     : 0;
-   const slippagePoints = analysis.direction === 'widening'
-    ? Number(row.costs?.wideningSlippagePoints || 0)
-    : analysis.direction === 'narrowing'
-     ? Number(row.costs?.narrowingSlippagePoints || 0)
-     : 0;
-   const costRequiredMove = Number(row.costs?.brokerageBreakevenPoints || 0) + slippagePoints;
-   const costEdgeAvailable = targetMove > costRequiredMove;
-   const tradeAllowed = row.safeguards?.tradeAllowed === true && analysis.direction !== 'range' && costEdgeAvailable;
+   const stored = spreadHistoryStore.families?.[row.family] || null;
+   const decision = buildCommoditySpreadDecision({
+    dailyRows: stored?.daily?.length ? stored.daily : buildCommoditySpreadClosePoints(clipped.firstRows, clipped.secondRows),
+    intradayRows: stored?.intraday || [],
+    pair: row,
+    snapshot: row,
+   });
+   const direction = decision.action === 'BUY_SPREAD' ? 'widening' : decision.action === 'SELL_SPREAD' ? 'narrowing' : 'range';
    rows.push({
     ...row,
     analysis: {
-     ...analysis,
-     tradeAllowed,
-     blockers: [
-     ...(row.safeguards?.warnings || []),
-      ...(analysis.direction === 'range' ? ['Three EMA and OBV are not aligned.'] : []),
-      ...(!costEdgeAvailable && analysis.direction !== 'range' ? ['Target move does not clear fixed brokerage and visible entry slippage.'] : []),
-     ],
-     targetMove: +targetMove.toFixed(4),
-     costRequiredMove: +costRequiredMove.toFixed(4),
-     costEdgeAvailable,
-    },
+     ...decision,
+     direction,
+     tradeAllowed: decision.action !== 'WAIT',
+     score: decision.confidenceScore,
+     entryTrigger: decision.entry,
+     stopSpread: decision.stop,
+     targetSpread: decision.target,
+     reasons: [decision.reason],
+     },
     matchedCandles: candles.length,
+    continuousCoverage: stored?.coverage || null,
+    sourceQuality: stored?.sourceQuality || null,
    });
   }
   rows.sort((a, b) => Number(b.analysis?.score || 0) - Number(a.analysis?.score || 0) || String(a.label).localeCompare(String(b.label)));
@@ -3060,7 +3776,7 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
    securityId: String(instrument.securityId),
    exchangeSegment: instrument.exchangeSegment,
    instrument: instrument.instrument || 'EQUITY',
-   oi: false,
+   oi: message.oi === true,
   };
   if (resolution.kind === 'historical') baseBody.expiryCode = Math.max(0, Math.round(Number(message.expiryCode || 0)));
   else baseBody.interval = resolution.interval;
@@ -3518,6 +4234,11 @@ async function testConnection() {
    if (action === 'commodity_snapshot') return getCommoditySnapshot(message);
    if (action === 'commodity_spread_scanner') return getCommoditySpreadScanner(message);
    if (action === 'commodity_spread_chart') return getCommoditySpreadChart(message);
+   if (action === 'commodity_spread_continuous_chart') return getCommoditySpreadContinuousChart(message);
+   if (action === 'commodity_spread_history_backfill_start') return startCommoditySpreadBackfill(message);
+   if (action === 'commodity_spread_history_backfill_status') return getCommoditySpreadBackfillStatus();
+   if (action === 'commodity_spread_history_backfill_cancel') return cancelCommoditySpreadBackfill();
+   if (action === 'commodity_spread_expiry_catalog') return getCommoditySpreadExpiryCatalog(message);
    if (action === 'commodity_spread_quotes') return getCommoditySpreadQuotes(message);
    if (action === 'commodity_margin_preview') return getCommodityMarginPreview(message);
    if (action === 'commodity_spread_history') return getCommoditySpreadHistory(message);
@@ -3544,6 +4265,11 @@ module.exports = {
   buildCommodityFuturePairs,
   buildCommoditySpreadPairs,
   buildCommoditySpreadCandles,
+  buildCommoditySpreadClosePoints,
+  buildCommoditySynchronizedSpreadCandles,
+  buildCommoditySpreadBands,
+  buildCommoditySpreadRollEvents,
+  buildCommoditySpreadDecision,
   clipCommoditySpreadRowsForPair,
   analyzeCommoditySpreadCandles,
   commoditySpreadCostEstimate,

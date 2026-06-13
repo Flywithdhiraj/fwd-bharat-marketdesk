@@ -301,7 +301,7 @@ const longRange = buildIntradayChunks(Date.UTC(2026, 0, 1), Date.UTC(2026, 6, 1)
 assert.strictEqual(longRange.length, 3);
 assert(longRange.every(range => range.endMs - range.startMs <= 90 * 24 * 60 * 60 * 1000));
 
-assert.deepStrictEqual(normalizeResolution('5m'), { kind: 'intraday', interval: '60', seconds: 14400, aggregateSeconds: 14400 });
+assert.deepStrictEqual(normalizeResolution('5m'), { kind: 'intraday', interval: '5', seconds: 300, aggregateSeconds: 0 });
 assert.deepStrictEqual(normalizeResolution('25m'), { kind: 'intraday', interval: '60', seconds: 14400, aggregateSeconds: 14400 });
 assert.deepStrictEqual(normalizeResolution('4h'), { kind: 'intraday', interval: '60', seconds: 14400, aggregateSeconds: 14400 });
 assert.deepStrictEqual(normalizeResolution('1w'), { kind: 'historical', interval: '1D', seconds: 604800, aggregateSeconds: 604800 });

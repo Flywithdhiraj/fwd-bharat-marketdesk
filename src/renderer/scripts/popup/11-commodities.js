@@ -63,9 +63,14 @@
   spreadDeskProgress: null,
   spreadDeskRunId: 0,
   spreadDeskStopRequested: false,
+  spreadBackfillStatus: null,
+  spreadChartView: 'continuous',
+  spreadExpiryCatalog: {},
+  spreadExpiryCatalogStatus: 'idle',
  };
  let livePollTimer = null;
  let spreadQuoteTimer = null;
+ let spreadBackfillTimer = null;
 
  function esc(value) {
   return String(value == null ? '' : value)
@@ -89,6 +94,7 @@
  }
 
  function signed(value, decimals = 2, suffix = '') {
+  if (value == null || value === '') return '--';
   const n = Number(value);
   if (!Number.isFinite(n)) return '--';
   return `${n >= 0 ? '+' : ''}${number(n, decimals)}${suffix}`;
@@ -192,23 +198,24 @@
    const update = updates.get(String(row.key || ''));
    if (!update) return row;
    const analysis = row.analysis || {};
+   const action = String(analysis.action || 'WAIT');
    const targetMove = analysis.direction === 'widening'
-    ? Number(analysis.targetSpread || 0) - Number(update.spread || 0)
+    ? Number(analysis.target || analysis.targetSpread || 0) - Number(update.spread || 0)
     : analysis.direction === 'narrowing'
-     ? Number(update.spread || 0) - Number(analysis.targetSpread || 0)
+     ? Number(update.spread || 0) - Number(analysis.target || analysis.targetSpread || 0)
      : 0;
    const slippagePoints = analysis.direction === 'widening'
     ? Number(update.costs?.wideningSlippagePoints || 0)
     : analysis.direction === 'narrowing'
      ? Number(update.costs?.narrowingSlippagePoints || 0)
      : 0;
-   const costRequiredMove = Number(update.costs?.brokerageBreakevenPoints || 0) + slippagePoints;
+   const costRequiredMove = (Number(update.costs?.brokerageBreakevenPoints || 0) + slippagePoints) * 1.1;
    const costEdgeAvailable = targetMove > costRequiredMove;
-   const blockers = [
+   const blockers = Array.from(new Set([
+    ...(analysis.blockers || []),
     ...(update.safeguards?.warnings || []),
-    ...(analysis.direction === 'range' ? ['Three EMA and OBV are not aligned.'] : []),
-    ...(!costEdgeAvailable && analysis.direction !== 'range' ? ['Target move does not clear fixed brokerage and visible entry slippage.'] : []),
-   ];
+    ...(!costEdgeAvailable && action !== 'WAIT' ? ['Expected target does not clear brokerage, GST, visible slippage, and the safety buffer.'] : []),
+   ]));
    return {
     ...row,
     ...update,
@@ -218,7 +225,7 @@
      targetMove,
      costRequiredMove,
      costEdgeAvailable,
-     tradeAllowed: update.safeguards?.tradeAllowed === true && analysis.direction !== 'range' && costEdgeAvailable,
+     tradeAllowed: action !== 'WAIT' && blockers.length === 0 && update.safeguards?.tradeAllowed === true && costEdgeAvailable,
     },
    };
   });
@@ -350,6 +357,7 @@
    <header>
     <div><span>Selected contract</span><strong>${esc(row.symbol)}</strong><small>${esc(row.nearFuture?.tradingSymbol || '')}</small></div>
     <div class="commodity-chart-actions">
+     ${row.nextFuture ? `<button type="button" class="bsm commodity-primary" data-commodity-calendar-chart="${esc(row.symbol)}">Calendar Spread 1D</button>` : ''}
      <button type="button" class="bsm" data-commodity-chart="${esc(row.nearFuture?.tradingSymbol || '')}" data-commodity-timeframe="1d">Trend 1D</button>
      <button type="button" class="bsm" data-commodity-chart="${esc(row.nearFuture?.tradingSymbol || '')}" data-commodity-timeframe="4h">Trade 4H</button>
     </div>
@@ -637,9 +645,35 @@
     <td class="${Number(row.indicativeSpread || 0) >= 0 ? 'up' : 'down'}">${row.nextFuture ? signed(row.indicativeSpread) : '--'}</td>
     <td>${row.nextFuture ? signed(row.annualizedSpreadPct, 2, '%') : '--'}</td>
     <td>${row.depthConfirmed ? 'Observed' : 'Indicative'}</td>
-    <td><button type="button" class="bsm" data-commodity-chart="${esc(row.nearFuture?.tradingSymbol || '')}">Chart</button></td>
+    <td>${row.nextFuture
+     ? `<button type="button" class="bsm" data-commodity-calendar-chart="${esc(row.symbol)}">Spread Chart</button>`
+     : `<button type="button" class="bsm" data-commodity-chart="${esc(row.nearFuture?.tradingSymbol || '')}">Leg Chart</button>`}</td>
    </tr>`).join('')}</tbody>
   </table></div>`;
+ }
+
+ function commoditySnapshotSpreadRow(row = {}) {
+  if (!row.nearFuture || !row.nextFuture) return null;
+  return {
+   key: `calendar:${row.nearFuture.securityId}:${row.nextFuture.securityId}`,
+   type: 'calendar',
+   family: row.symbol,
+   symbol: row.symbol,
+   label: `${row.symbol} near / next`,
+   canonicalLabel: 'Far - Near',
+   firstInstrument: row.nearFuture,
+   secondInstrument: row.nextFuture,
+   firstRole: 'near',
+   secondRole: 'far',
+   firstLots: 1,
+   secondLots: 1,
+   firstPrice: Number(row.nearPrice || 0),
+   secondPrice: Number(row.nextPrice || 0),
+   spread: Number(row.indicativeSpread || 0),
+   indicativeSpread: Number(row.indicativeSpread || 0),
+   annualizedSpreadPct: Number(row.annualizedSpreadPct || 0),
+   depthConfirmed: row.depthConfirmed === true,
+  };
  }
 
  function selectedSpreadRow() {
@@ -650,13 +684,13 @@
  }
 
  function spreadDirectionLabel(row = {}) {
-  const direction = row.analysis?.direction;
-  if (direction === 'widening') return `BUY ${row.secondRole} / SELL ${row.firstRole}`;
-  if (direction === 'narrowing') return `SELL ${row.secondRole} / BUY ${row.firstRole}`;
-  return 'WAIT - spread is ranging';
+  const action = row.analysis?.action;
+  if (action === 'BUY_SPREAD') return `BUY ${row.secondRole} / SELL ${row.firstRole}`;
+  if (action === 'SELL_SPREAD') return `SELL ${row.secondRole} / BUY ${row.firstRole}`;
+  return 'WAIT';
  }
 
- function spreadPlanningLegs(row = {}) {
+function spreadPlanningLegs(row = {}) {
   const widening = row.analysis?.direction === 'widening';
   const firstLots = Math.max(1, Number(row.firstLots || 1));
   const secondLots = Math.max(1, Number(row.secondLots || 1));
@@ -670,7 +704,32 @@
    transactionType: widening ? 'BUY' : 'SELL',
    quantity: Math.max(1, Number(row.secondInstrument?.lotSize || 1) * secondLots),
    price: Number(row.secondPrice || 0),
-  }];
+ }];
+}
+
+ function spreadExpiryCatalogHtml(row = {}) {
+  if (state.spreadChartView !== 'historical') return '';
+  const family = String(row.family || '').toUpperCase();
+  const catalog = state.spreadExpiryCatalog[family];
+  if (state.spreadExpiryCatalogStatus === 'loading') {
+   return '<div class="commodity-spread-expiry-catalog loading">Loading archived contract identities...</div>';
+  }
+  if (!catalog) {
+   return '<div class="commodity-spread-expiry-catalog empty">Select Historical Expiries again to load the local contract archive.</div>';
+  }
+  const contracts = Array.isArray(catalog.contracts) ? catalog.contracts : [];
+  const snapshots = Array.isArray(catalog.pairSnapshots) ? catalog.pairSnapshots : [];
+  if (!contracts.length) {
+   return '<div class="commodity-spread-expiry-catalog empty">No exact expired contracts are archived yet. The continuous line remains labelled as Dhan rolling history.</div>';
+  }
+  return `<section class="commodity-spread-expiry-catalog">
+   <header><div><span>Archived contract identities</span><strong>${integer(contracts.length)} contracts / ${integer(snapshots.length)} observed pair changes</strong></div><small>Prospective archive only; unavailable expired data is never fabricated.</small></header>
+   <div>${contracts.slice(-8).reverse().map(contract => `<article>
+    <strong>${esc(contract.tradingSymbol || contract.symbol || contract.securityId)}</strong>
+    <span>Security ID ${esc(contract.securityId)} | Expiry ${esc(expiry(contract.expiry))}</span>
+    <small>Seen ${esc(new Date(Number(contract.firstSeenAt || 0)).toLocaleDateString('en-IN'))} to ${esc(new Date(Number(contract.lastSeenAt || 0)).toLocaleDateString('en-IN'))}</small>
+   </article>`).join('')}</div>
+  </section>`;
  }
 
  function spreadDeskDetailHtml(row) {
@@ -683,35 +742,50 @@
   const lots = `${integer(row.firstLots)} ${esc(row.firstRole)} : ${integer(row.secondLots)} ${esc(row.secondRole)}`;
   const widening = direction === 'widening';
   const narrowing = direction === 'narrowing';
+  const action = String(analysis.action || 'WAIT');
+  const actionTone = action === 'BUY_SPREAD' ? 'widening' : action === 'SELL_SPREAD' ? 'narrowing' : 'blocked';
+  const coverage = row.continuousCoverage || {};
+  const sourceQuality = row.sourceQuality || {};
   return `<section class="commodity-spread-desk-detail">
    <header><div><span>Selected spread</span><strong>${esc(row.label)}</strong><small>${esc(row.canonicalLabel)} | ${esc(row.firstInstrument?.tradingSymbol)} / ${esc(row.secondInstrument?.tradingSymbol)}</small></div><b class="${actionable ? direction : 'blocked'}">${actionable ? esc(direction.toUpperCase()) : 'BLOCKED'}</b></header>
+   <div class="commodity-spread-action-card ${esc(actionTone)}">
+    <div><span>Decision</span><strong>${esc(action.replace('_', ' '))}</strong><small>${esc(analysis.reason || 'Waiting for decision-grade confirmation.')}</small></div>
+    <div><span>Exact legs</span><strong>${esc(spreadDirectionLabel(row))}</strong><small>${action === 'WAIT' ? 'No trade while blockers remain' : `${esc(row.secondInstrument?.tradingSymbol)} / ${esc(row.firstInstrument?.tradingSymbol)}`}</small></div>
+    <div><span>Regime / confidence</span><strong>${esc(String(analysis.regime || 'range').toUpperCase())} / ${esc(String(analysis.confidence || 'low').toUpperCase())}</strong><small>${integer(analysis.confidenceScore || analysis.score || 0)} / 100</small></div>
+   </div>
    <div class="commodity-spread-desk-grid">
     <div><span>Current spread</span><strong>${signed(row.spread)}</strong><small>${esc(row.canonicalLabel)}</small></div>
-    <div><span>Forecast confidence</span><strong>${integer(analysis.score)} / 100</strong><small>${esc(analysis.confidence || 'low')} confidence</small></div>
+    <div><span>Z-score / percentile</span><strong>${signed(analysis.zScore)} / ${number(analysis.percentile, 1)}%</strong><small>60-session distribution</small></div>
     <div><span>Matched lot ratio</span><strong>${lots}</strong><small>${row.type === 'matched' ? 'Contract-size matched, same expiry' : 'Same underlying calendar pair'}</small></div>
     <div><span>Depth snapshot</span><strong>${row.depthConfirmed ? 'Observed' : 'Indicative LTP'}</strong><small>${row.executableUpdatedAt ? `Updated ${new Date(row.executableUpdatedAt).toLocaleTimeString('en-IN')}` : 'Waiting for depth refresh'}</small></div>
    </div>
    <div class="commodity-spread-desk-grid">
     <div><span>Three EMA</span><strong>${number(analysis.ema9)} / ${number(analysis.ema30)} / ${number(analysis.ema100)}</strong><small>EMA 9 / 30 / 100</small></div>
-    <div><span>OBV confirmation</span><strong>${analysis.obvUp ? 'Rising' : analysis.obvDown ? 'Falling' : 'Flat'}</strong><small>Slope ${signed(analysis.obvSlope, 0)}</small></div>
-    <div><span>Entry / stop / target</span><strong>${signed(analysis.entryTrigger)} / ${signed(analysis.stopSpread)} / ${signed(analysis.targetSpread)}</strong><small>Spread levels, not leg prices</small></div>
+    <div><span>Continuous history</span><strong>${integer(coverage.dailyCandles || analysis.dailyCandles || 0)}D / ${integer(coverage.intradayCandles || analysis.intradayCandles || 0)}H</strong><small>${esc(sourceQuality.daily || 'current-pair fallback')}</small></div>
+    <div><span>Entry / stop / target</span><strong>${signed(analysis.entry)} / ${signed(analysis.stop)} / ${signed(analysis.target)}</strong><small>Executable spread levels</small></div>
     <div><span>Dhan fixed brokerage</span><strong>Rs ${number(costs.fixedBrokerageAndGst)}</strong><small>${integer(costs.executedOrders)} executed orders | Rs ${number(costs.brokeragePerOrder)} each + GST</small></div>
    </div>
    <div class="commodity-spread-trade-read">
     <div class="${widening ? 'active' : ''}"><span>Widening trade</span><strong>BUY ${esc(row.secondRole)} / SELL ${esc(row.firstRole)}</strong><small>Entry spread ${row.wideningEntrySpread == null ? '--' : signed(row.wideningEntrySpread)}</small></div>
     <div class="${narrowing ? 'active' : ''}"><span>Narrowing trade</span><strong>SELL ${esc(row.secondRole)} / BUY ${esc(row.firstRole)}</strong><small>Entry spread ${row.narrowingEntrySpread == null ? '--' : signed(row.narrowingEntrySpread)}</small></div>
    </div>
-   <div class="commodity-spread-reasons">${(analysis.reasons || []).map(reason => `<span>${esc(reason)}</span>`).join('')}</div>
+   <div class="commodity-spread-reasons"><span>${esc(analysis.reason || '')}</span></div>
    ${(analysis.blockers || safeguards.warnings || []).length ? `<div class="commodity-spread-blockers">${(analysis.blockers || safeguards.warnings || []).map(reason => `<span>${esc(reason)}</span>`).join('')}</div>` : ''}
-   <div class="commodity-spread-cost-note">Target move ${signed(analysis.targetMove)} points versus required ${signed(analysis.costRequiredMove)} points for fixed brokerage and visible entry slippage. Exchange charges, CTT, stamp duty and other statutory charges are not included.</div>
+   <div class="commodity-spread-cost-note">Target move ${signed(analysis.targetMove)} points versus required ${signed(analysis.costRequiredMove)} points. Expected net P&amp;L: Rs ${number(analysis.expectedNetPnl)}. Exchange charges, CTT, stamp duty and other statutory charges are not included.</div>
+   <div class="commodity-plan-toggle commodity-spread-view-toggle" role="group" aria-label="Spread chart history view">
+    <button type="button" data-spread-chart-view="continuous" class="${state.spreadChartView === 'continuous' ? 'active' : ''}">Continuous</button>
+    <button type="button" data-spread-chart-view="current" class="${state.spreadChartView === 'current' ? 'active' : ''}">Current Pair</button>
+    <button type="button" data-spread-chart-view="historical" class="${state.spreadChartView === 'historical' ? 'active' : ''}">Historical Expiries</button>
+   </div>
+   ${spreadExpiryCatalogHtml(row)}
    <div class="commodity-chart-actions">
-    <button type="button" class="bsm commodity-primary" data-commodity-spread-chart="${esc(row.key)}" data-commodity-timeframe="1d">Open Spread Chart 1D</button>
-    <button type="button" class="bsm" data-commodity-spread-chart="${esc(row.key)}" data-commodity-timeframe="4h">Open Spread Chart 4H</button>
+    <button type="button" class="bsm commodity-primary" data-commodity-spread-chart="${esc(row.key)}" data-commodity-timeframe="1d" data-commodity-spread-view="${esc(state.spreadChartView)}">Open Daily Decision Chart</button>
+    <button type="button" class="bsm" data-commodity-spread-chart="${esc(row.key)}" data-commodity-timeframe="1h" data-commodity-spread-view="current">Open Synchronized 1H</button>
     <button type="button" class="bsm" id="commoditySpreadMarginPreview" ${!actionable || state.marginStatus === 'loading' ? 'disabled' : ''}>Estimate Spread Margin</button>
     <button type="button" class="bsm" id="commoditySaveSpreadWatch" ${!actionable ? 'disabled' : ''}>Save Spread Watch</button>
    </div>
    ${previewHtml()}
-   <p>Recommendation: <strong>${actionable ? esc(spreadDirectionLabel(row)) : 'WAIT - safeguards or Three EMA + OBV confirmation are incomplete'}</strong>. The synthetic chart is inside this app's Lightweight Charts workspace. No order is placed.</p>
+   <p>Recommendation: <strong>${esc(spreadDirectionLabel(row))}</strong>. Daily history is close-only; hourly candles use synchronized five-minute leg observations. No order is placed.</p>
   </section>`;
  }
 
@@ -725,6 +799,18 @@
    const favorable = plan.direction === 'widening' ? Number(change || 0) >= 0 : Number(change || 0) <= 0;
    return `<article><strong>${esc(plan.symbol)}</strong><span>${esc(plan.direction)}</span><b class="${favorable ? 'up' : 'down'}">${change == null ? '--' : signed(change)}</b><small>Entry ${signed(plan.entrySpread)} | Stop ${signed(plan.stopSpread)} | Target ${signed(plan.targetSpread)}</small><button type="button" class="bsm" data-commodity-plan-remove="${esc(plan.id)}">Remove</button></article>`;
   }).join('')}</div></section>`;
+ }
+
+ function spreadBackfillHtml() {
+  const status = state.spreadBackfillStatus;
+  if (!status) return `<section class="commodity-spread-backfill"><div><span>Continuous history</span><strong>Three-year backfill not started</strong><small>Builds daily rolling history and synchronized 60-minute active-pair candles.</small></div><button type="button" class="bsm commodity-primary" id="commodityStartSpreadBackfill">Build History</button></section>`;
+  const errors = Array.isArray(status.errors) ? status.errors : [];
+  return `<section class="commodity-spread-backfill ${status.running ? 'loading' : errors.length ? 'warn' : 'ready'}">
+   <div><span>Continuous history</span><strong>${status.running ? `Building ${esc(status.currentUnderlying || 'featured MCX families')}` : status.cancelRequested ? 'Backfill cancelled' : 'History backfill complete'}</strong><small>${integer(status.completed || 0)} of ${integer(status.total || 0)} families complete${errors.length ? ` | ${integer(errors.length)} warning${errors.length === 1 ? '' : 's'}` : ''}</small></div>
+   <div class="commodity-chart-actions">
+    ${status.running ? '<button type="button" class="bsm danger" id="commodityCancelSpreadBackfill">Cancel</button>' : '<button type="button" class="bsm" id="commodityRefreshSpreadBackfill">Refresh History</button>'}
+   </div>
+  </section>`;
  }
 
  function spreadDeskHtml() {
@@ -743,9 +829,9 @@
    <button type="button" class="bsm commodity-primary" id="commodityEmptySpreadScan">Run Spread Scan</button>
   </section>`;
   const selected = selectedSpreadRow();
-  return `<section class="commodity-spread-brief">
+  return `${spreadBackfillHtml()}<section class="commodity-spread-brief">
     <div><span>Decision model</span><strong>Far minus near</strong><small>Rising spread means widening. Falling spread means narrowing.</small></div>
-    <div><span>Signal proof</span><strong>Three EMA + OBV</strong><small>EMA 9/30/100 must align with spread OBV.</small></div>
+    <div><span>Signal proof</span><strong>Trend + mean reversion</strong><small>Daily regime plus synchronized 60-minute confirmation.</small></div>
     <div><span>Execution proof</span><strong>Depth + cost edge</strong><small>Blocked when liquidity, expiry, or visible costs fail.</small></div>
    </section>
    <div class="commodity-spread-desk-metrics">
@@ -950,6 +1036,57 @@
   render();
  }
 
+ function stopBackfillPolling() {
+  if (spreadBackfillTimer) clearInterval(spreadBackfillTimer);
+  spreadBackfillTimer = null;
+ }
+
+ async function refreshSpreadBackfillStatus(options = {}) {
+  const response = await marketData('commodity_spread_history_backfill_status').catch(() => null);
+  if (!response?.ok) return;
+  state.spreadBackfillStatus = response.status || null;
+  if (!response.status?.running) {
+   stopBackfillPolling();
+   if (options.rescan !== false && Number(response.status?.completed || 0) > 0) {
+    await runSpreadScan();
+    return;
+   }
+  }
+  render();
+ }
+
+ async function startSpreadBackfill(options = {}) {
+  const response = await marketData('commodity_spread_history_backfill_start', { force: options.force === true }).catch(error => ({ ok: false, error: error?.message || String(error) }));
+  if (!response?.ok) {
+   state.spreadBackfillStatus = { running: false, errors: [{ error: response?.error || 'Continuous history backfill failed to start.' }] };
+   render();
+   return;
+  }
+  state.spreadBackfillStatus = response.status || { running: true, completed: 0, total: 9 };
+  stopBackfillPolling();
+  spreadBackfillTimer = setInterval(() => refreshSpreadBackfillStatus(), 1800);
+  render();
+ }
+
+ async function cancelSpreadBackfill() {
+  const response = await marketData('commodity_spread_history_backfill_cancel').catch(() => null);
+  if (response?.ok) state.spreadBackfillStatus = response.status || state.spreadBackfillStatus;
+  render();
+ }
+
+ async function loadSpreadExpiryCatalog(row = selectedSpreadRow()) {
+  const family = String(row?.family || '').trim().toUpperCase();
+  if (!family) return;
+  state.spreadExpiryCatalogStatus = 'loading';
+  render();
+  const response = await marketData('commodity_spread_expiry_catalog', { underlying: family }).catch(error => ({ ok: false, error: error?.message || String(error) }));
+  state.spreadExpiryCatalogStatus = response?.ok ? 'ready' : 'error';
+  state.spreadExpiryCatalog[family] = response?.ok
+   ? response
+   : { contracts: [], pairSnapshots: [], error: response?.error || 'Expiry catalog is unavailable.' };
+  render();
+ }
+
  async function runSpreadScan(options = {}) {
   const runId = Date.now();
   state.spreadDeskRunId = runId;
@@ -972,6 +1109,16 @@
    await subscribeLive();
    await refreshSpreadQuotes();
    checkSpreadAlerts();
+   if (!state.spreadBackfillStatus) {
+    const historyStatus = await marketData('commodity_spread_history_backfill_status').catch(() => null);
+    if (historyStatus?.ok) state.spreadBackfillStatus = historyStatus.status || null;
+   }
+   if (state.spreadRows.some(row => !row.continuousCoverage)
+    && !state.spreadBackfillStatus?.running
+    && !state.spreadBackfillStatus?.startedAt
+    && !state.spreadBackfillStatus?.completedAt) {
+    startSpreadBackfill().catch(() => {});
+   }
   } catch (error) {
    if (state.spreadDeskStopRequested || state.spreadDeskRunId !== runId) return;
    state.spreadDeskStatus = 'error';
@@ -988,16 +1135,27 @@
   global.openSignalInChartWorkspace?.({ symbol, timeframe: safeTimeframe, setupFamilyLabel: safeTimeframe === '1d' ? 'MCX Rolling Trend' : 'MCX Active Future' }, { overlay: false, timeframe: safeTimeframe, visibleCandleCount });
  }
 
- function openSpreadChart(row = selectedSpreadRow(), timeframe = '1d') {
+ function openSpreadChart(row = selectedSpreadRow(), timeframe = '1d', view = state.spreadChartView) {
   if (!row) return;
-  const safeTimeframe = timeframe === '4h' ? '4h' : '1d';
+  const safeTimeframe = timeframe === '1h' ? '1h' : '1d';
+  const safeView = ['continuous', 'current', 'historical'].includes(String(view || '')) ? String(view) : 'continuous';
   const symbol = `MCX-SPREAD:${row.key}`.toUpperCase();
   global.openSignalInChartWorkspace?.({
    symbol,
    timeframe: safeTimeframe,
-   setupFamilyLabel: `${row.label} synthetic spread`,
-   commoditySpread: row,
-  }, { overlay: false, timeframe: safeTimeframe, preset: 'ema_obv', visibleCandleCount: safeTimeframe === '1d' ? 520 : 360 });
+   setupFamilyLabel: `${row.label} decision-grade spread`,
+   commoditySpread: { ...row, underlying: row.family, view: safeView },
+  }, { overlay: false, timeframe: safeTimeframe, preset: 'ema_obv', visibleCandleCount: safeTimeframe === '1d' ? 1095 : 720 });
+ }
+
+ function openCommodityCalendarChart(symbol = '') {
+  const row = state.rows.find(item => item.symbol === String(symbol || '').trim().toUpperCase());
+  const spreadRow = commoditySnapshotSpreadRow(row);
+  if (!spreadRow) {
+   openChart(row?.nearFuture?.tradingSymbol || '', '1d');
+   return;
+  }
+  openSpreadChart(spreadRow, '1d', 'continuous');
  }
 
  function saveSpreadWatch(row = selectedSpreadRow()) {
@@ -1025,7 +1183,7 @@
 
  function bind() {
   document.querySelectorAll('[data-commodity-symbol]').forEach(item => item.addEventListener('click', event => {
-   if (event.target.closest('[data-commodity-chart]')) return;
+   if (event.target.closest('[data-commodity-chart], [data-commodity-calendar-chart]')) return;
    state.selectedSymbol = String(item.dataset.commoditySymbol || '');
    resetPreview();
    render();
@@ -1034,14 +1192,24 @@
    event.stopPropagation();
    openChart(button.dataset.commodityChart, button.dataset.commodityTimeframe || '1d');
   }));
+  document.querySelectorAll('[data-commodity-calendar-chart]').forEach(button => button.addEventListener('click', event => {
+   event.stopPropagation();
+   openCommodityCalendarChart(button.dataset.commodityCalendarChart);
+  }));
   document.querySelectorAll('[data-commodity-spread-chart]').forEach(button => button.addEventListener('click', () => {
    const row = state.spreadRows.find(item => item.key === button.dataset.commoditySpreadChart);
-   openSpreadChart(row, button.dataset.commodityTimeframe || '1d');
+   openSpreadChart(row, button.dataset.commodityTimeframe || '1d', button.dataset.commoditySpreadView || state.spreadChartView);
+  }));
+  document.querySelectorAll('[data-spread-chart-view]').forEach(button => button.addEventListener('click', () => {
+   state.spreadChartView = String(button.dataset.spreadChartView || 'continuous');
+   render();
+   if (state.spreadChartView === 'historical') loadSpreadExpiryCatalog().catch(() => {});
   }));
   document.querySelectorAll('[data-commodity-spread-key]').forEach(button => button.addEventListener('click', () => {
    state.selectedSpreadKey = String(button.dataset.commoditySpreadKey || '');
    resetPreview();
    render();
+   if (state.spreadChartView === 'historical') loadSpreadExpiryCatalog().catch(() => {});
   }));
   document.querySelectorAll('[data-commodity-filter]').forEach(button => button.addEventListener('click', () => {
    state.filter = String(button.dataset.commodityFilter || 'featured');
@@ -1109,6 +1277,9 @@
   document.getElementById('commodityEmptySpreadScan')?.addEventListener('click', () => runSpreadScan());
   document.getElementById('commoditySaveSpreadWatch')?.addEventListener('click', () => saveSpreadWatch());
   document.getElementById('commoditySpreadMarginPreview')?.addEventListener('click', () => estimateSpreadMargin());
+  document.getElementById('commodityStartSpreadBackfill')?.addEventListener('click', () => startSpreadBackfill());
+  document.getElementById('commodityRefreshSpreadBackfill')?.addEventListener('click', () => startSpreadBackfill({ force: true }));
+  document.getElementById('commodityCancelSpreadBackfill')?.addEventListener('click', cancelSpreadBackfill);
   document.querySelectorAll('[data-spread-desk-type]').forEach(button => button.addEventListener('click', () => {
    state.spreadDeskType = String(button.dataset.spreadDeskType || 'all');
    runSpreadScan();

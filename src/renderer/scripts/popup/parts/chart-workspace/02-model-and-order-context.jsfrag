@@ -329,7 +329,8 @@ function signalTimeframe(signal = {}, fallback = '4h') {
 
  function formatPrice(value = 0) {
  const numeric = Number(value || 0);
- if (!Number.isFinite(numeric) || numeric <= 0) return '-';
+ if (!Number.isFinite(numeric)) return '-';
+ if (numeric === 0) return '0';
  if (Math.abs(numeric) >= 1000) return numeric.toFixed(2).replace(/\.00$/, '');
  if (Math.abs(numeric) >= 1) return numeric.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
  return numeric.toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
@@ -1232,7 +1233,7 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  end: requirement.endMs || undefined,
  force: options.force === true,
  type: 'dhan_data',
- action: 'commodity_spread_chart',
+ action: 'commodity_spread_continuous_chart',
  })
  : { ok: false, error: 'Desktop market-data bridge is not available.' };
  if (!response?.ok) {
@@ -1255,7 +1256,17 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  keyLevels: null,
  fetchedAt: Date.now(),
  commoditySpread: response.pair || state.commoditySpread,
- spreadAnalysis: response.analysis || null,
+ signedPriceSeries: true,
+ spreadAnalysis: response.decision || response.analysis || null,
+ spreadDecision: response.decision || null,
+ spreadBands: response.bands || null,
+ spreadRollEvents: response.rollEvents || [],
+ spreadCoverage: response.coverage || null,
+ spreadSourceQuality: response.sourceQuality || null,
+ historyMode: response.historyMode || state.commoditySpread.view || 'continuous',
+ spreadExpiryCatalog: response.expiryCatalog || [],
+ spreadPairSnapshots: response.pairSnapshots || [],
+ chartType: response.chartType || (timeframe === '1d' ? 'line' : 'candles'),
  };
  }
  const requirement = resolutionCoverageRequirement(state);

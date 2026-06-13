@@ -27,28 +27,69 @@ const PANE_TEMPLATES = {
  </div>
 `,
 
- 'scanner': ` <div class="frow">
- <input class="fi" type="text" id="fSearch" placeholder="Search..." aria-label="Search scanner symbols"/>
- <select class="fi" id="fDir">
+ 'scanner': ` <div class="scanner-decision-workspace" id="scannerDecisionWorkspace">
+ <aside class="scanner-control-rail" aria-label="Scanner controls">
+ <div class="scanner-rail-heading">
+ <span>Scan definition</span>
+ <strong>Find the next review</strong>
+ </div>
+ <label class="scanner-search-field" for="fSearch">
+ <span>Search symbols</span>
+ <input class="fi" type="text" id="fSearch" placeholder="Symbol or company" aria-label="Search scanner symbols"/>
+ </label>
+ <section class="scanner-rail-section">
+ <div class="scanner-rail-label">Market universe</div>
+ <div class="scanner-universe-row" id="scannerUniverseButtons" aria-label="Scanner universes">
+ <button class="scanner-universe-btn active" type="button" data-scan-universe="fno_stocks"><span>F&amp;O</span><small>Fast liquid set</small></button>
+ <button class="scanner-universe-btn" type="button" data-scan-universe="nifty500"><span>Nifty 500</span><small>Core market</small></button>
+ <button class="scanner-universe-btn" type="button" data-scan-universe="midcap150"><span>Midcap 150</span><small>Growth basket</small></button>
+ <button class="scanner-universe-btn" type="button" data-scan-universe="smallcap250"><span>Smallcap 250</span><small>Higher breadth</small></button>
+ <button class="scanner-universe-btn" type="button" data-scan-universe="nse_rest"><span>NSE Rest</span><small>No core overlap</small></button>
+ <button class="scanner-universe-btn" type="button" data-scan-universe="bse_only"><span>BSE Only</span><small>Not in NSE</small></button>
+ <button class="scanner-universe-btn" type="button" data-scan-universe="nse_af"><span>NSE A-F</span><small>Chunk 1</small></button>
+ <button class="scanner-universe-btn" type="button" data-scan-universe="nse_gl"><span>NSE G-L</span><small>Chunk 2</small></button>
+ <button class="scanner-universe-btn" type="button" data-scan-universe="nse_mr"><span>NSE M-R</span><small>Chunk 3</small></button>
+ <button class="scanner-universe-btn" type="button" data-scan-universe="nse_sz"><span>NSE S-Z</span><small>Chunk 4</small></button>
+ <button class="scanner-universe-btn" type="button" data-scan-universe="all_nse"><span>All NSE</span><small>Research only</small></button>
+ </div>
+ </section>
+ <section class="scanner-rail-section">
+ <div class="scanner-rail-label">Strategy lens</div>
+ <div class="preset-row" id="scannerPresets">
+ <button class="preset-btn active" data-preset="">All Flow</button>
+ <button class="preset-btn" data-preset="trend">Trend</button>
+ <button class="preset-btn" data-preset="breakout">Breakout</button>
+ <button class="preset-btn" data-preset="ema_obv">EMA + OBV</button>
+ <button class="preset-btn" data-preset="sector_leaders">Sector Leaders</button>
+ <button class="preset-btn" data-preset="reversal">Reversal</button>
+ <button class="preset-btn" data-preset="volume">Volume</button>
+ <button class="preset-btn" data-preset="tracked">Tracked</button>
+ <button class="preset-btn scanner-view-toggle" id="btnScannerView" data-view="table" title="Change scanner view">Table</button>
+ </div>
+ </section>
+ <section class="scanner-rail-section">
+ <div class="scanner-rail-label">Result filters</div>
+ <div class="frow">
+ <label><span>Direction</span><select class="fi" id="fDir">
  <option value="">All Directions</option>
  <option value="long">Long</option>
  <option value="short">Short</option>
  <option value="watch_long">Watch Long</option>
  <option value="watch_short">Watch Short</option>
- </select>
- <select class="fi" id="fMTF">
+ </select></label>
+ <label><span>Confirmation</span><select class="fi" id="fMTF">
  <option value="">All</option>
  <option value="confirmed">MTF Only</option>
  <option value="partial">Partial</option>
- </select>
- <select class="fi" id="fSort">
+ </select></label>
+ <label><span>Sort</span><select class="fi" id="fSort">
  <option value="score">Best score first</option>
  <option value="tq">Trade quality first</option>
  <option value="change">Largest 24h move</option>
  <option value="volume">Highest volume</option>
  <option value="alpha">A-Z</option>
- </select>
- <select class="fi" id="fSetup">
+ </select></label>
+ <label><span>Setup</span><select class="fi" id="fSetup">
  <option value="">All Setups</option>
  <option value="Mean Reversion">Mean Reversion</option>
  <option value="Reclaim">Reclaim</option>
@@ -56,8 +97,8 @@ const PANE_TEMPLATES = {
  <option value="Trend">Trend</option>
  <option value="Breakout">Breakout</option>
  <option value="Mixed">Mixed</option>
- </select>
- <select class="fi" id="fSector">
+ </select></label>
+ <label class="scanner-filter-wide"><span>Sector</span><select class="fi" id="fSector">
  <option value="">All Sectors</option>
  <option value="Index">Index</option>
  <option value="Banking">Banking</option>
@@ -71,36 +112,21 @@ const PANE_TEMPLATES = {
  <option value="Realty">Realty</option>
  <option value="Capital Goods">Capital Goods</option>
  <option value="Other">Other</option>
- </select>
+ </select></label>
  </div>
- <div class="scanner-universe-row" id="scannerUniverseButtons" aria-label="Scanner universes">
- <button class="scanner-universe-btn active" type="button" data-scan-universe="fno_stocks"><span>F&amp;O Scanner</span><small>Fast liquid set</small></button>
- <button class="scanner-universe-btn" type="button" data-scan-universe="nifty500"><span>Nifty 500 Scanner</span><small>Core market</small></button>
- <button class="scanner-universe-btn" type="button" data-scan-universe="midcap150"><span>Midcap 150</span><small>Growth basket</small></button>
- <button class="scanner-universe-btn" type="button" data-scan-universe="smallcap250"><span>Smallcap 250</span><small>Higher breadth</small></button>
- <button class="scanner-universe-btn" type="button" data-scan-universe="nse_rest"><span>NSE Rest</span><small>No core overlap</small></button>
- <button class="scanner-universe-btn" type="button" data-scan-universe="bse_only"><span>BSE Only</span><small>Not in NSE</small></button>
- <button class="scanner-universe-btn" type="button" data-scan-universe="nse_af"><span>NSE A-F</span><small>Chunk 1</small></button>
- <button class="scanner-universe-btn" type="button" data-scan-universe="nse_gl"><span>NSE G-L</span><small>Chunk 2</small></button>
- <button class="scanner-universe-btn" type="button" data-scan-universe="nse_mr"><span>NSE M-R</span><small>Chunk 3</small></button>
- <button class="scanner-universe-btn" type="button" data-scan-universe="nse_sz"><span>NSE S-Z</span><small>Chunk 4</small></button>
- <button class="scanner-universe-btn" type="button" data-scan-universe="all_nse"><span>All NSE</span><small>Research only</small></button>
- </div>
- <div class="preset-row" id="scannerPresets">
- <button class="preset-btn active" data-preset="">All Flow</button>
- <button class="preset-btn" data-preset="trend">Trend</button>
- <button class="preset-btn" data-preset="breakout">Breakout</button>
- <button class="preset-btn" data-preset="ema_obv">EMA + OBV</button>
- <button class="preset-btn" data-preset="sector_leaders">Sector Leaders</button>
- <button class="preset-btn" data-preset="reversal">Reversal</button>
- <button class="preset-btn" data-preset="volume">Volume</button>
- <button class="preset-btn" data-preset="tracked">Tracked</button>
- <button class="preset-btn scanner-view-toggle" id="btnScannerView" data-view="cards" title="Scanner view: Cards" style="margin-left:auto">Cards</button>
- </div>
- <div class="scanner-insights-shell" id="scannerInsightsRail"></div>
+ </section>
+ <section class="scanner-rail-section scanner-health-section">
+ <div class="scanner-rail-label">Scan health</div>
  <div class="market-feed-strip" id="scannerFeedStatus"></div>
+ </section>
+ <details class="scanner-context-drawer">
+ <summary>Market context and insights</summary>
+ <div class="scanner-insights-shell" id="scannerInsightsRail"></div>
  <div class="trade-tape" id="tradeTape"></div>
  <div class="scanner-spotlight" id="scannerSpotlight"></div>
+ </details>
+ </aside>
+ <main class="scanner-queue-panel" aria-label="Scanner decision queue">
  <div class="strip" id="strip" style="display:none">
  <div class="st-item"><span id="ssLong">0</span><b class="tip" data-tip="Count of current long-direction signals">LONG</b></div>
  <div class="st-div"></div>
@@ -123,6 +149,22 @@ const PANE_TEMPLATES = {
  NSE/BSE equities, indices, and F&amp;O | Market data only | Manual execution
  </div>
  </div>
+ </div>
+ </main>
+ <aside class="scanner-evidence-panel" id="scannerEvidencePanel" aria-live="polite" aria-label="Selected opportunity evidence">
+ <div class="scanner-evidence-empty">
+ <span>Decision inspector</span>
+ <strong>Select a signal</strong>
+ <p>Review qualification evidence, price structure, entry, invalidation, and recent signal context without leaving the queue.</p>
+ </div>
+ </aside>
+ <footer class="scanner-status-strip" id="scannerStatusStrip">
+ <span><kbd>/</kbd> Search</span>
+ <span><kbd>&uarr;</kbd><kbd>&darr;</kbd> Select</span>
+ <span><kbd>Enter</kbd> Open chart</span>
+ <span><kbd>W</kbd> Watchlist</span>
+ <span class="scanner-status-safety">Analysis only. Orders stay with your broker.</span>
+ </footer>
  </div>
 `,
 
