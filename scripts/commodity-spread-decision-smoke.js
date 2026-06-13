@@ -7,6 +7,7 @@ const {
  buildCommoditySpreadRollEvents,
  buildCommoditySpreadDecision,
  mergeCommodityLiveSpread,
+ repairCommoditySpreadGlitches,
  isDegenerateCommoditySpread,
 } = __private;
 
@@ -48,6 +49,17 @@ const pair = {
  firstInstrument: { expiry: '2026-12-31', securityId: '1' },
  secondInstrument: { expiry: '2027-02-28', securityId: '2' },
 };
+
+{
+ const repaired = repairCommoditySpreadGlitches([
+  { time: 1, open: 1900, high: 1900, low: 1900, close: 1900 },
+  { time: 2, open: 0, high: 0, low: 0, close: 0 },
+  { time: 3, open: 2100, high: 2100, low: 2100, close: 2100 },
+ ]);
+ assert.strictEqual(repaired[1].close, 2000);
+ assert.strictEqual(repaired[1].repaired, true);
+ console.log('PASS isolated zero spread glitches are repaired from adjacent sessions');
+}
 
 {
  const historical = [{ time: 100, open: 2084, high: 2084, low: 2084, close: 2084, volume: 10 }];

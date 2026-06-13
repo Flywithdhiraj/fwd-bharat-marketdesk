@@ -203,7 +203,7 @@ const DHAN_OPTION_EXPIRY_CACHE_TTL_MS = 5 * 60 * 1000;
 const COMMODITY_ANALYSIS_CACHE_TTL_MS = 15 * 60 * 1000;
 const COMMODITY_DAILY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const COMMODITY_INTRADAY_CACHE_TTL_MS = 10 * 60 * 1000;
-const COMMODITY_SPREAD_MAX_DAILY_LOOKBACK_DAYS = 120;
+const COMMODITY_SPREAD_MAX_DAILY_LOOKBACK_DAYS = 400;
 const COMMODITY_SPREAD_DAILY_HISTORY_DAYS = 3 * 365;
 const COMMODITY_SPREAD_INTRADAY_HISTORY_DAYS = 90;
 const COMMODITY_SPREAD_HISTORY_VERSION = 1;
@@ -909,6 +909,28 @@ function buildCommoditySpreadClosePoints(firstRows = [], secondRows = []) {
    secondOi: Number(second.oi || 0),
   };
  }).filter(Boolean).sort((a, b) => a.time - b.time);
+}
+
+function repairCommoditySpreadGlitches(rows = []) {
+ const result = (Array.isArray(rows) ? rows : []).map(row => ({ ...row }));
+ for (let index = 1; index < result.length - 1; index += 1) {
+  const previous = Number(result[index - 1]?.close);
+  const current = Number(result[index]?.close);
+  const next = Number(result[index + 1]?.close);
+  if (!Number.isFinite(previous) || !Number.isFinite(current) || !Number.isFinite(next)) continue;
+  if (Math.abs(current) <= 0.0001 && Math.abs(previous) >= 100 && Math.abs(next) >= 100) {
+   const repaired = (previous + next) / 2;
+   result[index] = {
+    ...result[index],
+    open: repaired,
+    high: repaired,
+    low: repaired,
+    close: repaired,
+    repaired: true,
+   };
+  }
+ }
+ return result;
 }
 
 function isDegenerateCommoditySpread(rows = [], pair = {}) {
@@ -3094,29 +3116,15 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
   const nowMs = Number(options.end || Date.now()) || Date.now();
   const dailyStart = Number(options.dailyStart || nowMs - COMMODITY_SPREAD_DAILY_HISTORY_DAYS * DAY_MS);
   const intradayStart = Number(options.intradayStart || nowMs - COMMODITY_SPREAD_INTRADAY_HISTORY_DAYS * DAY_MS);
-  const nearDaily = await getCandles({
-    instrument: pair.firstInstrument,
-    resolution: '1d',
-    expiryCode: 0,
-    oi: true,
-    start: dailyStart,
-    end: nowMs,
-    timeoutMs: 45000,
-  });
-  const farDaily = await getCandles({
-    instrument: pair.secondInstrument,
-    resolution: '1d',
-    expiryCode: 0,
-    oi: true,
-    start: dailyStart,
-    end: nowMs,
-    timeoutMs: 45000,
-   });
+  const [nearDaily, farDaily] = await Promise.all([
+   getCommodityCachedCandles(pair.firstInstrument, '1d', dailyStart, nowMs, { force: options.force === true }),
+   getCommodityCachedCandles(pair.secondInstrument, '1d', dailyStart, nowMs, { force: options.force === true }),
+  ]);
   if (!nearDaily?.ok || !farDaily?.ok) {
    throw new Error(nearDaily?.error || farDaily?.error || `${pair.family} rolling daily history failed.`);
   }
   const clippedDaily = clipCommoditySpreadRowsForPair(pair, nearDaily.rows, farDaily.rows, '1d', dailyStart, nowMs);
-  const daily = buildCommoditySpreadClosePoints(clippedDaily.firstRows, clippedDaily.secondRows);
+  const daily = repairCommoditySpreadGlitches(buildCommoditySpreadClosePoints(clippedDaily.firstRows, clippedDaily.secondRows));
   if (isDegenerateCommoditySpread(daily, pair)) {
    throw new Error(`${pair.family} daily spread history collapsed to an invalid all-zero series.`);
   }
@@ -3273,8 +3281,8 @@ async function startCommoditySpreadBackfill(message = {}) {
   const pairChanged = String(entry?.pair?.firstInstrument?.securityId || '') !== String(pair.firstInstrument.securityId)
    || String(entry?.pair?.secondInstrument?.securityId || '') !== String(pair.secondInstrument.securityId);
   const invalidDaily = isDegenerateCommoditySpread(entry?.daily, pair);
-  const legacyDailyWindow = Number(entry?.coverage?.requestedDailyDays || 0) > COMMODITY_SPREAD_MAX_DAILY_LOOKBACK_DAYS;
-  if (!entry || pairChanged || invalidDaily || legacyDailyWindow || message.force === true) {
+  const incompleteDailyWindow = Number(entry?.coverage?.requestedDailyDays || 0) < COMMODITY_SPREAD_MAX_DAILY_LOOKBACK_DAYS;
+  if (!entry || pairChanged || invalidDaily || incompleteDailyWindow || message.force === true) {
    try {
     entry = await fetchCommoditySpreadHistoryEntry(pair, { force: message.force === true });
     store.families[pair.family] = entry;
@@ -3283,10 +3291,8 @@ async function startCommoditySpreadBackfill(message = {}) {
     return { ok: false, status: 502, error: error?.message || 'Commodity spread history could not be built.' };
    }
   }
-  const suppliedSnapshotIsFresh = Number.isFinite(Number(message.spread))
-   && Number(message.executableUpdatedAt || 0) > 0
-   && Date.now() - Number(message.executableUpdatedAt) < 30 * 1000;
-  let snapshot = suppliedSnapshotIsFresh ? { ...pair, ...message } : null;
+  const suppliedSnapshotAvailable = Number.isFinite(Number(message.spread));
+  let snapshot = suppliedSnapshotAvailable ? { ...pair, ...message } : null;
   if (!snapshot) {
    const quoteResponse = await getMarketFeed({ symbols: [pair.firstInstrument, pair.secondInstrument] }, '/marketfeed/quote');
    snapshot = quoteResponse?.ok ? buildCommoditySpreadSnapshotRow(pair, quoteResponse) : { ...pair };
@@ -4350,6 +4356,7 @@ module.exports = {
   buildCommoditySpreadPairs,
   buildCommoditySpreadCandles,
   buildCommoditySpreadClosePoints,
+  repairCommoditySpreadGlitches,
   mergeCommodityLiveSpread,
   isDegenerateCommoditySpread,
   buildCommoditySynchronizedSpreadCandles,

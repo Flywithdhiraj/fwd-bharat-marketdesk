@@ -384,9 +384,13 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  }
 
  async function readChartCache() {
- if (!chartPersistentCacheCleared) {
-  chartPersistentCacheCleared = true;
-  localSet({ [DS_V17_CHART_CACHE_KEY]: {} }).catch(() => {});
+ if (!chartPersistentCacheLoaded) {
+  chartPersistentCacheLoaded = true;
+  const stored = await localGet([DS_V17_CHART_CACHE_KEY]);
+  const persistentCache = stored?.[DS_V17_CHART_CACHE_KEY];
+  if (persistentCache && typeof persistentCache === 'object' && !Array.isArray(persistentCache)) {
+   chartRuntimeCache = persistentCache;
+  }
  }
  return chartRuntimeCache || {};
  }
@@ -403,6 +407,7 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  chartRuntimeCache = Object.fromEntries(Object.entries(nextCache)
  .sort((a, b) => Number(b[1]?.fetchedAt || 0) - Number(a[1]?.fetchedAt || 0))
  .slice(0, 8));
+ await localSet({ [DS_V17_CHART_CACHE_KEY]: chartRuntimeCache });
  }
 
  function cacheEntryFresh(entry = null, timeframe = '4h') {
@@ -1231,7 +1236,7 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  resolution: timeframe,
  start: requirement.startMs || undefined,
  end: requirement.endMs || undefined,
- force: options.force === true,
+ force: options.forceData === true,
  type: 'dhan_data',
  action: 'commodity_spread_continuous_chart',
  })

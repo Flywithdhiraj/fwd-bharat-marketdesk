@@ -1,19 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="FWD Bharat MarketDesk">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">FWD Bharat MarketDesk</title>
   <defs>
-    <linearGradient id="bg" x1="14" y1="8" x2="118" y2="120" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#fff5e1"/>
-      <stop offset="0.45" stop-color="#f2b35b"/>
-      <stop offset="1" stop-color="#0d6b55"/>
-    </linearGradient>
-    <linearGradient id="ink" x1="26" y1="28" x2="102" y2="100" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#1b1d1a"/>
-      <stop offset="1" stop-color="#06261f"/>
+    <linearGradient id="surface" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#102d38"/>
+      <stop offset="1" stop-color="#06131d"/>
     </linearGradient>
   </defs>
-  <rect x="8" y="8" width="112" height="112" rx="24" fill="url(#bg)"/>
-  <path d="M28 82h18c12 0 20-8 20-20S58 42 46 42H28v40Zm16-14h-2V56h2c5 0 8 2 8 6s-3 6-8 6Z" fill="url(#ink)"/>
-  <path d="M70 82V42h28v14H84v6h12v13H84v7H70Z" fill="url(#ink)"/>
-  <path d="M26 93h76" stroke="#fff8e8" stroke-width="8" stroke-linecap="round"/>
-  <path d="M28 94c18-22 35-19 52-29 9-5 15-12 22-25" fill="none" stroke="#0b3b31" stroke-width="7" stroke-linecap="round"/>
-  <circle cx="101" cy="41" r="8" fill="#fff8e8"/>
+  <rect x="18" y="18" width="476" height="476" rx="116" fill="url(#surface)"/>
+  <rect x="19" y="19" width="474" height="474" rx="115" fill="none" stroke="#76e4d3" stroke-opacity=".22" stroke-width="2"/>
+  <path d="M137 118h211v68H216v72h112v65H216v112h-79z" fill="#f4fbfd"/>
+  <path d="M207 348l67-68 49 42 76-91" fill="none" stroke="#76e4d3" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M365 224h47v47" fill="none" stroke="#76e4d3" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="147" cy="404" r="25" fill="#ffad42"/>
 </svg>

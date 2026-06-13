@@ -36,7 +36,7 @@
  const DS_V17_CHART_STATE_KEY = 'dsDetachedChartStateV17';
  const DS_V17_CHART_CACHE_KEY = 'dsChartCacheV17';
  let chartRuntimeCache = {};
- let chartPersistentCacheCleared = false;
+ let chartPersistentCacheLoaded = false;
  const RESOLUTIONS = Object.freeze(['4h', '1d', '1w']);
  const SUPPORTED_RESOLUTIONS = Object.freeze(['1h', ...RESOLUTIONS]);
  const RESOLUTION_LABELS = Object.freeze({

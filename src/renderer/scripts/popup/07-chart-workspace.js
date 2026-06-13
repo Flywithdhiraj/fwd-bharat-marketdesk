@@ -38,7 +38,7 @@
  const DS_V17_CHART_STATE_KEY = 'dsDetachedChartStateV17';
  const DS_V17_CHART_CACHE_KEY = 'dsChartCacheV17';
  let chartRuntimeCache = {};
- let chartPersistentCacheCleared = false;
+ let chartPersistentCacheLoaded = false;
  const RESOLUTIONS = Object.freeze(['4h', '1d', '1w']);
  const SUPPORTED_RESOLUTIONS = Object.freeze(['1h', ...RESOLUTIONS]);
  const RESOLUTION_LABELS = Object.freeze({
@@ -1488,9 +1488,13 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  }
 
  async function readChartCache() {
- if (!chartPersistentCacheCleared) {
-  chartPersistentCacheCleared = true;
-  localSet({ [DS_V17_CHART_CACHE_KEY]: {} }).catch(() => {});
+ if (!chartPersistentCacheLoaded) {
+  chartPersistentCacheLoaded = true;
+  const stored = await localGet([DS_V17_CHART_CACHE_KEY]);
+  const persistentCache = stored?.[DS_V17_CHART_CACHE_KEY];
+  if (persistentCache && typeof persistentCache === 'object' && !Array.isArray(persistentCache)) {
+   chartRuntimeCache = persistentCache;
+  }
  }
  return chartRuntimeCache || {};
  }
@@ -1507,6 +1511,7 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  chartRuntimeCache = Object.fromEntries(Object.entries(nextCache)
  .sort((a, b) => Number(b[1]?.fetchedAt || 0) - Number(a[1]?.fetchedAt || 0))
  .slice(0, 8));
+ await localSet({ [DS_V17_CHART_CACHE_KEY]: chartRuntimeCache });
  }
 
  function cacheEntryFresh(entry = null, timeframe = '4h') {
@@ -2335,7 +2340,7 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  resolution: timeframe,
  start: requirement.startMs || undefined,
  end: requirement.endMs || undefined,
- force: options.force === true,
+ force: options.forceData === true,
  type: 'dhan_data',
  action: 'commodity_spread_continuous_chart',
  })
@@ -4978,8 +4983,8 @@ function buildChartTabPicker(state = {}, options = {}) {
  };
  }
 
- async function buildChartPayload(surface = SURFACE_PREVIEW, state = {}, strategy = {}, orderContext = null, signal = null, marketIndex = null, force = false) {
- const dataset = await loadChartDataset(state, strategy, { force });
+ async function buildChartPayload(surface = SURFACE_PREVIEW, state = {}, strategy = {}, orderContext = null, signal = null, marketIndex = null, force = false, forceData = false) {
+ const dataset = await loadChartDataset(state, strategy, { force, forceData });
  const chartState = chartStateForDataset(state, dataset);
  const model = dataset?.ok ? buildChartModel(dataset, chartState, strategy, orderContext) : null;
  const indicatorApi = globalThis.FWDTradeDeskIndicators;
@@ -5018,7 +5023,7 @@ function buildChartTabPicker(state = {}, options = {}) {
  return { state: chartState, dataset, model, indicators, intelligence, indexCorrelation, indexComparison };
  }
 
- async function renderDeskSurface(surface = SURFACE_TAB, surfaceRef, state = {}, strategy = {}, orderContext = null, signalState = {}, activeSignal = null, force = false) {
+ async function renderDeskSurface(surface = SURFACE_TAB, surfaceRef, state = {}, strategy = {}, orderContext = null, signalState = {}, activeSignal = null, force = false, forceData = false) {
  const primaryTimeframe = normalizeTimeframe(state.primaryTimeframe || state.timeframe || '4h');
  const executionTimeframe = normalizeTimeframe(state.executionTimeframe || state.timeframe || '4h');
  const isCompareLayout = state.deskLayoutMode !== 'single' && primaryTimeframe === '1d' && executionTimeframe === '4h';
@@ -5033,10 +5038,10 @@ function buildChartTabPicker(state = {}, options = {}) {
  timeframe: executionTimeframe,
  visibleCandleCount: Math.max(80, state.visibleCandleCount || defaultVisibleCount(executionTimeframe)),
  };
- const primaryPayload = await buildChartPayload(`${surface}-primary`, primaryState, strategy, orderContext, activeSignal, signalState?.marketIndex || null, force);
+ const primaryPayload = await buildChartPayload(`${surface}-primary`, primaryState, strategy, orderContext, activeSignal, signalState?.marketIndex || null, force, forceData);
  const executionPayload = fastSingle
  ? { state: executionState, dataset: null, model: null, indicators: {}, intelligence: null }
- : await buildChartPayload(`${surface}-execution`, executionState, strategy, orderContext, activeSignal, signalState?.marketIndex || null, force);
+ : await buildChartPayload(`${surface}-execution`, executionState, strategy, orderContext, activeSignal, signalState?.marketIndex || null, force, forceData);
  const scanResults = Array.isArray(signalState?.scanResults) ? signalState.scanResults : [];
  const contextData = {
  scanResults,
@@ -5108,11 +5113,12 @@ function buildChartTabPicker(state = {}, options = {}) {
  surfaceRef.refreshNonce = Number(state.refreshNonce || 0);
  const uiMode = String(state.uiMode || surfaceRef.uiMode || 'default').trim().toLowerCase() || 'default';
  if ((surface === SURFACE_TAB || surface === SURFACE_DETACHED) && uiMode !== 'journal') {
- await renderDeskSurface(surface, surfaceRef, state, strategy, orderContext, signalState, activeSignal, force || refreshChanged);
+ await renderDeskSurface(surface, surfaceRef, state, strategy, orderContext, signalState, activeSignal, force || refreshChanged, refreshChanged);
  return;
  }
  const dataset = await loadChartDataset(state, strategy, {
  force: force || refreshChanged,
+ forceData: refreshChanged,
  });
  const chartState = chartStateForDataset(state, dataset);
  const model = dataset?.ok ? buildChartModel(dataset, chartState, strategy, orderContext) : null;

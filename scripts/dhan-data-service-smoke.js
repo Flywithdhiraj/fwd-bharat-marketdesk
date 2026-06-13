@@ -202,9 +202,9 @@ const clippedSpreadRows = clipCommoditySpreadRowsForPair(
  Date.UTC(2025, 5, 1),
  Date.UTC(2026, 5, 4)
 );
-assert.strictEqual(clippedSpreadRows.firstRows.length, 1);
-assert.strictEqual(clippedSpreadRows.secondRows.length, 1);
-assert.strictEqual(clippedSpreadRows.firstRows[0].close, 105);
+assert.strictEqual(clippedSpreadRows.firstRows.length, 2);
+assert.strictEqual(clippedSpreadRows.secondRows.length, 2);
+assert.strictEqual(clippedSpreadRows.firstRows[0].close, 100);
 const wideningAnalysis = analyzeCommoditySpreadCandles(Array.from({ length: 140 }, (_, index) => ({ time: index + 1, open: index, high: index + 2, low: index - 1, close: index + 1, volume: 100 + index })));
 assert.strictEqual(wideningAnalysis.direction, 'widening');
 assert.strictEqual(wideningAnalysis.ema9 > wideningAnalysis.ema30 && wideningAnalysis.ema30 > wideningAnalysis.ema100, true);
