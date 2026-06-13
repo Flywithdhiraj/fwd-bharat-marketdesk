@@ -1593,12 +1593,12 @@ ${tooltip}
  shape: marker.shape || 'circle',
  text: String(marker.label || '').slice(0, 18),
  })).filter(marker => marker.time);
- const spreadRollMarkers = (payload.dataset?.spreadRollEvents || []).slice(-8).map(marker => ({
+ const spreadRollMarkers = (payload.dataset?.spreadRollEvents || []).slice(-4).map(marker => ({
   time: toTime(marker.time),
   position: 'aboveBar',
   color: COLORS.signal,
   shape: 'square',
-  text: marker.type === 'expiry_fallback' ? 'Expiry roll' : 'OI roll',
+  text: marker.type === 'expiry_fallback' ? 'Expiry roll' : 'Liquidity roll',
  })).filter(marker => marker.time);
  const allMarkers = [...replayMarkers, ...intelligenceMarkers, ...spreadRollMarkers];
  if (allMarkers.length && globalThis.LightweightCharts.createSeriesMarkers) {

@@ -1271,6 +1271,11 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  historyMode: response.historyMode || state.commoditySpread.view || 'continuous',
  spreadExpiryCatalog: response.expiryCatalog || [],
  spreadPairSnapshots: response.pairSnapshots || [],
+ spreadStatistics: response.statistics || null,
+ spreadExecution: response.execution || null,
+ spreadContractDetails: response.contractDetails || null,
+ spreadDataQuality: response.dataQuality || null,
+ spreadSnapshot: response.snapshot || null,
  chartType: response.chartType || (timeframe === '1d' ? 'line' : 'candles'),
  };
  }

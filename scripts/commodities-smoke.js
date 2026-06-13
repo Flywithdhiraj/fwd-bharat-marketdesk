@@ -14,6 +14,7 @@ const styles = read('src/renderer/styles.css');
 const service = read('src/main/dhan-data-service.js');
 const chartWorkspacePart = read('src/renderer/scripts/popup/parts/chart-workspace/02-model-and-order-context.jsfrag');
 const chartSurfacePart = read('src/renderer/scripts/popup/parts/chart-workspace/04-surface-events.jsfrag');
+const chartShellPart = read('src/renderer/scripts/popup/parts/chart-workspace/03-render-shells.jsfrag');
 const chartIndicators = read('src/renderer/scripts/shared/chart-indicators.js');
 const chartEngine = read('src/renderer/scripts/popup/chart-engine.js');
 
@@ -67,7 +68,7 @@ assert(service.includes('incompleteDailyWindow') && service.includes('repairComm
 assert(chartSurfacePart.includes("preset: normalizePreset(state.preset || '') === 'ema_obv' ? 'decision'"));
 assert(chartWorkspacePart.includes('force: options.forceData === true'));
 assert(chartWorkspacePart.includes('chartPersistentCacheLoaded') && chartWorkspacePart.includes('DS_V17_CHART_CACHE_KEY'));
-assert(chartEngine.includes("text: marker.type === 'expiry_fallback' ? 'Expiry roll' : 'OI roll'"));
+assert(chartEngine.includes("text: marker.type === 'expiry_fallback' ? 'Expiry roll' : 'Liquidity roll'"));
 assert(service.includes('buildCommoditySpreadClosePoints') && service.includes('buildCommoditySynchronizedSpreadCandles'));
 assert(service.includes("action === 'commodity_spread_continuous_chart'"));
 assert(service.includes("getCommodityCachedCandles(pair.secondInstrument, '1d'") && service.includes('isDegenerateCommoditySpread'));
@@ -101,5 +102,8 @@ assert(chartWorkspacePart.includes('signedPriceSeries: true'));
 assert(chartIndicators.includes('options.allowSigned === true'));
 assert(chartSurfacePart.includes("dataset?.signedPriceSeries === true"));
 assert(chartEngine.includes("payload.dataset?.signedPriceSeries === true"));
+assert(service.includes('commoditySpreadSnapshotValidity') && service.includes('sanitizeCommoditySpreadRows'));
+assert(commodity.includes('commodity-spread-exact-plan') && commodity.includes('Buy spread = far ask - near bid'));
+assert(chartShellPart.includes('buildCommoditySpreadTradePanel') && chartShellPart.includes('No trade plan while data or setup gates fail.'));
 
 console.log('Commodities Phase 3 smoke checks passed.');

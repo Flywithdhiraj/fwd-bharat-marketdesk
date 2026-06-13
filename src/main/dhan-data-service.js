@@ -933,6 +933,77 @@ function repairCommoditySpreadGlitches(rows = []) {
  return result;
 }
 
+function commoditySpreadMedian(values = []) {
+ const sorted = (Array.isArray(values) ? values : []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+ if (!sorted.length) return 0;
+ const middle = Math.floor(sorted.length / 2);
+ return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function sanitizeCommoditySpreadRows(rows = [], options = {}) {
+ const repaired = repairCommoditySpreadGlitches(rows);
+ const valid = repaired.filter(row => {
+  const values = [row?.open, row?.high, row?.low, row?.close].map(Number);
+  return Number.isFinite(Number(row?.time)) && values.every(Number.isFinite)
+   && Number(row.high) >= Number(row.low);
+ });
+ if (valid.length < 5) {
+  return {
+   rows: valid,
+   excluded: Math.max(0, repaired.length - valid.length),
+   badTicks: 0,
+   rollDiscontinuities: 0,
+   segmentStart: valid[0]?.time || 0,
+  };
+ }
+ const changes = valid.slice(1).map((row, index) => Math.abs(Number(row.close) - Number(valid[index].close)));
+ const typicalChange = commoditySpreadMedian(changes.filter(value => value > 0));
+ const absoluteFloor = Math.max(1, Number(options.absoluteFloor || 0));
+ const cleaned = [];
+ let badTicks = 0;
+ for (let index = 0; index < valid.length; index += 1) {
+  const row = valid[index];
+  const previous = valid[index - 1];
+  const next = valid[index + 1];
+  if (!previous || !next) {
+   cleaned.push(row);
+   continue;
+  }
+  const midpoint = (Number(previous.close) + Number(next.close)) / 2;
+  const deviation = Math.abs(Number(row.close) - midpoint);
+  const neighborGap = Math.abs(Number(next.close) - Number(previous.close));
+  const threshold = Math.max(absoluteFloor, typicalChange * 8, neighborGap * 4);
+  const isolatedSpike = deviation > threshold
+   && Math.sign(Number(row.close) - Number(previous.close)) !== Math.sign(Number(next.close) - Number(row.close));
+  if (isolatedSpike) {
+   badTicks += 1;
+   continue;
+  }
+  cleaned.push(row);
+ }
+ const cleanedChanges = cleaned.slice(1).map((row, index) => Math.abs(Number(row.close) - Number(cleaned[index].close)));
+ const cleanedTypicalChange = commoditySpreadMedian(cleanedChanges.filter(value => value > 0));
+ let latestRollIndex = -1;
+ for (let index = 1; index < cleaned.length - 3; index += 1) {
+  const previous = Number(cleaned[index - 1].close);
+  const current = Number(cleaned[index].close);
+  const jump = Math.abs(current - previous);
+  const threshold = Math.max(absoluteFloor * 4, cleanedTypicalChange * 12, Math.max(Math.abs(previous), 100) * 0.2);
+  if (jump <= threshold) continue;
+  const following = cleaned.slice(index, index + 4).map(row => Number(row.close));
+  const followsNewLevel = following.every(value => Math.abs(value - current) < jump * 0.45);
+  if (followsNewLevel) latestRollIndex = index;
+ }
+ const postRollRows = latestRollIndex > 0 ? cleaned.slice(latestRollIndex) : cleaned;
+ return {
+  rows: postRollRows,
+  excluded: Math.max(0, repaired.length - postRollRows.length),
+  badTicks,
+  rollDiscontinuities: latestRollIndex > 0 ? 1 : 0,
+  segmentStart: postRollRows[0]?.time || 0,
+ };
+}
+
 function isDegenerateCommoditySpread(rows = [], pair = {}) {
  const firstSecurityId = String(pair?.firstInstrument?.securityId || '');
  const secondSecurityId = String(pair?.secondInstrument?.securityId || '');
@@ -1026,6 +1097,8 @@ function commoditySpreadStats(rows = [], lookback = 60) {
   deviation,
   zScore: deviation > 0 ? (latest - mean) / deviation : 0,
   percentile,
+  normalLow: mean - deviation * 2,
+  normalHigh: mean + deviation * 2,
   ema9: commoditySpreadEma(closes, 9),
   ema30: commoditySpreadEma(closes, 30),
   ema100: commoditySpreadEma(closes, 100),
@@ -1106,7 +1179,7 @@ function buildCommoditySpreadRollEvents(points = [], pair = {}) {
   }
   spaced.push(event);
  }
- return spaced.slice(-8);
+ return spaced.slice(-4);
 }
 
 function mergeCommodityLiveSpread(rows = [], snapshot = {}, resolution = '1d', nowMs = Date.now()) {
@@ -1154,9 +1227,13 @@ function buildCommoditySpreadDecision({
  snapshot = {},
  minimumHistory = COMMODITY_SPREAD_MIN_DECISION_CANDLES,
 } = {}) {
- const daily = commoditySpreadStats(dailyRows, 60);
- const intraday = commoditySpreadStats(intradayRows, 30);
+ const cleanDaily = sanitizeCommoditySpreadRows(dailyRows);
+ const cleanIntraday = sanitizeCommoditySpreadRows(intradayRows);
+ const daily = commoditySpreadStats(cleanDaily.rows, 60);
+ const intraday = commoditySpreadStats(cleanIntraday.rows, 30);
  const blockers = [];
+ const dataQuality = snapshot.validity || {};
+ if (dataQuality.valid === false) blockers.push(...(dataQuality.reasons || ['Live spread data is invalid or stale.']));
  if (!daily || daily.count < minimumHistory) blockers.push(`At least ${minimumHistory} matched daily spread closes are required.`);
  const separation = daily
   ? Math.min(Math.abs(Number(daily.ema9) - Number(daily.ema30)), Math.abs(Number(daily.ema30) - Number(daily.ema100)))
@@ -1216,6 +1293,8 @@ function buildCommoditySpreadDecision({
    ? Math.min(Number(zBoundary), Number(atrStop))
    : null;
  const targetMove = target == null || !Number.isFinite(entry) ? 0 : Math.abs(target - entry);
+ const riskMove = stop == null || !Number.isFinite(entry) ? 0 : Math.abs(entry - stop);
+ const rewardRisk = riskMove > 0 ? targetMove / riskMove : 0;
  const slippage = action === 'BUY_SPREAD'
   ? Number(costs.wideningSlippagePoints || 0)
   : action === 'SELL_SPREAD'
@@ -1224,11 +1303,13 @@ function buildCommoditySpreadDecision({
  const costRequiredMove = (Number(costs.brokerageBreakevenPoints || 0) + slippage) * 1.1;
  const costEdgeAvailable = action !== 'WAIT' && targetMove > costRequiredMove;
  if (action !== 'WAIT' && !costEdgeAvailable) blockers.push('Expected target does not clear brokerage, GST, visible slippage, and the safety buffer.');
+ if (action !== 'WAIT' && rewardRisk < 1.2) blockers.push('Reward-to-risk is below the minimum 1.20 threshold.');
  if (blockers.length) action = 'WAIT';
  if (action === 'WAIT' && !blockers.length) blockers.push(reason);
  const valuePerPoint = Number(costs.valuePerSpreadPoint || 0);
  const expectedGrossPnl = targetMove * valuePerPoint;
  const expectedNetPnl = Math.max(0, expectedGrossPnl - Number(costs.fixedBrokerageAndGst || 0) - slippage * valuePerPoint);
+ const maximumRiskPnl = riskMove * valuePerPoint + Number(costs.fixedBrokerageAndGst || 0) + slippage * valuePerPoint;
  const rawConfidence = daily
   ? Math.min(100, Math.round(
    Math.min(35, daily.count / minimumHistory * 35)
@@ -1248,6 +1329,8 @@ function buildCommoditySpreadDecision({
   percentile: daily ? +daily.percentile.toFixed(1) : null,
   mean: daily ? +daily.mean.toFixed(4) : null,
   deviation: daily ? +daily.deviation.toFixed(4) : null,
+  normalLow: daily ? +daily.normalLow.toFixed(4) : null,
+  normalHigh: daily ? +daily.normalHigh.toFixed(4) : null,
   ema9: daily?.ema9 == null ? null : +daily.ema9.toFixed(4),
   ema30: daily?.ema30 == null ? null : +daily.ema30.toFixed(4),
   ema100: daily?.ema100 == null ? null : +daily.ema100.toFixed(4),
@@ -1256,18 +1339,51 @@ function buildCommoditySpreadDecision({
   stop: stop == null || !Number.isFinite(stop) ? null : +stop.toFixed(4),
   target: target == null || !Number.isFinite(target) ? null : +target.toFixed(4),
   targetMove: +targetMove.toFixed(4),
+  riskMove: +riskMove.toFixed(4),
+  rewardRisk: +rewardRisk.toFixed(2),
   costRequiredMove: +costRequiredMove.toFixed(4),
   costEdgeAvailable,
   expectedGrossPnl: +expectedGrossPnl.toFixed(2),
   expectedNetPnl: +expectedNetPnl.toFixed(2),
+  maximumRiskPnl: +maximumRiskPnl.toFixed(2),
+  brokerageAndGst: Number(costs.fixedBrokerageAndGst || 0),
+  slippagePoints: +slippage.toFixed(4),
+  slippageCost: +(slippage * valuePerPoint).toFixed(2),
   breakevenPoints: costs.brokerageBreakevenPoints ?? null,
   legs: action === 'BUY_SPREAD'
    ? { first: 'SELL', second: 'BUY', label: `BUY ${pair.secondRole || 'far'} / SELL ${pair.firstRole || 'near'}` }
    : action === 'SELL_SPREAD'
     ? { first: 'BUY', second: 'SELL', label: `SELL ${pair.secondRole || 'far'} / BUY ${pair.firstRole || 'near'}` }
     : { first: '', second: '', label: 'WAIT' },
+  tradePlan: action === 'WAIT' ? null : {
+   action,
+   formula: `${pair.secondInstrument?.tradingSymbol || pair.secondRole || 'far'} - ${pair.firstInstrument?.tradingSymbol || pair.firstRole || 'near'}`,
+   first: {
+    transactionType: action === 'BUY_SPREAD' ? 'SELL' : 'BUY',
+    tradingSymbol: pair.firstInstrument?.tradingSymbol || '',
+    expiry: pair.firstInstrument?.expiry || '',
+    quantity: Math.max(1, Number(pair.firstInstrument?.lotSize || 1) * Number(pair.firstLots || 1)),
+    executablePrice: action === 'BUY_SPREAD' ? Number(snapshot.firstBid || 0) : Number(snapshot.firstAsk || 0),
+   },
+   second: {
+    transactionType: action === 'BUY_SPREAD' ? 'BUY' : 'SELL',
+    tradingSymbol: pair.secondInstrument?.tradingSymbol || '',
+    expiry: pair.secondInstrument?.expiry || '',
+    quantity: Math.max(1, Number(pair.secondInstrument?.lotSize || 1) * Number(pair.secondLots || 1)),
+    executablePrice: action === 'BUY_SPREAD' ? Number(snapshot.secondAsk || 0) : Number(snapshot.secondBid || 0),
+   },
+  },
   dailyCandles: daily?.count || 0,
   intradayCandles: intraday?.count || 0,
+  dataQuality: {
+   valid: dataQuality.valid !== false,
+   freshness: dataQuality.freshness || 'unverified',
+   dailyExcluded: cleanDaily.excluded,
+   intradayExcluded: cleanIntraday.excluded,
+   badTicks: cleanDaily.badTicks + cleanIntraday.badTicks,
+   rollDiscontinuities: cleanDaily.rollDiscontinuities + cleanIntraday.rollDiscontinuities,
+   segmentStart: cleanDaily.segmentStart || 0,
+  },
  };
 }
 
@@ -1471,12 +1587,70 @@ function commoditySpreadSafeguards(pair = {}, snapshot = {}, nowMs = Date.now())
  if (Number(snapshot.firstVolume || 0) <= 0 || Number(snapshot.secondVolume || 0) <= 0) warnings.push('One or both legs have no reported volume.');
  if (Number(snapshot.firstOi || 0) <= 0 || Number(snapshot.secondOi || 0) <= 0) warnings.push('One or both legs have no reported open interest.');
  if (Math.max(firstWidthPct || 0, secondWidthPct || 0) > 0.15) warnings.push('Bid/ask width is above 0.15% on a spread leg.');
+ if (snapshot.validity?.valid === false) warnings.push(...(snapshot.validity.reasons || ['Live quote validation failed.']));
  return {
   tradeAllowed: warnings.length === 0,
   warnings,
   daysToNearestExpiry: +daysToNearestExpiry.toFixed(2),
   firstWidthPct: firstWidthPct == null ? null : +firstWidthPct.toFixed(4),
   secondWidthPct: secondWidthPct == null ? null : +secondWidthPct.toFixed(4),
+ };
+}
+
+function quoteExchangeTimeMs(quote = {}) {
+ const raw = Number(
+  quote?.last_trade_time
+  || quote?.lastTradeTime
+  || quote?.last_traded_time
+  || quote?.exchange_time
+  || quote?.timestamp
+  || 0
+ );
+ if (!Number.isFinite(raw) || raw <= 0) return 0;
+ return raw > 1000000000000 ? raw : raw * 1000;
+}
+
+function isMcxTradingSession(nowMs = Date.now()) {
+ const parts = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Kolkata',
+  weekday: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+ }).formatToParts(new Date(Number(nowMs)));
+ const value = type => parts.find(part => part.type === type)?.value || '';
+ const weekday = value('weekday');
+ const minutes = Number(value('hour')) * 60 + Number(value('minute'));
+ return !['Sat', 'Sun'].includes(weekday) && minutes >= 9 * 60 && minutes <= 23 * 60 + 30;
+}
+
+function commoditySpreadSnapshotValidity(snapshot = {}, nowMs = Date.now()) {
+ const reasons = [];
+ const firstQuoteTime = Number(snapshot.firstQuoteTime || 0);
+ const secondQuoteTime = Number(snapshot.secondQuoteTime || 0);
+ const quoteTimes = [firstQuoteTime, secondQuoteTime].filter(value => value > 0);
+ const oldestQuoteTime = quoteTimes.length === 2 ? Math.min(...quoteTimes) : 0;
+ const quoteAgeMs = oldestQuoteTime > 0 ? Math.max(0, Number(nowMs) - oldestQuoteTime) : null;
+ const marketOpen = isMcxTradingSession(nowMs);
+ if (!marketOpen) reasons.push('MCX market is closed; executable quotes may be stale.');
+ if (quoteAgeMs != null && quoteAgeMs > 15 * 60 * 1000) reasons.push(`Live quotes are stale by ${Math.ceil(quoteAgeMs / 60000)} minutes.`);
+ if (!(Number(snapshot.firstPrice) > 0) || !(Number(snapshot.secondPrice) > 0)) reasons.push('One or both leg prices are invalid.');
+ if (!(Number(snapshot.firstBid) > 0) || !(Number(snapshot.firstAsk) > 0)
+  || !(Number(snapshot.secondBid) > 0) || !(Number(snapshot.secondAsk) > 0)) {
+  reasons.push('Complete bid/ask prices are unavailable for both legs.');
+ }
+ if (Number(snapshot.firstAsk) > 0 && Number(snapshot.firstBid) > Number(snapshot.firstAsk)) reasons.push('Near-leg market depth is crossed.');
+ if (Number(snapshot.secondAsk) > 0 && Number(snapshot.secondBid) > Number(snapshot.secondAsk)) reasons.push('Far-leg market depth is crossed.');
+ return {
+  valid: reasons.length === 0,
+  reasons: Array.from(new Set(reasons)),
+  freshness: !marketOpen ? 'market_closed' : quoteAgeMs == null ? 'live_request' : quoteAgeMs <= 60 * 1000 ? 'live' : 'delayed',
+  timestampVerified: quoteTimes.length === 2,
+  marketOpen,
+  quoteAgeMs,
+  firstQuoteTime,
+  secondQuoteTime,
+  checkedAt: Number(nowMs),
  };
 }
 
@@ -3036,6 +3210,7 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
   const sellSecond = depthFillForQuantity(secondQuote, 'buy', secondQuantity);
   const wideningDepth = sellFirst.complete && buySecond.complete;
   const narrowingDepth = buyFirst.complete && sellSecond.complete;
+  const executableUpdatedAt = Date.now();
   const snapshot = {
    ...pair,
    firstPrice: +firstPrice.toFixed(4),
@@ -3056,8 +3231,11 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
    secondVolume: Number(secondQuote?.volume || 0) || 0,
    firstOi: Number(firstQuote?.oi || firstQuote?.open_interest || 0) || 0,
    secondOi: Number(secondQuote?.oi || secondQuote?.open_interest || 0) || 0,
-   executableUpdatedAt: Date.now(),
+   firstQuoteTime: quoteExchangeTimeMs(firstQuote),
+   secondQuoteTime: quoteExchangeTimeMs(secondQuote),
+   executableUpdatedAt,
   };
+  snapshot.validity = commoditySpreadSnapshotValidity(snapshot, executableUpdatedAt);
   return {
    ...snapshot,
    costs: commoditySpreadCostEstimate(pair, snapshot),
@@ -3124,15 +3302,17 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
    throw new Error(nearDaily?.error || farDaily?.error || `${pair.family} rolling daily history failed.`);
   }
   const clippedDaily = clipCommoditySpreadRowsForPair(pair, nearDaily.rows, farDaily.rows, '1d', dailyStart, nowMs);
-  const daily = repairCommoditySpreadGlitches(buildCommoditySpreadClosePoints(clippedDaily.firstRows, clippedDaily.secondRows));
+  const dailyQuality = sanitizeCommoditySpreadRows(buildCommoditySpreadClosePoints(clippedDaily.firstRows, clippedDaily.secondRows));
+  const daily = dailyQuality.rows;
   if (isDegenerateCommoditySpread(daily, pair)) {
    throw new Error(`${pair.family} daily spread history collapsed to an invalid all-zero series.`);
   }
   const nearIntraday = await getCommodityCachedCandles(pair.firstInstrument, '5m', intradayStart, nowMs, { force: options.force === true });
   const farIntraday = await getCommodityCachedCandles(pair.secondInstrument, '5m', intradayStart, nowMs, { force: options.force === true });
-  const intraday = nearIntraday?.ok && farIntraday?.ok
+  const intradayQuality = sanitizeCommoditySpreadRows(nearIntraday?.ok && farIntraday?.ok
    ? buildCommoditySynchronizedSpreadCandles(nearIntraday.rows, farIntraday.rows, 3600)
-   : [];
+   : []);
+  const intraday = intradayQuality.rows;
   const rollEvents = buildCommoditySpreadRollEvents(daily, pair);
   return {
    family: pair.family,
@@ -3150,11 +3330,15 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
     dailyEnd: daily[daily.length - 1]?.time || 0,
     intradayStart: intraday[0]?.time || 0,
     intradayEnd: intraday[intraday.length - 1]?.time || 0,
+    excludedDailyRows: dailyQuality.excluded,
+    excludedIntradayRows: intradayQuality.excluded,
    },
    sourceQuality: {
     daily: 'exact_active_contract_pair',
     intraday: intraday.length ? 'exact_active_contract_synchronized_5m' : 'unavailable',
     exactHistoricalContractArchive: false,
+    badTicksExcluded: dailyQuality.badTicks + intradayQuality.badTicks,
+    rollDiscontinuitiesExcluded: dailyQuality.rollDiscontinuities + intradayQuality.rollDiscontinuities,
     note: 'Daily and intraday history use the exact active near and next contract security IDs. Older expired pairs are archived prospectively only.',
    },
    fetchedAt: Date.now(),
@@ -3297,6 +3481,11 @@ async function startCommoditySpreadBackfill(message = {}) {
    const quoteResponse = await getMarketFeed({ symbols: [pair.firstInstrument, pair.secondInstrument] }, '/marketfeed/quote');
    snapshot = quoteResponse?.ok ? buildCommoditySpreadSnapshotRow(pair, quoteResponse) : { ...pair };
   }
+  if (snapshot && suppliedSnapshotAvailable) {
+   snapshot.validity = commoditySpreadSnapshotValidity(snapshot, Date.now());
+   snapshot.safeguards = commoditySpreadSafeguards(pair, snapshot);
+   snapshot.costs = snapshot.costs || commoditySpreadCostEstimate(pair, snapshot);
+  }
   const stale = Date.now() - Number(entry.fetchedAt || 0) >= COMMODITY_DAILY_CACHE_TTL_MS;
   if (stale && message.force !== true && !commoditySpreadRefreshes.has(pair.family)) {
    const refresh = fetchCommoditySpreadHistoryEntry(pair)
@@ -3337,7 +3526,7 @@ async function startCommoditySpreadBackfill(message = {}) {
    candles: rows,
    points: resolution === '1d' ? rows : [],
    bands: entry.bands,
-   rollEvents: (entry.rollEvents || []).slice(-8),
+   rollEvents: (entry.rollEvents || []).slice(-4),
    coverage: entry.coverage,
    sourceQuality,
    stale,
@@ -3358,6 +3547,42 @@ async function startCommoditySpreadBackfill(message = {}) {
    },
    confidence: decision.confidence,
    blockers: decision.blockers,
+   statistics: {
+    mean: decision.mean,
+    standardDeviation: decision.deviation,
+    percentile: decision.percentile,
+    normalLow: decision.normalLow,
+    normalHigh: decision.normalHigh,
+    zScore: decision.zScore,
+   },
+   execution: {
+    formula: `${pair.secondInstrument.tradingSymbol} bid/ask - ${pair.firstInstrument.tradingSymbol} bid/ask`,
+    indicativeSpread: Number(snapshot.spread),
+    buySpread: snapshot.wideningEntrySpread,
+    sellSpread: snapshot.narrowingEntrySpread,
+    updatedAt: Number(snapshot.executableUpdatedAt || 0),
+    validity: snapshot.validity || null,
+   },
+   contractDetails: {
+    formula: `${pair.secondInstrument.tradingSymbol} (far) - ${pair.firstInstrument.tradingSymbol} (near)`,
+    near: {
+     tradingSymbol: pair.firstInstrument.tradingSymbol,
+     securityId: pair.firstInstrument.securityId,
+     expiry: pair.firstInstrument.expiry,
+     lotSize: pair.firstInstrument.lotSize,
+    },
+    far: {
+     tradingSymbol: pair.secondInstrument.tradingSymbol,
+     securityId: pair.secondInstrument.securityId,
+     expiry: pair.secondInstrument.expiry,
+     lotSize: pair.secondInstrument.lotSize,
+    },
+   },
+   dataQuality: {
+    ...(decision.dataQuality || {}),
+    staleHistory: stale,
+    source: sourceQuality,
+   },
    pair,
    snapshot,
    view,
@@ -4357,6 +4582,7 @@ module.exports = {
   buildCommoditySpreadCandles,
   buildCommoditySpreadClosePoints,
   repairCommoditySpreadGlitches,
+  sanitizeCommoditySpreadRows,
   mergeCommodityLiveSpread,
   isDegenerateCommoditySpread,
   buildCommoditySynchronizedSpreadCandles,
@@ -4367,6 +4593,7 @@ module.exports = {
   analyzeCommoditySpreadCandles,
   commoditySpreadCostEstimate,
   commoditySpreadSafeguards,
+  commoditySpreadSnapshotValidity,
   buildCommoditySpreadHistory,
   commodityPriceMultiplier,
   commodityMatchedLotRatio,

@@ -745,25 +745,36 @@ function spreadPlanningLegs(row = {}) {
   const action = String(analysis.action || 'WAIT');
   const actionTone = action === 'BUY_SPREAD' ? 'widening' : action === 'SELL_SPREAD' ? 'narrowing' : 'blocked';
   const coverage = row.continuousCoverage || {};
-  const sourceQuality = row.sourceQuality || {};
+ const sourceQuality = row.sourceQuality || {};
+  const tradePlan = analysis.tradePlan || null;
+  const dataQuality = analysis.dataQuality || {};
+  const nearName = row.firstInstrument?.tradingSymbol || row.firstRole || 'Near';
+  const farName = row.secondInstrument?.tradingSymbol || row.secondRole || 'Far';
+  const planLeg = leg => `<div class="${String(leg?.transactionType || '').toLowerCase()}"><span>${esc(leg?.transactionType || '')}</span><strong>${esc(leg?.tradingSymbol || '')}</strong><small>Expiry ${esc(expiry(leg?.expiry))} | Qty ${integer(leg?.quantity || 0)} @ ${number(leg?.executablePrice)}</small></div>`;
   return `<section class="commodity-spread-desk-detail">
-   <header><div><span>Selected spread</span><strong>${esc(row.label)}</strong><small>${esc(row.canonicalLabel)} | ${esc(row.firstInstrument?.tradingSymbol)} / ${esc(row.secondInstrument?.tradingSymbol)}</small></div><b class="${actionable ? direction : 'blocked'}">${actionable ? esc(direction.toUpperCase()) : 'BLOCKED'}</b></header>
+   <header><div><span>Selected spread</span><strong>${esc(row.label)}</strong><small>${esc(farName)} (${esc(expiry(row.secondInstrument?.expiry))}) minus ${esc(nearName)} (${esc(expiry(row.firstInstrument?.expiry))})</small></div><b class="${actionable ? direction : 'blocked'}">${actionable ? esc(direction.toUpperCase()) : 'BLOCKED'}</b></header>
    <div class="commodity-spread-action-card ${esc(actionTone)}">
     <div><span>Decision</span><strong>${esc(action.replace('_', ' '))}</strong><small>${esc(analysis.reason || 'Waiting for decision-grade confirmation.')}</small></div>
     <div><span>Exact legs</span><strong>${esc(spreadDirectionLabel(row))}</strong><small>${action === 'WAIT' ? 'No trade while blockers remain' : `${esc(row.secondInstrument?.tradingSymbol)} / ${esc(row.firstInstrument?.tradingSymbol)}`}</small></div>
     <div><span>Regime / confidence</span><strong>${esc(String(analysis.regime || 'range').toUpperCase())} / ${esc(String(analysis.confidence || 'low').toUpperCase())}</strong><small>${integer(analysis.confidenceScore || analysis.score || 0)} / 100</small></div>
    </div>
    <div class="commodity-spread-desk-grid">
-    <div><span>Current spread</span><strong>${signed(row.spread)}</strong><small>${esc(row.canonicalLabel)}</small></div>
-    <div><span>Z-score / percentile</span><strong>${signed(analysis.zScore)} / ${number(analysis.percentile, 1)}%</strong><small>60-session distribution</small></div>
+    <div><span>Indicative / executable</span><strong>${signed(row.spread)} | B ${signed(row.wideningEntrySpread)} / S ${signed(row.narrowingEntrySpread)}</strong><small>Buy spread = far ask - near bid; sell spread = far bid - near ask</small></div>
+    <div><span>Mean / standard deviation</span><strong>${signed(analysis.mean)} / ${number(analysis.deviation)}</strong><small>Z ${signed(analysis.zScore)} | percentile ${number(analysis.percentile, 1)}%</small></div>
+    <div><span>Normal range</span><strong>${signed(analysis.normalLow)} to ${signed(analysis.normalHigh)}</strong><small>60-session mean +/- 2 standard deviations</small></div>
     <div><span>Matched lot ratio</span><strong>${lots}</strong><small>${row.type === 'matched' ? 'Contract-size matched, same expiry' : 'Same underlying calendar pair'}</small></div>
-    <div><span>Depth snapshot</span><strong>${row.depthConfirmed ? 'Observed' : 'Indicative LTP'}</strong><small>${row.executableUpdatedAt ? `Updated ${new Date(row.executableUpdatedAt).toLocaleTimeString('en-IN')}` : 'Waiting for depth refresh'}</small></div>
+    <div><span>Depth / freshness</span><strong>${row.depthConfirmed ? 'Observed' : 'Incomplete'} / ${esc(dataQuality.freshness || row.validity?.freshness || 'unverified')}</strong><small>${row.executableUpdatedAt ? `Updated ${new Date(row.executableUpdatedAt).toLocaleTimeString('en-IN')}` : 'Waiting for depth refresh'}</small></div>
    </div>
    <div class="commodity-spread-desk-grid">
     <div><span>Three EMA</span><strong>${number(analysis.ema9)} / ${number(analysis.ema30)} / ${number(analysis.ema100)}</strong><small>EMA 9 / 30 / 100</small></div>
     <div><span>Continuous history</span><strong>${integer(coverage.dailyCandles || analysis.dailyCandles || 0)}D / ${integer(coverage.intradayCandles || analysis.intradayCandles || 0)}H</strong><small>${esc(sourceQuality.daily || 'current-pair fallback')}</small></div>
-    <div><span>Entry / stop / target</span><strong>${signed(analysis.entry)} / ${signed(analysis.stop)} / ${signed(analysis.target)}</strong><small>Executable spread levels</small></div>
+    <div><span>Entry / target / stop</span><strong>${signed(analysis.entry)} / ${signed(analysis.target)} / ${signed(analysis.stop)}</strong><small>R:R ${number(analysis.rewardRisk)}x | risk Rs ${number(analysis.maximumRiskPnl)}</small></div>
     <div><span>Dhan fixed brokerage</span><strong>Rs ${number(costs.fixedBrokerageAndGst)}</strong><small>${integer(costs.executedOrders)} executed orders | Rs ${number(costs.brokeragePerOrder)} each + GST</small></div>
+   </div>
+   <div class="commodity-spread-liquidity-grid">
+    <div><span>${esc(nearName)} liquidity</span><strong>Vol ${integer(row.firstVolume)} | OI ${integer(row.firstOi)}</strong><small>Bid ${number(row.firstBid)} / Ask ${number(row.firstAsk)} | width ${number(safeguards.firstWidthPct, 3)}%</small></div>
+    <div><span>${esc(farName)} liquidity</span><strong>Vol ${integer(row.secondVolume)} | OI ${integer(row.secondOi)}</strong><small>Bid ${number(row.secondBid)} / Ask ${number(row.secondAsk)} | width ${number(safeguards.secondWidthPct, 3)}%</small></div>
+    <div><span>Clean data segment</span><strong>${integer(dataQuality.badTicks || sourceQuality.badTicksExcluded || 0)} bad ticks excluded</strong><small>${integer(dataQuality.rollDiscontinuities || sourceQuality.rollDiscontinuitiesExcluded || 0)} roll discontinuities excluded</small></div>
    </div>
    <div class="commodity-spread-trade-read">
     <div class="${widening ? 'active' : ''}"><span>Widening trade</span><strong>BUY ${esc(row.secondRole)} / SELL ${esc(row.firstRole)}</strong><small>Entry spread ${row.wideningEntrySpread == null ? '--' : signed(row.wideningEntrySpread)}</small></div>
@@ -771,7 +782,8 @@ function spreadPlanningLegs(row = {}) {
    </div>
    <div class="commodity-spread-reasons"><span>${esc(analysis.reason || '')}</span></div>
    ${(analysis.blockers || safeguards.warnings || []).length ? `<div class="commodity-spread-blockers">${(analysis.blockers || safeguards.warnings || []).map(reason => `<span>${esc(reason)}</span>`).join('')}</div>` : ''}
-   <div class="commodity-spread-cost-note">Target move ${signed(analysis.targetMove)} points versus required ${signed(analysis.costRequiredMove)} points. Expected net P&amp;L: Rs ${number(analysis.expectedNetPnl)}. Exchange charges, CTT, stamp duty and other statutory charges are not included.</div>
+   ${tradePlan ? `<section class="commodity-spread-exact-plan"><header><span>Trade Plan</span><strong>${esc(tradePlan.formula)}</strong></header><div>${planLeg(tradePlan.first)}${planLeg(tradePlan.second)}</div><footer>Entry ${signed(analysis.entry)} | Target ${signed(analysis.target)} | Stop ${signed(analysis.stop)} | R:R ${number(analysis.rewardRisk)}x</footer></section>` : '<section class="commodity-spread-exact-plan blocked"><header><span>Trade Plan</span><strong>WAIT</strong></header><p>No leg instruction is produced until live data and every risk gate are valid.</p></section>'}
+   <div class="commodity-spread-cost-note">Target move ${signed(analysis.targetMove)} points versus required ${signed(analysis.costRequiredMove)} points. Brokerage + GST Rs ${number(analysis.brokerageAndGst || costs.fixedBrokerageAndGst)}; visible slippage ${number(analysis.slippagePoints)} points / Rs ${number(analysis.slippageCost)}. Expected net P&amp;L Rs ${number(analysis.expectedNetPnl)}. Exchange charges, CTT, stamp duty and other statutory charges are not included.</div>
    <div class="commodity-plan-toggle commodity-spread-view-toggle" role="group" aria-label="Spread chart history view">
     <button type="button" data-spread-chart-view="continuous" class="${state.spreadChartView === 'continuous' ? 'active' : ''}">Continuous</button>
     <button type="button" data-spread-chart-view="current" class="${state.spreadChartView === 'current' ? 'active' : ''}">Current Pair</button>

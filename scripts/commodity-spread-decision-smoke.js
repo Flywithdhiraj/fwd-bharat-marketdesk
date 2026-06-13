@@ -8,7 +8,9 @@ const {
  buildCommoditySpreadDecision,
  mergeCommodityLiveSpread,
  repairCommoditySpreadGlitches,
+ sanitizeCommoditySpreadRows,
  isDegenerateCommoditySpread,
+ commoditySpreadSnapshotValidity,
 } = __private;
 
 function rowsFromCloses(closes = [], start = 1700000000, step = 86400) {
@@ -31,6 +33,13 @@ function snapshot(overrides = {}) {
   wideningDepth: true,
   narrowingDepth: true,
   depthConfirmed: true,
+  firstBid: 100,
+  firstAsk: 101,
+  secondBid: 219,
+  secondAsk: 220,
+  firstQuoteTime: Date.now(),
+  secondQuoteTime: Date.now(),
+  validity: { valid: true, reasons: [], freshness: 'live' },
   safeguards: { tradeAllowed: true, warnings: [] },
   costs: {
    valuePerSpreadPoint: 1,
@@ -46,8 +55,8 @@ function snapshot(overrides = {}) {
 const pair = {
  firstRole: 'near',
  secondRole: 'far',
- firstInstrument: { expiry: '2026-12-31', securityId: '1' },
- secondInstrument: { expiry: '2027-02-28', securityId: '2' },
+ firstInstrument: { expiry: '2026-12-31', securityId: '1', tradingSymbol: 'GOLD-DEC', lotSize: 1 },
+ secondInstrument: { expiry: '2027-02-28', securityId: '2', tradingSymbol: 'GOLD-FEB', lotSize: 1 },
 };
 
 {
@@ -59,6 +68,66 @@ const pair = {
  assert.strictEqual(repaired[1].close, 2000);
  assert.strictEqual(repaired[1].repaired, true);
  console.log('PASS isolated zero spread glitches are repaired from adjacent sessions');
+}
+
+{
+ const normal = rowsFromCloses(Array.from({ length: 35 }, (_, index) => 100 + index * 0.5));
+ normal.splice(18, 0, { ...normal[18], time: normal[18].time - 43200, open: 900, high: 900, low: 900, close: 900 });
+ const cleaned = sanitizeCommoditySpreadRows(normal);
+ assert(cleaned.badTicks >= 1);
+ assert(!cleaned.rows.some(row => row.close === 900));
+ console.log('PASS isolated bad ticks are excluded from spread statistics');
+}
+
+{
+ const before = rowsFromCloses(Array.from({ length: 25 }, (_, index) => 100 + index * 0.2));
+ const after = rowsFromCloses(Array.from({ length: 30 }, (_, index) => 420 + index * 0.2), before[before.length - 1].time + 86400, 86400);
+ const cleaned = sanitizeCommoditySpreadRows([...before, ...after]);
+ assert.strictEqual(cleaned.rollDiscontinuities, 1);
+ assert(cleaned.rows.every(row => row.close >= 400));
+ console.log('PASS contract-roll discontinuity starts a clean post-roll decision segment');
+}
+
+{
+ const now = Date.now();
+ const stale = commoditySpreadSnapshotValidity({
+  firstPrice: 100,
+  secondPrice: 220,
+  firstBid: 99,
+  firstAsk: 101,
+  secondBid: 219,
+  secondAsk: 221,
+  firstQuoteTime: now - 20 * 60 * 1000,
+  secondQuoteTime: now - 20 * 60 * 1000,
+ }, now);
+ assert.strictEqual(stale.valid, false);
+ assert(stale.reasons.some(reason => /stale/i.test(reason)));
+ console.log('PASS stale exchange timestamps invalidate executable spread data');
+}
+
+{
+ const liveSession = Date.parse('2026-06-15T10:00:00+05:30');
+ const requestFresh = commoditySpreadSnapshotValidity({
+  firstPrice: 100,
+  secondPrice: 220,
+  firstBid: 99,
+  firstAsk: 101,
+  secondBid: 219,
+  secondAsk: 221,
+ }, liveSession);
+ assert.strictEqual(requestFresh.valid, true);
+ assert.strictEqual(requestFresh.freshness, 'live_request');
+ const weekend = commoditySpreadSnapshotValidity({
+  firstPrice: 100,
+  secondPrice: 220,
+  firstBid: 99,
+  firstAsk: 101,
+  secondBid: 219,
+  secondAsk: 221,
+ }, Date.parse('2026-06-13T10:00:00+05:30'));
+ assert.strictEqual(weekend.valid, false);
+ assert(weekend.reasons.some(reason => /market is closed/i.test(reason)));
+ console.log('PASS fresh depth requests are usable only during the MCX session');
 }
 
 {
@@ -160,6 +229,10 @@ const pair = {
  const decision = buildCommoditySpreadDecision({ dailyRows: daily, intradayRows: intraday, pair, snapshot: snapshot({ spread: 214, wideningEntrySpread: 215 }) });
  assert.strictEqual(decision.action, 'BUY_SPREAD');
  assert.strictEqual(decision.regime, 'trend');
+ assert(decision.normalLow < decision.mean && decision.normalHigh > decision.mean);
+ assert(decision.rewardRisk >= 1.2);
+ assert.strictEqual(decision.tradePlan.first.transactionType, 'SELL');
+ assert.strictEqual(decision.tradePlan.second.transactionType, 'BUY');
  console.log('PASS widening trend produces BUY_SPREAD with synchronized confirmation');
 }
 
@@ -170,6 +243,23 @@ const pair = {
  assert.strictEqual(decision.action, 'SELL_SPREAD');
  assert.strictEqual(decision.regime, 'trend');
  console.log('PASS narrowing trend produces SELL_SPREAD with synchronized confirmation');
+}
+
+{
+ const daily = rowsFromCloses(Array.from({ length: 130 }, (_, index) => 20 + index * 1.5));
+ const intraday = rowsFromCloses(Array.from({ length: 30 }, (_, index) => 100 + index), 1700000000, 3600);
+ const decision = buildCommoditySpreadDecision({
+  dailyRows: daily,
+  intradayRows: intraday,
+  pair,
+  snapshot: snapshot({
+   validity: { valid: false, freshness: 'delayed', reasons: ['Live quotes are stale by 20 minutes.'] },
+  }),
+ });
+ assert.strictEqual(decision.action, 'WAIT');
+ assert.strictEqual(decision.tradePlan, null);
+ assert(decision.blockers.some(reason => /stale/i.test(reason)));
+ console.log('PASS stale live data can never produce a trade signal or leg plan');
 }
 
 {

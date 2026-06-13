@@ -666,6 +666,49 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  </aside>`;
  }
 
+ function buildCommoditySpreadTradePanel(dataset = {}) {
+ if (!dataset?.commoditySpread) return '';
+ const decision = dataset.spreadDecision || {};
+ const contracts = dataset.spreadContractDetails || {};
+ const execution = dataset.spreadExecution || {};
+ const snapshot = dataset.spreadSnapshot || {};
+ const quality = dataset.spreadDataQuality || decision.dataQuality || {};
+ const plan = decision.tradePlan || null;
+ const blockers = Array.isArray(decision.blockers) ? decision.blockers : [];
+ const action = String(decision.action || 'WAIT');
+ const tone = action === 'BUY_SPREAD' ? 'buy' : action === 'SELL_SPREAD' ? 'sell' : 'wait';
+ const near = contracts.near || {};
+ const far = contracts.far || {};
+ const leg = item => item
+  ? `<div class="${String(item.transactionType || '').toLowerCase()}"><span>${escapeHtml(item.transactionType || '')}</span><strong>${escapeHtml(item.tradingSymbol || '')}</strong><em>${escapeHtml(item.expiry || '')} | Qty ${escapeHtml(String(item.quantity || 0))} @ ${escapeHtml(formatPrice(item.executablePrice))}</em></div>`
+  : '';
+ return `<section class="ds-spread-trade-panel ${escapeHtml(tone)}">
+ <header>
+ <div><span>Calendar Spread</span><strong>${escapeHtml(action.replace('_', ' '))}</strong><em>${escapeHtml(decision.reason || 'No valid setup is confirmed.')}</em></div>
+ <b>${escapeHtml(String(decision.confidence || 'low').toUpperCase())} ${escapeHtml(String(decision.confidenceScore || 0))}/100</b>
+ </header>
+ <div class="ds-spread-contract-line">
+ <div><span>Near contract</span><strong>${escapeHtml(near.tradingSymbol || '')}</strong><em>${escapeHtml(near.expiry || '')}</em></div>
+ <div><span>Far contract</span><strong>${escapeHtml(far.tradingSymbol || '')}</strong><em>${escapeHtml(far.expiry || '')}</em></div>
+ <div><span>Formula</span><strong>${escapeHtml(contracts.formula || execution.formula || 'Far - Near')}</strong><em>Executable from both legs' bid/ask depth</em></div>
+ </div>
+ <div class="ds-spread-metrics">
+ <div><span>Executable buy / sell</span><strong>${escapeHtml(formatPrice(execution.buySpread))} / ${escapeHtml(formatPrice(execution.sellSpread))}</strong></div>
+ <div><span>Mean / standard deviation</span><strong>${escapeHtml(formatPrice(decision.mean))} / ${escapeHtml(formatPrice(decision.deviation))}</strong></div>
+ <div><span>Percentile / normal range</span><strong>${escapeHtml(formatPrice(decision.percentile))}% | ${escapeHtml(formatPrice(decision.normalLow))} to ${escapeHtml(formatPrice(decision.normalHigh))}</strong></div>
+ <div><span>Entry / target / stop</span><strong>${escapeHtml(formatPrice(decision.entry))} / ${escapeHtml(formatPrice(decision.target))} / ${escapeHtml(formatPrice(decision.stop))}</strong></div>
+ <div><span>Risk/reward</span><strong>${escapeHtml(formatPrice(decision.rewardRisk))}x | Risk Rs ${escapeHtml(formatPrice(decision.maximumRiskPnl))}</strong></div>
+ <div><span>Costs</span><strong>Brokerage Rs ${escapeHtml(formatPrice(decision.brokerageAndGst))} | Slip ${escapeHtml(formatPrice(decision.slippagePoints))} pts</strong></div>
+ </div>
+ <div class="ds-spread-liquidity">
+ <span>Near Vol/OI <strong>${escapeHtml(String(snapshot.firstVolume || 0))} / ${escapeHtml(String(snapshot.firstOi || 0))}</strong></span>
+ <span>Far Vol/OI <strong>${escapeHtml(String(snapshot.secondVolume || 0))} / ${escapeHtml(String(snapshot.secondOi || 0))}</strong></span>
+ <span>Data <strong>${escapeHtml(String(quality.freshness || 'unverified'))}; ${escapeHtml(String(quality.badTicks || 0))} bad ticks, ${escapeHtml(String(quality.rollDiscontinuities || 0))} roll breaks excluded</strong></span>
+ </div>
+ ${plan ? `<div class="ds-spread-exact-plan"><span>Trade Plan</span>${leg(plan.first)}${leg(plan.second)}</div>` : `<div class="ds-spread-wait"><strong>No trade plan while data or setup gates fail.</strong>${blockers.slice(0, 4).map(reason => `<span>${escapeHtml(reason)}</span>`).join('')}</div>`}
+ </section>`;
+ }
+
  function buildDeskChartPanel(panelKey, title, panelState = {}, dataset = {}, model = null, intelligence = null, state = {}, calculatedIndicators = {}) {
  const tf = normalizeTimeframe(panelState.timeframe || state.timeframe || '4h');
  const isFwdIndex = dataset?.syntheticIndex === true;
@@ -702,6 +745,7 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  </div>
  ${buildNearestKeyLevelStrip(model)}
  ${buildFwdIndexMetricGuide(dataset)}
+ ${buildCommoditySpreadTradePanel(dataset)}
  ${chartMarkup}
  </section>`;
  }
