@@ -6,6 +6,7 @@ const {
  buildCommoditySynchronizedSpreadCandles,
  buildCommoditySpreadRollEvents,
  buildCommoditySpreadDecision,
+ mergeCommodityLiveSpread,
  isDegenerateCommoditySpread,
 } = __private;
 
@@ -47,6 +48,20 @@ const pair = {
  firstInstrument: { expiry: '2026-12-31', securityId: '1' },
  secondInstrument: { expiry: '2027-02-28', securityId: '2' },
 };
+
+{
+ const historical = [{ time: 100, open: 2084, high: 2084, low: 2084, close: 2084, volume: 10 }];
+ const live = mergeCommodityLiveSpread(historical, {
+  spread: 2100,
+  firstPrice: 75000,
+  secondPrice: 77100,
+  firstVolume: 20,
+  secondVolume: 30,
+ }, '1d', 200 * 1000);
+ assert.strictEqual(live[live.length - 1].close, 2100);
+ assert.strictEqual(live[live.length - 1].live, true);
+ console.log('PASS live quote is merged into the latest spread chart point');
+}
 
 {
  const first = rowsFromCloses([100, 102, 99]);

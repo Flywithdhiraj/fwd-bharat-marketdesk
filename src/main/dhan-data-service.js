@@ -1074,7 +1074,55 @@ function buildCommoditySpreadRollEvents(points = [], pair = {}) {
    });
   }
  }
- return events.sort((a, b) => a.time - b.time);
+ const sorted = events.sort((a, b) => a.time - b.time);
+ const spaced = [];
+ for (const event of sorted) {
+  const previous = spaced[spaced.length - 1];
+  if (previous && event.time - previous.time < 20 * DAY_MS / 1000) {
+   if (event.type === 'expiry_fallback' || previous.type !== 'expiry_fallback') spaced[spaced.length - 1] = event;
+   continue;
+  }
+  spaced.push(event);
+ }
+ return spaced.slice(-8);
+}
+
+function mergeCommodityLiveSpread(rows = [], snapshot = {}, resolution = '1d', nowMs = Date.now()) {
+ const spread = Number(snapshot?.spread);
+ if (!Number.isFinite(spread)) return Array.isArray(rows) ? rows : [];
+ const bucketSeconds = resolution === '1d' ? DAY_MS / 1000 : 60 * 60;
+ const time = Math.floor(nowMs / 1000 / bucketSeconds) * bucketSeconds;
+ const result = (Array.isArray(rows) ? rows : []).map(row => ({ ...row }));
+ const previous = result[result.length - 1];
+ const volume = Math.max(0, Number(snapshot.firstVolume || 0) + Number(snapshot.secondVolume || 0));
+ const liveRow = resolution === '1d'
+  ? {
+    time,
+    open: spread,
+    high: spread,
+    low: spread,
+    close: spread,
+    volume,
+    firstClose: Number(snapshot.firstPrice || 0),
+    secondClose: Number(snapshot.secondPrice || 0),
+    firstVolume: Number(snapshot.firstVolume || 0),
+    secondVolume: Number(snapshot.secondVolume || 0),
+    firstOi: Number(snapshot.firstOi || 0),
+    secondOi: Number(snapshot.secondOi || 0),
+    live: true,
+   }
+  : {
+    time,
+    open: Number(previous?.time) === time ? Number(previous.open ?? spread) : spread,
+    high: Math.max(Number(previous?.time) === time ? Number(previous.high ?? spread) : spread, spread),
+    low: Math.min(Number(previous?.time) === time ? Number(previous.low ?? spread) : spread, spread),
+    close: spread,
+    volume,
+    live: true,
+   };
+ if (Number(previous?.time) === time) result[result.length - 1] = { ...previous, ...liveRow };
+ else result.push(liveRow);
+ return result;
 }
 
 function buildCommoditySpreadDecision({
@@ -2283,6 +2331,7 @@ function createDhanDataService({ app, credentialStore, errorJournal } = {}) {
  let commodityCandleCacheMemory = null;
  let commodityContractArchiveMemory = null;
  let commoditySpreadHistoryMemory = null;
+ const commoditySpreadRefreshes = new Map();
  let commoditySpreadBackfillPromise = null;
  let commoditySpreadBackfillStatus = {
   running: false,
@@ -3066,7 +3115,8 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
   if (!nearDaily?.ok || !farDaily?.ok) {
    throw new Error(nearDaily?.error || farDaily?.error || `${pair.family} rolling daily history failed.`);
   }
-  const daily = buildCommoditySpreadClosePoints(nearDaily.rows, farDaily.rows);
+  const clippedDaily = clipCommoditySpreadRowsForPair(pair, nearDaily.rows, farDaily.rows, '1d', dailyStart, nowMs);
+  const daily = buildCommoditySpreadClosePoints(clippedDaily.firstRows, clippedDaily.secondRows);
   if (isDegenerateCommoditySpread(daily, pair)) {
    throw new Error(`${pair.family} daily spread history collapsed to an invalid all-zero series.`);
   }
@@ -3084,7 +3134,7 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
    bands: buildCommoditySpreadBands(daily, 60),
    rollEvents,
    coverage: {
-    requestedDailyDays: COMMODITY_SPREAD_DAILY_HISTORY_DAYS,
+    requestedDailyDays: COMMODITY_SPREAD_MAX_DAILY_LOOKBACK_DAYS,
     requestedIntradayDays: COMMODITY_SPREAD_INTRADAY_HISTORY_DAYS,
     dailyCandles: daily.length,
     intradayCandles: intraday.length,
@@ -3223,7 +3273,8 @@ async function startCommoditySpreadBackfill(message = {}) {
   const pairChanged = String(entry?.pair?.firstInstrument?.securityId || '') !== String(pair.firstInstrument.securityId)
    || String(entry?.pair?.secondInstrument?.securityId || '') !== String(pair.secondInstrument.securityId);
   const invalidDaily = isDegenerateCommoditySpread(entry?.daily, pair);
-  if (!entry || pairChanged || invalidDaily || message.force === true) {
+  const legacyDailyWindow = Number(entry?.coverage?.requestedDailyDays || 0) > COMMODITY_SPREAD_MAX_DAILY_LOOKBACK_DAYS;
+  if (!entry || pairChanged || invalidDaily || legacyDailyWindow || message.force === true) {
    try {
     entry = await fetchCommoditySpreadHistoryEntry(pair, { force: message.force === true });
     store.families[pair.family] = entry;
@@ -3232,13 +3283,31 @@ async function startCommoditySpreadBackfill(message = {}) {
     return { ok: false, status: 502, error: error?.message || 'Commodity spread history could not be built.' };
    }
   }
-  const quoteResponse = await getMarketFeed({ symbols: [pair.firstInstrument, pair.secondInstrument] }, '/marketfeed/quote');
-  const snapshot = quoteResponse?.ok ? buildCommoditySpreadSnapshotRow(pair, quoteResponse) : { ...pair };
+  const suppliedSnapshotIsFresh = Number.isFinite(Number(message.spread))
+   && Number(message.executableUpdatedAt || 0) > 0
+   && Date.now() - Number(message.executableUpdatedAt) < 30 * 1000;
+  let snapshot = suppliedSnapshotIsFresh ? { ...pair, ...message } : null;
+  if (!snapshot) {
+   const quoteResponse = await getMarketFeed({ symbols: [pair.firstInstrument, pair.secondInstrument] }, '/marketfeed/quote');
+   snapshot = quoteResponse?.ok ? buildCommoditySpreadSnapshotRow(pair, quoteResponse) : { ...pair };
+  }
+  const stale = Date.now() - Number(entry.fetchedAt || 0) >= COMMODITY_DAILY_CACHE_TTL_MS;
+  if (stale && message.force !== true && !commoditySpreadRefreshes.has(pair.family)) {
+   const refresh = fetchCommoditySpreadHistoryEntry(pair)
+    .then(freshEntry => {
+     store.families[pair.family] = freshEntry;
+     return writeCommoditySpreadHistory(store);
+    })
+    .catch(error => errorJournal?.append?.('dhan:commodity-spread-refresh', error, { family: pair.family }))
+    .finally(() => commoditySpreadRefreshes.delete(pair.family));
+   commoditySpreadRefreshes.set(pair.family, refresh);
+  }
   let rows = resolution === '1d' ? entry.daily : entry.intraday;
   if (view === 'current') {
    const currentStart = parseDerivativeExpiryMs(pair.firstInstrument.expiry) - COMMODITY_SPREAD_MAX_DAILY_LOOKBACK_DAYS * DAY_MS;
    rows = rows.filter(row => Number(row.time) * 1000 >= currentStart);
   }
+  rows = mergeCommodityLiveSpread(rows, snapshot, resolution);
   const decision = buildCommoditySpreadDecision({
    dailyRows: entry.daily,
    intradayRows: entry.intraday,
@@ -3262,9 +3331,10 @@ async function startCommoditySpreadBackfill(message = {}) {
    candles: rows,
    points: resolution === '1d' ? rows : [],
    bands: entry.bands,
-   rollEvents: entry.rollEvents,
+   rollEvents: (entry.rollEvents || []).slice(-8),
    coverage: entry.coverage,
    sourceQuality,
+   stale,
    regime: decision.regime,
    zScore: decision.zScore,
    percentile: decision.percentile,
@@ -4280,6 +4350,7 @@ module.exports = {
   buildCommoditySpreadPairs,
   buildCommoditySpreadCandles,
   buildCommoditySpreadClosePoints,
+  mergeCommodityLiveSpread,
   isDegenerateCommoditySpread,
   buildCommoditySynchronizedSpreadCandles,
   buildCommoditySpreadBands,

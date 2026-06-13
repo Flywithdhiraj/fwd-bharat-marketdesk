@@ -90,10 +90,17 @@
  if (dataset?.commoditySpread) {
   return {
    ...state,
+   preset: normalizePreset(state.preset || '') === 'ema_obv' ? 'decision' : normalizePreset(state.preset || 'decision'),
    chartType: dataset.chartType || (normalizeTimeframe(state.timeframe) === '1d' ? 'line' : 'candles'),
    compareWithIndex: false,
    showOrders: false,
    intelligenceOverlays: false,
+   indicators: {
+    ...sanitizeIndicatorState(state.indicators || {}),
+    obv: false,
+    obvLine: false,
+    obvSma: false,
+   },
   };
  }
  if (!dataset?.syntheticIndex) return state;

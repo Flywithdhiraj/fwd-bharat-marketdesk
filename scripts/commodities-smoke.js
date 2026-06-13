@@ -61,6 +61,11 @@ assert(service.includes('buildCommodityFuturePairs') && service.includes("action
 assert(service.includes('buildCommoditySpreadPairs') && service.includes("action === 'commodity_spread_scanner'"));
 assert(service.includes("message.spreadType || 'all'"));
 assert(service.includes('buildCommoditySpreadCandles') && service.includes("action === 'commodity_spread_chart'"));
+assert(service.includes('mergeCommodityLiveSpread') && service.includes('commoditySpreadRefreshes'));
+assert(service.includes("clipCommoditySpreadRowsForPair(pair, nearDaily.rows, farDaily.rows, '1d'"));
+assert(service.includes('legacyDailyWindow'));
+assert(chartSurfacePart.includes("preset: normalizePreset(state.preset || '') === 'ema_obv' ? 'decision'"));
+assert(chartEngine.includes("text: marker.type === 'expiry_fallback' ? 'Expiry roll' : 'OI roll'"));
 assert(service.includes('buildCommoditySpreadClosePoints') && service.includes('buildCommoditySynchronizedSpreadCandles'));
 assert(service.includes("action === 'commodity_spread_continuous_chart'"));
 assert(service.includes('instrument: pair.secondInstrument') && service.includes('isDegenerateCommoditySpread'));

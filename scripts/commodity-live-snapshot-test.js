@@ -151,6 +151,45 @@ async function main() {
  ) {
   throw new Error(silvermicDaily.error || 'SILVERMIC continuous daily spread decision chart was incomplete.');
  }
+ const goldmSnapshot = spreadRows.find(row => row.family === 'GOLDM');
+ if (!goldmSnapshot) throw new Error('GOLDM spread snapshot was not returned.');
+ await service.handle({
+  ...goldmSnapshot,
+  action: 'commodity_spread_continuous_chart',
+  underlying: 'GOLDM',
+  resolution: '1d',
+  view: 'continuous',
+  force: true,
+ });
+ const goldmStartedAt = Date.now();
+ const goldmDaily = await service.handle({
+  ...goldmSnapshot,
+  action: 'commodity_spread_continuous_chart',
+  underlying: 'GOLDM',
+  resolution: '1d',
+  view: 'continuous',
+ });
+ console.log(JSON.stringify({
+  goldmDailyOk: goldmDaily.ok,
+  durationMs: Date.now() - goldmStartedAt,
+  candles: Array.isArray(goldmDaily.candles) ? goldmDaily.candles.length : 0,
+  priorClose: goldmDaily.candles?.at?.(-2)?.close ?? null,
+  liveClose: goldmDaily.candles?.at?.(-1)?.close ?? null,
+  snapshotSpread: goldmDaily.snapshot?.spread ?? null,
+  livePoint: goldmDaily.candles?.at?.(-1)?.live === true,
+  rollEvents: Array.isArray(goldmDaily.rollEvents) ? goldmDaily.rollEvents.length : 0,
+  error: goldmDaily.error || '',
+ }, null, 2));
+ if (
+  !goldmDaily.ok
+  || !(goldmDaily.candles || []).length
+  || goldmDaily.candles.at(-1)?.live !== true
+  || Number(goldmDaily.candles.at(-1)?.close) !== Number(goldmDaily.snapshot?.spread)
+  || (goldmDaily.rollEvents || []).length > 8
+  || Date.now() - goldmStartedAt > 2000
+ ) {
+  throw new Error(goldmDaily.error || 'GOLDM daily spread chart did not open quickly with the current live spread.');
+ }
  const silvermicHourly = await service.handle({
   action: 'commodity_spread_continuous_chart',
   underlying: 'SILVERMIC',
