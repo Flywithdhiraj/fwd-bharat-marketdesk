@@ -950,6 +950,7 @@ function sanitizeCommoditySpreadRows(rows = [], options = {}) {
  if (valid.length < 5) {
   return {
    rows: valid,
+   decisionRows: valid,
    excluded: Math.max(0, repaired.length - valid.length),
    badTicks: 0,
    rollDiscontinuities: 0,
@@ -994,13 +995,14 @@ function sanitizeCommoditySpreadRows(rows = [], options = {}) {
   const followsNewLevel = following.every(value => Math.abs(value - current) < jump * 0.45);
   if (followsNewLevel) latestRollIndex = index;
  }
- const postRollRows = latestRollIndex > 0 ? cleaned.slice(latestRollIndex) : cleaned;
+ const decisionRows = latestRollIndex > 0 ? cleaned.slice(latestRollIndex) : cleaned;
  return {
-  rows: postRollRows,
-  excluded: Math.max(0, repaired.length - postRollRows.length),
+  rows: cleaned,
+  decisionRows,
+  excluded: Math.max(0, repaired.length - cleaned.length),
   badTicks,
   rollDiscontinuities: latestRollIndex > 0 ? 1 : 0,
-  segmentStart: postRollRows[0]?.time || 0,
+  segmentStart: decisionRows[0]?.time || 0,
  };
 }
 
@@ -1229,8 +1231,8 @@ function buildCommoditySpreadDecision({
 } = {}) {
  const cleanDaily = sanitizeCommoditySpreadRows(dailyRows);
  const cleanIntraday = sanitizeCommoditySpreadRows(intradayRows);
- const daily = commoditySpreadStats(cleanDaily.rows, 60);
- const intraday = commoditySpreadStats(cleanIntraday.rows, 30);
+ const daily = commoditySpreadStats(cleanDaily.decisionRows, 60);
+ const intraday = commoditySpreadStats(cleanIntraday.decisionRows, 30);
  const blockers = [];
  const dataQuality = snapshot.validity || {};
  if (dataQuality.valid === false) blockers.push(...(dataQuality.reasons || ['Live spread data is invalid or stale.']));
@@ -3334,6 +3336,7 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
     excludedIntradayRows: intradayQuality.excluded,
    },
    sourceQuality: {
+    cleaningVersion: 2,
     daily: 'exact_active_contract_pair',
     intraday: intraday.length ? 'exact_active_contract_synchronized_5m' : 'unavailable',
     exactHistoricalContractArchive: false,
@@ -3466,7 +3469,8 @@ async function startCommoditySpreadBackfill(message = {}) {
    || String(entry?.pair?.secondInstrument?.securityId || '') !== String(pair.secondInstrument.securityId);
   const invalidDaily = isDegenerateCommoditySpread(entry?.daily, pair);
   const incompleteDailyWindow = Number(entry?.coverage?.requestedDailyDays || 0) < COMMODITY_SPREAD_MAX_DAILY_LOOKBACK_DAYS;
-  if (!entry || pairChanged || invalidDaily || incompleteDailyWindow || message.force === true) {
+  const outdatedCleaning = Number(entry?.sourceQuality?.cleaningVersion || 0) < 2;
+  if (!entry || pairChanged || invalidDaily || incompleteDailyWindow || outdatedCleaning || message.force === true) {
    try {
     entry = await fetchCommoditySpreadHistoryEntry(pair, { force: message.force === true });
     store.families[pair.family] = entry;

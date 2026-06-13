@@ -682,9 +682,17 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  const leg = item => item
   ? `<div class="${String(item.transactionType || '').toLowerCase()}"><span>${escapeHtml(item.transactionType || '')}</span><strong>${escapeHtml(item.tradingSymbol || '')}</strong><em>${escapeHtml(item.expiry || '')} | Qty ${escapeHtml(String(item.quantity || 0))} @ ${escapeHtml(formatPrice(item.executablePrice))}</em></div>`
   : '';
- return `<section class="ds-spread-trade-panel ${escapeHtml(tone)}">
+ return `<details class="ds-spread-trade-panel ${escapeHtml(tone)}">
+ <summary>
+ <span>Calendar Spread</span>
+ <strong>${escapeHtml(action.replace('_', ' '))}</strong>
+ <em>${escapeHtml(contracts.formula || 'Far - Near')}</em>
+ <b>Entry ${escapeHtml(formatPrice(decision.entry))} | Target ${escapeHtml(formatPrice(decision.target))} | Stop ${escapeHtml(formatPrice(decision.stop))}</b>
+ <i>Details</i>
+ </summary>
+ <div class="ds-spread-trade-panel-body">
  <header>
- <div><span>Calendar Spread</span><strong>${escapeHtml(action.replace('_', ' '))}</strong><em>${escapeHtml(decision.reason || 'No valid setup is confirmed.')}</em></div>
+ <div><strong>${escapeHtml(action.replace('_', ' '))}</strong><em>${escapeHtml(decision.reason || 'No valid setup is confirmed.')}</em></div>
  <b>${escapeHtml(String(decision.confidence || 'low').toUpperCase())} ${escapeHtml(String(decision.confidenceScore || 0))}/100</b>
  </header>
  <div class="ds-spread-contract-line">
@@ -706,7 +714,8 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  <span>Data <strong>${escapeHtml(String(quality.freshness || 'unverified'))}; ${escapeHtml(String(quality.badTicks || 0))} bad ticks, ${escapeHtml(String(quality.rollDiscontinuities || 0))} roll breaks excluded</strong></span>
  </div>
  ${plan ? `<div class="ds-spread-exact-plan"><span>Trade Plan</span>${leg(plan.first)}${leg(plan.second)}</div>` : `<div class="ds-spread-wait"><strong>No trade plan while data or setup gates fail.</strong>${blockers.slice(0, 4).map(reason => `<span>${escapeHtml(reason)}</span>`).join('')}</div>`}
- </section>`;
+ </div>
+ </details>`;
  }
 
  function buildDeskChartPanel(panelKey, title, panelState = {}, dataset = {}, model = null, intelligence = null, state = {}, calculatedIndicators = {}) {

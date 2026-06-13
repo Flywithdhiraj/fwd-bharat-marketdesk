@@ -917,16 +917,32 @@
 .commodity-spread-desk-detail p { margin: 0; padding: 8px 10px; border: 1px solid rgba(201, 151, 77, .18); border-radius: 5px; }
 
 .ds-spread-trade-panel {
- display: grid;
- gap: 8px;
- padding: 10px 12px;
  border-top: 1px solid rgba(216, 224, 211, .1);
  border-bottom: 1px solid rgba(216, 224, 211, .1);
  background: rgba(5, 15, 16, .72);
  font-variant-numeric: tabular-nums;
 }
 
-.ds-spread-trade-panel > header,
+.ds-spread-trade-panel > summary {
+ display: grid;
+ grid-template-columns: auto auto minmax(160px, 1fr) auto auto;
+ align-items: center;
+ gap: 8px;
+ min-height: 34px;
+ padding: 5px 10px;
+ cursor: pointer;
+ list-style: none;
+}
+
+.ds-spread-trade-panel > summary::-webkit-details-marker { display: none; }
+.ds-spread-trade-panel > summary strong { font-size: 11px; }
+.ds-spread-trade-panel > summary b { color: var(--text); font-size: 10px; font-weight: 600; }
+.ds-spread-trade-panel > summary i { color: var(--accent); font-size: 9px; font-style: normal; font-weight: 700; }
+.ds-spread-trade-panel > summary:active { transform: translateY(1px); }
+.ds-spread-trade-panel[open] > summary { border-bottom: 1px solid rgba(216, 224, 211, .08); }
+.ds-spread-trade-panel-body { display: grid; gap: 8px; padding: 8px 10px 10px; }
+
+.ds-spread-trade-panel-body > header,
 .ds-spread-contract-line,
 .ds-spread-liquidity,
 .ds-spread-exact-plan {
@@ -934,12 +950,12 @@
  gap: 7px;
 }
 
-.ds-spread-trade-panel > header {
+.ds-spread-trade-panel-body > header {
  grid-template-columns: minmax(0, 1fr) auto;
  align-items: start;
 }
 
-.ds-spread-trade-panel > header div,
+.ds-spread-trade-panel-body > header div,
 .ds-spread-contract-line > div,
 .ds-spread-metrics > div,
 .ds-spread-exact-plan > div {
@@ -954,10 +970,12 @@
  font-style: normal;
 }
 
-.ds-spread-trade-panel > header strong { font-size: 16px; }
-.ds-spread-trade-panel > header b { color: var(--accent); font-size: 10px; }
-.ds-spread-trade-panel.buy > header strong { color: #24dab1; }
-.ds-spread-trade-panel.sell > header strong { color: #ff7185; }
+.ds-spread-trade-panel-body > header strong { font-size: 14px; }
+.ds-spread-trade-panel-body > header b { color: var(--accent); font-size: 10px; }
+.ds-spread-trade-panel.buy > summary strong,
+.ds-spread-trade-panel.buy .ds-spread-trade-panel-body > header strong { color: #24dab1; }
+.ds-spread-trade-panel.sell > summary strong,
+.ds-spread-trade-panel.sell .ds-spread-trade-panel-body > header strong { color: #ff7185; }
 
 .ds-spread-contract-line {
  grid-template-columns: 1fr 1fr 1.4fr;
@@ -1547,6 +1565,12 @@
  .ds-spread-exact-plan {
   grid-template-columns: 1fr;
  }
+
+ .ds-spread-trade-panel > summary {
+  grid-template-columns: auto auto 1fr auto;
+ }
+
+ .ds-spread-trade-panel > summary b { display: none; }
 
  .commodity-spread-state-panel {
   grid-template-columns: 1fr;

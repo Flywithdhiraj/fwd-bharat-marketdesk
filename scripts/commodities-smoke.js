@@ -105,5 +105,7 @@ assert(chartEngine.includes("payload.dataset?.signedPriceSeries === true"));
 assert(service.includes('commoditySpreadSnapshotValidity') && service.includes('sanitizeCommoditySpreadRows'));
 assert(commodity.includes('commodity-spread-exact-plan') && commodity.includes('Buy spread = far ask - near bid'));
 assert(chartShellPart.includes('buildCommoditySpreadTradePanel') && chartShellPart.includes('No trade plan while data or setup gates fail.'));
+assert(chartShellPart.includes('<details class="ds-spread-trade-panel') && chartShellPart.includes('<i>Details</i>'));
+assert(service.includes('cleaningVersion: 2') && service.includes('outdatedCleaning'));
 
 console.log('Commodities Phase 3 smoke checks passed.');

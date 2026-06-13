@@ -84,8 +84,9 @@ const pair = {
  const after = rowsFromCloses(Array.from({ length: 30 }, (_, index) => 420 + index * 0.2), before[before.length - 1].time + 86400, 86400);
  const cleaned = sanitizeCommoditySpreadRows([...before, ...after]);
  assert.strictEqual(cleaned.rollDiscontinuities, 1);
- assert(cleaned.rows.every(row => row.close >= 400));
- console.log('PASS contract-roll discontinuity starts a clean post-roll decision segment');
+ assert.strictEqual(cleaned.rows.length, before.length + after.length);
+ assert(cleaned.decisionRows.every(row => row.close >= 400));
+ console.log('PASS contract-roll discontinuity preserves chart history and isolates decision statistics');
 }
 
 {
