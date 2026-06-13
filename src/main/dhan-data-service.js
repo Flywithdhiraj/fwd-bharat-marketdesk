@@ -911,6 +911,16 @@ function buildCommoditySpreadClosePoints(firstRows = [], secondRows = []) {
  }).filter(Boolean).sort((a, b) => a.time - b.time);
 }
 
+function isDegenerateCommoditySpread(rows = [], pair = {}) {
+ const firstSecurityId = String(pair?.firstInstrument?.securityId || '');
+ const secondSecurityId = String(pair?.secondInstrument?.securityId || '');
+ if (!firstSecurityId || !secondSecurityId || firstSecurityId === secondSecurityId) return true;
+ const values = (Array.isArray(rows) ? rows : [])
+  .map(row => Number(row?.close))
+  .filter(Number.isFinite);
+ return values.length > 1 && values.every(value => Math.abs(value) < 1e-8);
+}
+
 function buildCommoditySynchronizedSpreadCandles(firstRows = [], secondRows = [], bucketSeconds = 3600) {
  const firstByTime = new Map((Array.isArray(firstRows) ? firstRows : [])
   .filter(row => Number.isFinite(Number(row?.time)))
@@ -3043,11 +3053,11 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
     start: dailyStart,
     end: nowMs,
     timeoutMs: 45000,
-   });
+  });
   const farDaily = await getCandles({
-    instrument: pair.firstInstrument,
+    instrument: pair.secondInstrument,
     resolution: '1d',
-    expiryCode: 1,
+    expiryCode: 0,
     oi: true,
     start: dailyStart,
     end: nowMs,
@@ -3057,6 +3067,9 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
    throw new Error(nearDaily?.error || farDaily?.error || `${pair.family} rolling daily history failed.`);
   }
   const daily = buildCommoditySpreadClosePoints(nearDaily.rows, farDaily.rows);
+  if (isDegenerateCommoditySpread(daily, pair)) {
+   throw new Error(`${pair.family} daily spread history collapsed to an invalid all-zero series.`);
+  }
   const nearIntraday = await getCommodityCachedCandles(pair.firstInstrument, '5m', intradayStart, nowMs, { force: options.force === true });
   const farIntraday = await getCommodityCachedCandles(pair.secondInstrument, '5m', intradayStart, nowMs, { force: options.force === true });
   const intraday = nearIntraday?.ok && farIntraday?.ok
@@ -3081,10 +3094,10 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
     intradayEnd: intraday[intraday.length - 1]?.time || 0,
    },
    sourceQuality: {
-    daily: 'dhan_rolling_expiry_code',
+    daily: 'exact_active_contract_pair',
     intraday: intraday.length ? 'exact_active_contract_synchronized_5m' : 'unavailable',
     exactHistoricalContractArchive: false,
-    note: 'Daily history uses Dhan rolling expiry codes. Exact contract identities are archived prospectively from this release.',
+    note: 'Daily and intraday history use the exact active near and next contract security IDs. Older expired pairs are archived prospectively only.',
    },
    fetchedAt: Date.now(),
   };
@@ -3209,7 +3222,8 @@ async function startCommoditySpreadBackfill(message = {}) {
   let entry = store.families[pair.family];
   const pairChanged = String(entry?.pair?.firstInstrument?.securityId || '') !== String(pair.firstInstrument.securityId)
    || String(entry?.pair?.secondInstrument?.securityId || '') !== String(pair.secondInstrument.securityId);
-  if (!entry || pairChanged || message.force === true) {
+  const invalidDaily = isDegenerateCommoditySpread(entry?.daily, pair);
+  if (!entry || pairChanged || invalidDaily || message.force === true) {
    try {
     entry = await fetchCommoditySpreadHistoryEntry(pair, { force: message.force === true });
     store.families[pair.family] = entry;
@@ -3274,13 +3288,13 @@ async function startCommoditySpreadBackfill(message = {}) {
    historyMode: view === 'current'
     ? 'active_contract_pair'
     : view === 'historical'
-     ? 'archived_contract_catalog_with_dhan_rolling_chart'
-     : 'continuous_dhan_rolling',
+     ? 'archived_contract_catalog_with_active_pair_chart'
+     : 'active_contract_pair',
    expiryCatalog: Object.values(archive.contracts || {}).filter(item => item.underlyingSymbol === pair.family),
    pairSnapshots,
    expiryCatalogCount: Object.values(archive.contracts || {}).filter(item => item.underlyingSymbol === pair.family).length,
    methodology: resolution === '1d'
-    ? `${view === 'historical' ? 'Archived contract identities are shown separately; unavailable expired-contract candles are not fabricated. ' : ''}Daily continuous spread uses Far close minus Near close. It does not fabricate synthetic daily highs or lows.`
+    ? `${view === 'historical' ? 'Archived contract identities are shown separately; unavailable expired-contract candles are not fabricated. ' : ''}Daily spread uses exact active Far close minus exact active Near close. It does not fabricate synthetic daily highs or lows.`
     : 'Hourly spread candles aggregate synchronized five-minute Far-close minus Near-close observations.',
   };
  }
@@ -4266,6 +4280,7 @@ module.exports = {
   buildCommoditySpreadPairs,
   buildCommoditySpreadCandles,
   buildCommoditySpreadClosePoints,
+  isDegenerateCommoditySpread,
   buildCommoditySynchronizedSpreadCandles,
   buildCommoditySpreadBands,
   buildCommoditySpreadRollEvents,

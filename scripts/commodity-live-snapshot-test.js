@@ -4,6 +4,7 @@ const { createCredentialStore } = require('../src/main/credential-store');
 const { createDhanDataService } = require('../src/main/dhan-data-service');
 
 const PRODUCT_NAME = 'FWD Bharat MarketDesk';
+const DEFAULT_WINDOWS_HOME = 'D:\\Office Work Backup\\Automation\\Dhan Trading data and App';
 
 function sleep(ms) {
  return new Promise(resolve => setTimeout(resolve, ms));
@@ -11,7 +12,9 @@ function sleep(ms) {
 
 async function main() {
  app.setName(PRODUCT_NAME);
- app.setPath('userData', path.join(app.getPath('appData'), PRODUCT_NAME));
+ app.setPath('userData', process.platform === 'win32'
+  ? path.join(String(process.env.FWD_BHARAT_MARKETDESK_HOME || '').trim() || DEFAULT_WINDOWS_HOME, 'Data')
+  : path.join(app.getPath('appData'), PRODUCT_NAME));
  await app.whenReady();
  const errorJournal = { append(scope, error) { console.error(`[${scope}] ${error?.message || error}`); } };
  const credentialStore = createCredentialStore({ app, safeStorage, errorJournal });

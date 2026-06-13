@@ -63,6 +63,8 @@ assert(service.includes("message.spreadType || 'all'"));
 assert(service.includes('buildCommoditySpreadCandles') && service.includes("action === 'commodity_spread_chart'"));
 assert(service.includes('buildCommoditySpreadClosePoints') && service.includes('buildCommoditySynchronizedSpreadCandles'));
 assert(service.includes("action === 'commodity_spread_continuous_chart'"));
+assert(service.includes('instrument: pair.secondInstrument') && service.includes('isDegenerateCommoditySpread'));
+assert(service.includes("daily: 'exact_active_contract_pair'"));
 assert(service.includes("action === 'commodity_spread_history_backfill_start'"));
 assert(service.includes("action === 'commodity_spread_history_backfill_status'"));
 assert(service.includes("action === 'commodity_spread_history_backfill_cancel'"));

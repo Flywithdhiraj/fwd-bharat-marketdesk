@@ -6,6 +6,7 @@ const {
  buildCommoditySynchronizedSpreadCandles,
  buildCommoditySpreadRollEvents,
  buildCommoditySpreadDecision,
+ isDegenerateCommoditySpread,
 } = __private;
 
 function rowsFromCloses(closes = [], start = 1700000000, step = 86400) {
@@ -54,6 +55,17 @@ const pair = {
  assert.deepStrictEqual(points.map(row => row.close), [-10, 3, 2]);
  assert(points.every(row => row.open === row.high && row.high === row.low && row.low === row.close));
  console.log('PASS daily spread history is close-only and supports negative/zero-crossing values');
+}
+
+{
+ const distinctPair = {
+  firstInstrument: { securityId: 'near' },
+  secondInstrument: { securityId: 'far' },
+ };
+ assert.strictEqual(isDegenerateCommoditySpread(rowsFromCloses([0, 0, 0]), distinctPair), true);
+ assert.strictEqual(isDegenerateCommoditySpread(rowsFromCloses([0, 2, -1]), distinctPair), false);
+ assert.strictEqual(isDegenerateCommoditySpread(rowsFromCloses([5]), distinctPair), false);
+ console.log('PASS all-zero cached spread history is rejected without blocking valid zero crossings');
 }
 
 {

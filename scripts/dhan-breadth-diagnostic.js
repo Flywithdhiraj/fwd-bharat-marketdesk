@@ -4,6 +4,7 @@ const { createCredentialStore } = require('../src/main/credential-store');
 const { createDhanDataService } = require('../src/main/dhan-data-service');
 
 const PRODUCT_NAME = 'FWD Bharat MarketDesk';
+const DEFAULT_WINDOWS_HOME = 'D:\\Office Work Backup\\Automation\\Dhan Trading data and App';
 
 function countFeedRows(response = {}) {
  const root = response?.data?.data || response?.data || {};
@@ -19,7 +20,9 @@ function countFeedRows(response = {}) {
 
 async function main() {
  app.setName(PRODUCT_NAME);
- app.setPath('userData', path.join(app.getPath('appData'), PRODUCT_NAME));
+ app.setPath('userData', process.platform === 'win32'
+  ? path.join(String(process.env.FWD_BHARAT_MARKETDESK_HOME || '').trim() || DEFAULT_WINDOWS_HOME, 'Data')
+  : path.join(app.getPath('appData'), PRODUCT_NAME));
  await app.whenReady();
 
  const errorJournal = {
