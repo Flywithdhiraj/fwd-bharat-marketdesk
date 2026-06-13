@@ -16,13 +16,19 @@ const { createWindowManager } = require('./windows');
 const MAIN_PROCESS_STARTED_AT = Date.now();
 const MAX_CHROMIUM_CACHE_BYTES = 48 * 1024 * 1024;
 const PRODUCT_NAME = 'FWD Bharat MarketDesk';
+const DEFAULT_WINDOWS_HOME = 'D:\\Office Work Backup\\Automation\\Dhan Trading data and App';
 const LEGACY_USER_DATA_DIRS = [
  path.join(app.getPath('appData'), 'FWD Bharat MarketDesk (NSE', 'BSE)'),
  path.join(app.getPath('appData'), 'FWD TradeDesk Pro (NSE', 'BSE)'),
 ];
 
 app.setName(PRODUCT_NAME);
-app.setPath('userData', path.join(app.getPath('appData'), PRODUCT_NAME));
+if (process.platform === 'win32') {
+ const configuredHome = String(process.env.FWD_BHARAT_MARKETDESK_HOME || '').trim();
+ app.setPath('userData', path.join(configuredHome || DEFAULT_WINDOWS_HOME, 'Data'));
+} else {
+ app.setPath('userData', path.join(app.getPath('appData'), PRODUCT_NAME));
+}
 if (process.platform === 'win32') app.setAppUserModelId('com.fwd.bharatmarketdesk.nsebse');
 Menu.setApplicationMenu(null);
 
