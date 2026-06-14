@@ -198,6 +198,9 @@ async function loadPersistentCandleCacheRecord(symbol, resolution, instrument = 
  return {
  rows,
  updatedAt: Number(record?.updatedAt || 0),
+ backfilledAt: Number(record?.backfilledAt || 0),
+ coverageStart: Number(record?.coverageStart || 0),
+ coverageEnd: Number(record?.coverageEnd || 0),
  memoryKey,
  fromMemory: false,
  };
@@ -217,9 +220,10 @@ async function persistPersistentCandleCacheRecord(symbol, resolution, rows = [],
  return trimmedRows;
 }
 
-async function fetchCandlesRange(symbol, resolution, startSec, endSec) {
+async function fetchCandlesRange(symbol, resolution, startSec, endSec, options = {}) {
  const safeSymbol = String(symbol || '').trim().toUpperCase();
  const safeResolution = String(resolution || '').trim();
+ const forceRefresh = options?.force === true;
  const nowSec = Math.floor(Date.now() / 1000);
  const refreshMs = candleCacheRefreshMs(safeResolution);
  const persisted = await loadPersistentCandleCacheRecord(safeSymbol, safeResolution);
@@ -228,7 +232,7 @@ async function fetchCandlesRange(symbol, resolution, startSec, endSec) {
  const rangeCovered = doesCandleCacheCoverRange(cachedRows, startSec, endSec, safeResolution);
  const touchesRecentData = endSec >= (nowSec - Math.max(resolveCandleResolutionSec(safeResolution), 60));
  const cacheFresh = persisted.fromMemory || ((Date.now() - Number(persisted.updatedAt || 0)) < refreshMs);
- if (cachedRange.length && rangeCovered && (!touchesRecentData || cacheFresh)) {
+ if (!forceRefresh && cachedRange.length && rangeCovered && (!touchesRecentData || cacheFresh)) {
   globalThis.dhanCandleFetchStats = {
    ...(globalThis.dhanCandleFetchStats || {}),
    cacheHits: Number(globalThis.dhanCandleFetchStats?.cacheHits || 0) + 1,
@@ -237,7 +241,9 @@ async function fetchCandlesRange(symbol, resolution, startSec, endSec) {
  }
  if (typeof globalThis.dhanFetchCandlesForRenderer === 'function') {
  try {
-   const fetchedRows = await globalThis.dhanFetchCandlesForRenderer(safeSymbol, safeResolution, startSec, endSec);
+   const fetchedRows = await globalThis.dhanFetchCandlesForRenderer(safeSymbol, safeResolution, startSec, endSec, {
+    force: forceRefresh,
+   });
    if (fetchedRows?.length) {
     globalThis.dhanCandleFetchStats = {
      ...(globalThis.dhanCandleFetchStats || {}),
@@ -1989,13 +1995,14 @@ function filterClosedCandles(candles = [], resolution = '', options = {}) {
 
 async function fetchCandles(symbol, resolution, limit = 200, options = {}) {
  const closedOnly = !!options?.closedOnly;
+ const forceRefresh = options?.force === true;
  const timeoutMs = Math.max(0, Number(options?.timeoutMs || 0));
  const instrument = options?.instrument || options?.dhanInstrument || null;
  const instrumentKey = instrument?.exchangeSegment && instrument?.securityId
  ? `${String(instrument.exchangeSegment).trim().toUpperCase()}:${String(instrument.securityId).trim()}`
  : String(symbol || '').trim().toUpperCase();
  const cKey = `${instrumentKey}_${resolution}_${closedOnly ? 'closed' : 'live'}`;
- const c = cached(cKey);
+ const c = forceRefresh ? null : cached(cKey);
  if (c) {
   globalThis.dhanCandleFetchStats = {
    ...(globalThis.dhanCandleFetchStats || {}),
@@ -2022,7 +2029,7 @@ async function fetchCandles(symbol, resolution, limit = 200, options = {}) {
  const largeNativeHistoryRequest = ['4h', '1d', '1w'].includes(safeResolution) && Number(limit || 0) >= 1000;
  const reusableClosedSeries = closedOnly && cacheFresh;
  const reusableLiveSeries = lastCachedTs >= (end - Math.max(secs, 60)) && cacheFresh;
- if (!largeNativeHistoryRequest && persistedCandles.length >= Math.min(20, limit) && (reusableClosedSeries || reusableLiveSeries)) {
+ if (!forceRefresh && !largeNativeHistoryRequest && persistedCandles.length >= Math.min(20, limit) && (reusableClosedSeries || reusableLiveSeries)) {
   globalThis.dhanCandleFetchStats = {
    ...(globalThis.dhanCandleFetchStats || {}),
    cacheHits: Number(globalThis.dhanCandleFetchStats?.cacheHits || 0) + 1,
@@ -2030,7 +2037,9 @@ async function fetchCandles(symbol, resolution, limit = 200, options = {}) {
   setCache(cKey, persistedCandles);
   return persistedCandles;
   }
- const cachedCoverageEnough = cachedRows.length >= Math.min(Math.max(20, Number(limit || 0)), Math.max(20, Number(limit || 0)));
+ const oldestCachedTs = cachedRows.length ? Number(cachedRows[0]?.time || 0) : 0;
+ const cachedCoverageEnough = cachedRows.length >= Math.max(20, Number(limit || 0))
+  || (oldestCachedTs > 0 && oldestCachedTs <= (start + (secs * 7)));
  const overlapBars = closedOnly ? 2 : 4;
  const incrementalStart = lastCachedTs > 0 && cachedCoverageEnough
  ? Math.max(start, lastCachedTs - (secs * overlapBars))
@@ -2054,8 +2063,9 @@ async function fetchCandles(symbol, resolution, limit = 200, options = {}) {
    const fetchedRows = await withCandleTimeout(globalThis.dhanFetchCandlesForRenderer(safeSymbol, safeResolution, incrementalStart || start, end, {
     timeoutMs,
     paceMs: Math.max(0, Number(options?.paceMs || 0)),
-    failFastOnRateLimit: true,
-    instrument,
+   failFastOnRateLimit: true,
+   instrument,
+   force: forceRefresh,
    }));
    if (fetchedRows?.length) {
     globalThis.dhanCandleFetchStats = {
@@ -2069,6 +2079,13 @@ async function fetchCandles(symbol, resolution, limit = 200, options = {}) {
     mergeCachedCandleRows(cachedRows, fetchedRows),
     instrument
     );
+    if (instrument?.exchangeSegment && instrument?.securityId) {
+     await persistPersistentCandleCacheRecord(
+      safeSymbol,
+      safeResolution,
+      mergedRows
+     );
+    }
    let candles = mergedRows.slice();
    if (closedOnly) candles = filterClosedCandles(candles, safeResolution);
    candles = candles.slice(-limit);
@@ -2100,6 +2117,9 @@ async function fetchCandles(symbol, resolution, limit = 200, options = {}) {
     dlog(`Candle skipped ${safeSymbol}: market feed returned no/invalid candle data for ${safeResolution} (${instrumentLabel}) - ${message.slice(0, 160)}`);
    } else {
     dlog(`Candle error ${safeSymbol} ${safeResolution} (${instrumentLabel}): ${message}`);
+   }
+   if (options?.throwOnError === true && !/DH-905|incorrect parameters|no data present/i.test(message)) {
+    throw e;
    }
   }
  }

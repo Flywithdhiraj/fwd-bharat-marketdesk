@@ -10,6 +10,7 @@ const {
  computeLeadershipState,
  computeSectorBreadth,
  deriveSignalPersistence,
+ formatIndiaTime: scanFormatIndiaTime,
  formatThresholdSummary,
  mergeWatchlists,
  sanitizeKeyLevelSettings: scanSanitizeKeyLevelSettings,
@@ -39,9 +40,18 @@ function buildDecisionState(results = [], marketIndex = null, manualWatchlist = 
 
 const CLOSED_CANDLE_FETCH_OPTIONS = Object.freeze({ closedOnly: true });
 const SCAN_CANDLE_PACE_MS = 1800;
-const SCAN_CANDLE_TIMEOUT_MS = 30000;
-const SCAN_CANDLE_FETCH_OPTIONS = Object.freeze({ closedOnly: true, timeoutMs: SCAN_CANDLE_TIMEOUT_MS, paceMs: SCAN_CANDLE_PACE_MS });
-const SCAN_CONTEXT_DAILY_CANDLES = 260;
+const SCAN_CANDLE_TIMEOUT_MS = 4 * 60 * 1000;
+const SCAN_CANDLE_FETCH_OPTIONS = Object.freeze({
+ closedOnly: true,
+ force: true,
+ throwOnError: true,
+ timeoutMs: SCAN_CANDLE_TIMEOUT_MS,
+ paceMs: SCAN_CANDLE_PACE_MS,
+});
+const SCAN_RESUME_CHECKPOINT_KEY = 'mainScanResumeCheckpointV1';
+const SCAN_TRANSIENT_RETRY_LIMIT = 3;
+const SCAN_TRANSIENT_RETRY_DEFAULT_MS = 2 * 60 * 1000;
+const SCAN_CONTEXT_DAILY_CANDLES = 3650;
 const SCANNER_ALLOWED_TIMEFRAMES = new Set(['4h', '1d']);
 const SCANNER_UNIVERSE_DEFAULT = 'fno_stocks';
 const SCANNER_UNIVERSE_LIMITS = Object.freeze({
@@ -1156,8 +1166,77 @@ function isScanStopRequested() {
 
 async function throwIfScanStopRequested() {
  if (!isScanStopRequested()) return;
- await markScanStopped('Scan stopped by user', 0);
- throw new Error('Scan stopped by user');
+ const reason = String(globalThis.scanAbortReason || 'user');
+ const status = reason === 'deadline'
+  ? 'Scan paused at its safety deadline; automatic resume is scheduled'
+  : 'Scan stopped by user';
+ await markScanStopped(status, 0);
+ const error = new Error(status);
+ error.scanAbortReason = reason;
+ throw error;
+}
+
+function buildScanResumeFingerprint(candidates = [], strat = {}) {
+ const symbols = (Array.isArray(candidates) ? candidates : [])
+  .map(item => String(item?.symbol || '').trim().toUpperCase())
+  .filter(Boolean)
+  .sort();
+ return [
+  sanitizeScanUniverseId(strat.scanUniverse),
+  sanitizeScanMode(strat.scanMode),
+  sanitizeScanTimeframe(strat.tf1, '1d'),
+  sanitizeScanTimeframe(strat.tf2, '4h'),
+  symbols.join(','),
+ ].join('|');
+}
+
+async function readScanResumeCheckpoint(candidates = [], strat = {}) {
+ const data = await new Promise(resolve => chrome.storage.local.get([SCAN_RESUME_CHECKPOINT_KEY], resolve));
+ const checkpoint = data?.[SCAN_RESUME_CHECKPOINT_KEY];
+ if (!checkpoint || checkpoint.fingerprint !== buildScanResumeFingerprint(candidates, strat)) return null;
+ return checkpoint;
+}
+
+async function saveScanResumeCheckpoint(candidates = [], strat = {}, details = {}) {
+ const completedSymbols = Array.from(details.completedSymbols || [])
+  .map(symbol => String(symbol || '').trim().toUpperCase())
+  .filter(Boolean);
+ const checkpoint = {
+  version: 1,
+  fingerprint: buildScanResumeFingerprint(candidates, strat),
+  universe: sanitizeScanUniverseId(strat.scanUniverse),
+  scanMode: sanitizeScanMode(strat.scanMode),
+  tf1: sanitizeScanTimeframe(strat.tf1, '1d'),
+  tf2: sanitizeScanTimeframe(strat.tf2, '4h'),
+  candidateSymbols: candidates.map(item => String(item?.symbol || '').trim().toUpperCase()).filter(Boolean),
+  completedSymbols,
+  results: Array.isArray(details.results) ? details.results : [],
+  noHistoryCount: Math.max(0, Number(details.noHistoryCount || 0)),
+  updatedAt: Date.now(),
+ };
+ await chrome.storage.local.set({ [SCAN_RESUME_CHECKPOINT_KEY]: checkpoint });
+ return checkpoint;
+}
+
+function scanRetryDelayMs(error) {
+ const message = String(error?.message || error || '');
+ const match = message.match(/retry(?: in| after)?\s*(\d+)\s*(?:seconds?|s)\b/i);
+ if (match) return Math.max(15000, Number(match[1]) * 1000);
+ return SCAN_TRANSIENT_RETRY_DEFAULT_MS;
+}
+
+function isTransientScanError(error) {
+ const message = String(error?.message || error || '');
+ return Number(error?.status || 0) === 429
+  || /rate.?limit|too many|cooling down|timeout|timed out|network|fetch failed|market api|temporarily|blocked/i.test(message);
+}
+
+async function waitForScanRetry(delayMs) {
+ const endAt = Date.now() + Math.max(1000, Number(delayMs || 0));
+ while (Date.now() < endAt) {
+  await throwIfScanStopRequested();
+  await wait(Math.min(5000, endAt - Date.now()));
+ }
 }
 
 async function setScanLiveFeedPaused(paused = true) {
@@ -1226,6 +1305,7 @@ async function savePartialScanCheckpoint(scanContext, details = {}) {
 // ================================================================
 async function runScan() {
   globalThis.scanAbortRequested = false;
+  globalThis.scanAbortReason = '';
   globalThis.dhanCandleFetchStats = { cacheHits: 0, fallbackCacheHits: 0, apiFetches: 0, apiRows: 0, startedAt: Date.now() };
   const scanStartedAt = performanceNow();
   let liveFeedPausedForScan = false;
@@ -1546,10 +1626,20 @@ async function runScan() {
  if (candidates.length > deepScanLimit) candidates = candidates.slice(0, deepScanLimit);
   dlog(`Candidates: ${candidates.length} deep (${watchlist.size} pinned, mode=${strat.scanMode}, universe=${universeMeta.label || strat.scanUniverse}, breadth=${maxCoins}, returned=${Object.keys(tickerMap || {}).length}, candle pace=${SCAN_CANDLE_PACE_MS}ms)`);
  const deepTotal = candidates.length;
- await chrome.storage.local.set({ scannedCoins: 0, scannedStocks: 0 });
+ const resumeCheckpoint = await readScanResumeCheckpoint(candidates, strat);
+ const completedSymbols = new Set(Array.isArray(resumeCheckpoint?.completedSymbols) ? resumeCheckpoint.completedSymbols : []);
+ const resumedRows = completedSymbols.size;
+ await chrome.storage.local.set({
+  scannedCoins: resumedRows,
+  scannedStocks: resumedRows,
+  scanStatus: resumedRows
+   ? `Resuming ${universeMeta.label || 'Market'} scan from ${resumedRows}/${deepTotal} completed stocks...`
+   : `Starting ${universeMeta.label || 'Market'} scan...`,
+ });
+ if (resumedRows) dlog(`Resuming durable scan checkpoint: ${resumedRows}/${deepTotal} symbols already completed`);
 
  // Scan each symbol
- const results = [];
+ const results = Array.isArray(resumeCheckpoint?.results) ? resumeCheckpoint.results.slice() : [];
  const alertsData = await new Promise(r => chrome.storage.local.get(['alertHistory'], r));
  let alerts = Array.isArray(alertsData.alertHistory) ? alertsData.alertHistory : [];
  const currentAlerts = [];
@@ -1591,22 +1681,24 @@ async function runScan() {
  });
  };
 
- let noHistoryCount = 0;
+ let noHistoryCount = Math.max(0, Number(resumeCheckpoint?.noHistoryCount || 0));
  for (let i = 0; i < candidates.length; i++) {
  await throwIfScanStopRequested();
  if (i > 0 && i % 20 === 0) {
  await wait(0);
  }
   const { symbol, ticker } = candidates[i];
+  if (completedSymbols.has(symbol)) continue;
   const candleOptions = { ...SCAN_CANDLE_FETCH_OPTIONS, instrument: candidates[i].dhanInstrument || null };
- const pct = Math.round(8 + (i / candidates.length) * 88);
+ const completedBefore = completedSymbols.size;
+ const pct = Math.round(8 + (completedBefore / candidates.length) * 88);
  if (i % 1 === 0 || i === candidates.length - 1) {
  await chrome.storage.local.set({
-  scanStatus: `Scanning ${universeMeta.label || 'Market'}: ${symbol} (${i + 1}/${deepTotal}, completed ${i}, pending ${Math.max(0, deepTotal - i)})`,
+  scanStatus: `Scanning ${universeMeta.label || 'Market'}: ${symbol} (completed ${completedBefore}/${deepTotal}, pending ${Math.max(0, deepTotal - completedBefore)})`,
  scanProgress: pct,
  scanHeartbeat: Date.now(),
- scannedCoins: i,
- scannedStocks: i,
+ scannedCoins: completedBefore,
+ scannedStocks: completedBefore,
  scannerUniverseMeta: {
   universe: universeMeta.universe || strat.scanUniverse,
    label: universeMeta.label || strat.scanUniverse,
@@ -1618,13 +1710,16 @@ async function runScan() {
    scanMode: strat.scanMode,
    count: Number(universeMeta.count || products.length || 0),
   returned: Number(universeMeta.returned || Object.keys(tickerMap || {}).length || 0),
-  scanned: i,
-  pending: Math.max(0, deepTotal - i),
+  scanned: completedBefore,
+  pending: Math.max(0, deepTotal - completedBefore),
   fetchedAt: universeMeta.fetchedAt || Date.now(),
  },
  });
  }
 
+ let symbolCompleted = false;
+ let transientAttempts = 0;
+ while (!symbolCompleted) {
  try {
  await chrome.storage.local.set({ scanHeartbeat: Date.now() });
   const dCandles = await fetchCandles(symbol, strat.tf1 || '1d', SCAN_CONTEXT_DAILY_CANDLES, candleOptions);
@@ -1633,7 +1728,8 @@ async function runScan() {
   if (noHistoryCount <= 20 || noHistoryCount % 25 === 0) {
     dlog(`Candle skipped ${symbol}: no historical data returned for ${strat.tf1 || '1d'} (${describeScanCandidateInstrument(candidates[i])}); skipped ${noHistoryCount}/${i + 1}.`);
   }
-  continue;
+  symbolCompleted = true;
+  break;
  }
   const m2Candles = await fetchCandles(symbol, strat.tf2 || '4h', 50, candleOptions);
  if (scanContext) {
@@ -1652,7 +1748,10 @@ async function runScan() {
     assetBadge: candidates[i].assetBadge || universeMeta.label || 'NSE',
    });
   }
-  if (!result) continue;
+ if (!result) {
+  symbolCompleted = true;
+  break;
+ }
   if (pennyInsight?.active) {
    result.pennyAwakening = pennyInsight;
    result.scannerMode = strat.scanMode;
@@ -1684,7 +1783,10 @@ async function runScan() {
  result.sector = resolveScannerSector(symbol, candidates[i]);
 
  // Always include pinned symbols regardless of minScore
- if (result.score < minScore && !watchlist.has(symbol)) continue;
+ if (result.score < minScore && !watchlist.has(symbol)) {
+  symbolCompleted = true;
+  break;
+ }
 
  // BUG FIX #3: Mark pinned symbols
  result.pinned = watchlist.has(symbol);
@@ -1782,8 +1884,24 @@ async function runScan() {
  }
  }
  }
- } catch (e) { dlog(`Error ${symbol}: ${e.message}`); }
- const completedRows = i + 1;
+ symbolCompleted = true;
+ } catch (e) {
+  dlog(`Error ${symbol}: ${e.message}`);
+  if (!isTransientScanError(e) || transientAttempts >= SCAN_TRANSIENT_RETRY_LIMIT) throw e;
+  transientAttempts += 1;
+  const retryMs = scanRetryDelayMs(e);
+  await saveScanResumeCheckpoint(candidates, strat, { completedSymbols, results, noHistoryCount });
+  await chrome.storage.local.set({
+   scanStatus: `Market API cooldown at ${symbol}; resuming automatically in ${Math.ceil(retryMs / 60000)} minute(s) (completed ${completedSymbols.size}/${deepTotal})`,
+   scanHeartbeat: Date.now(),
+  });
+  dlog(`Transient scan failure ${symbol}; retry ${transientAttempts}/${SCAN_TRANSIENT_RETRY_LIMIT} after ${Math.ceil(retryMs / 1000)}s`);
+  await waitForScanRetry(retryMs);
+ }
+ }
+ completedSymbols.add(symbol);
+ await saveScanResumeCheckpoint(candidates, strat, { completedSymbols, results, noHistoryCount });
+ const completedRows = completedSymbols.size;
  if (completedRows % 10 === 0 || completedRows === deepTotal) {
  await chrome.storage.local.set({
  scanStatus: completedRows === deepTotal
@@ -1810,14 +1928,14 @@ async function runScan() {
  },
  });
  }
- if (i > 0 && ((i + 1) % SCAN_PARTIAL_CHECKPOINT_EVERY === 0 || i === candidates.length - 1)) {
+ if (completedRows > 0 && completedRows < deepTotal && completedRows % SCAN_PARTIAL_CHECKPOINT_EVERY === 0) {
  await savePartialScanCheckpoint(scanContext, {
  tickerMap,
  products,
  marketIndex,
  fundingHeatmap,
  results,
- scannedRows: i + 1,
+ scannedRows: completedRows,
  candidateRows: candidates.length,
  });
  }
@@ -1901,7 +2019,7 @@ async function runScan() {
  // -- Save scan results to storage (with quota-exceeded fallback) --
  let storageSaveOk = true;
  const scanCompletedAt = Date.now();
- const scanCompletedLabel = new Date(scanCompletedAt).toLocaleTimeString();
+ const scanCompletedLabel = scanFormatIndiaTime(scanCompletedAt);
  const scannerUniverseSnapshot = {
   scanResults: enrichedResults,
   alerts: currentAlerts,
@@ -1913,20 +2031,21 @@ async function runScan() {
   sectorBreadth: intelligence.sectorBreadth,
   candleFetchStats,
   marketIndex,
-  lastScan: scanCompletedLabel,
-  lastScanTs: scanCompletedAt,
+ lastScan: scanCompletedLabel,
+ lastScanTs: scanCompletedAt,
  scannedStocks: deepTotal,
-  totalStocks: products.length,
+  totalStocks: deepTotal,
   scannerUniverseMeta: {
    universe: universeMeta.universe || strat.scanUniverse,
    label: universeMeta.label || strat.scanUniverse,
-   requested: maxCoins,
+   requested: deepTotal,
    deepScanLimit,
    deepTotal,
    completed: true,
    partial: false,
    scanMode: strat.scanMode,
-   count: Number(universeMeta.count || products.length || 0),
+   count: deepTotal,
+   sourceCount: Number(universeMeta.count || products.length || 0),
    returned: Number(universeMeta.returned || Object.keys(tickerMap || {}).length || 0),
    scanned: deepTotal,
    pending: 0,
@@ -1955,18 +2074,19 @@ async function runScan() {
   marketIndex,
  scanStatus: `OK Done - ${enrichedResults.length} signals from ${deepTotal} ${universeMeta.label || 'symbols'} (${noHistoryCount} skipped no-history)`,
  scanProgress: 100, lastScan: scanCompletedLabel, lastScanTs: scanCompletedAt,
- totalCoins: products.length, scannedCoins: candidates.length,
- totalStocks: products.length, scannedStocks: candidates.length,
+ totalCoins: deepTotal, scannedCoins: deepTotal,
+ totalStocks: deepTotal, scannedStocks: deepTotal,
  scannerUniverseMeta: {
   universe: universeMeta.universe || strat.scanUniverse,
   label: universeMeta.label || strat.scanUniverse,
-  requested: maxCoins,
+  requested: deepTotal,
   deepScanLimit,
   deepTotal,
   completed: true,
   partial: false,
   scanMode: strat.scanMode,
-  count: Number(universeMeta.count || products.length || 0),
+  count: deepTotal,
+  sourceCount: Number(universeMeta.count || products.length || 0),
   returned: Number(universeMeta.returned || Object.keys(tickerMap || {}).length || 0),
   scanned: deepTotal,
   pending: 0,
@@ -1979,6 +2099,7 @@ async function runScan() {
  soundTier: scanSoundEnabled(strat) ? topTier : null, // NEW: 'execute' | 'setup' | 'watch' | null
  scanActive: false,
  scanHeartbeat: Date.now(),
+ [SCAN_RESUME_CHECKPOINT_KEY]: null,
  });
  } catch (saveErr) {
  storageSaveOk = false;
@@ -2001,18 +2122,19 @@ async function runScan() {
   marketIndex,
  scanStatus: `OK Done - ${enrichedResults.length} signals (trimmed, ${noHistoryCount} skipped no-history)`,
  scanProgress: 100, lastScan: scanCompletedLabel, lastScanTs: scanCompletedAt,
- totalCoins: products.length, scannedCoins: candidates.length,
- totalStocks: products.length, scannedStocks: candidates.length,
+ totalCoins: deepTotal, scannedCoins: deepTotal,
+ totalStocks: deepTotal, scannedStocks: deepTotal,
  scannerUniverseMeta: {
   universe: universeMeta.universe || strat.scanUniverse,
   label: universeMeta.label || strat.scanUniverse,
-  requested: maxCoins,
+  requested: deepTotal,
   deepScanLimit,
   deepTotal,
   completed: true,
   partial: false,
   scanMode: strat.scanMode,
-  count: Number(universeMeta.count || products.length || 0),
+  count: deepTotal,
+  sourceCount: Number(universeMeta.count || products.length || 0),
   returned: Number(universeMeta.returned || Object.keys(tickerMap || {}).length || 0),
   scanned: deepTotal,
   pending: 0,
@@ -2086,8 +2208,6 @@ async function runScan() {
  scannedRows: candidates.length,
  candidateRows: candidates.length,
  });
- await globalThis.FWDTradeDeskScanContext?.deriveAll?.({ includeNative: false, source: 'main_scan_complete' })
- .catch(error => dlog(`Strategy Lab derive after scan failed: ${error?.message || error}`));
  }
  if (liveFeedPausedForScan) await setScanLiveFeedPaused(false);
  return enrichedResults;

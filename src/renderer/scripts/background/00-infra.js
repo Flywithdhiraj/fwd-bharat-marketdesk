@@ -496,6 +496,9 @@ async function v17WriteNativeCandleCache(symbol = '', resolution = '', payload =
  symbol,
  resolution,
  rows: Array.isArray(payload.rows) ? payload.rows : [],
+ backfilledAt: Number(payload.backfilledAt || 0),
+ coverageStart: Number(payload.coverageStart || 0),
+ coverageEnd: Number(payload.coverageEnd || 0),
  });
 }
 
@@ -633,6 +636,41 @@ async function v17ClearPersistentCandleCache() {
  });
 }
 
+async function v17ListPersistentCandleCache(resolution = '') {
+ const nativeList = await sendDesktopNativeMessage({ type: 'candle_list', resolution });
+ if (nativeList?.ok && Array.isArray(nativeList.records)) return nativeList.records;
+ const db = await v17OpenCandleCacheDb();
+ if (!db) return [];
+ return new Promise(resolve => {
+ try {
+ const records = [];
+ const tx = db.transaction(V17_CANDLE_CACHE_STORE, 'readonly');
+ const req = tx.objectStore(V17_CANDLE_CACHE_STORE).openCursor();
+ req.onsuccess = () => {
+  const cursor = req.result;
+  if (!cursor) return;
+  const record = cursor.value || {};
+  if (!resolution || String(record.resolution || '').toLowerCase() === String(resolution).toLowerCase()) {
+   const rows = Array.isArray(record.rows) ? record.rows : [];
+   records.push({
+    symbol: String(record.symbol || '').toUpperCase(),
+    resolution: String(record.resolution || '').toLowerCase(),
+    rowCount: rows.length,
+    updatedAt: Number(record.updatedAt || 0),
+    last: rows[rows.length - 1] || null,
+   });
+  }
+  cursor.continue();
+ };
+ tx.oncomplete = () => resolve(records);
+ tx.onerror = () => resolve(records);
+ tx.onabort = () => resolve(records);
+ } catch (_) {
+ resolve([]);
+ }
+ });
+}
+
 async function v17DeleteLegacyIndexedDbCandleCache() {
  if (!v17CanUseIndexedDb()) return false;
  try {
@@ -701,6 +739,7 @@ async function v17MigrateIndexedDbCandlesToNative() {
 globalThis.v17GetApiQuotaState = v17GetApiQuotaState;
 globalThis.buildPerformanceMetricsSnapshot = buildPerformanceMetricsSnapshot;
 globalThis.v17GetPersistentCandleCacheStats = v17GetPersistentCandleCacheStats;
+globalThis.v17ListPersistentCandleCache = v17ListPersistentCandleCache;
 globalThis.v17ClearPersistentCandleCache = v17ClearPersistentCandleCache;
 v17MigrateIndexedDbCandlesToNative().catch(error => dlog(`IndexedDB candle migration error: ${error?.message || error}`));
 

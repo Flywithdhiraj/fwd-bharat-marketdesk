@@ -899,14 +899,8 @@ pullback: {
  return false;
  }
  if (msg?.action === 'wizard:startScan') {
- const context = globalThis.FWDTradeDeskScanContext?.getFresh?.();
- const runner = context ? () => runWizardScanFromContext(context) : (msg?.forceIndependent === true ? runWizardScan : null);
- if (!runner) {
- wizardSetStatus('Run main scan first - Wizard will derive from shared scan data', { active: false, progress: 0 })
- .finally(() => sendResponse({ ok: false, error: 'Run main scan first' }));
- return true;
- }
- runner()
+ globalThis.FWDTradeDeskScanContext?.getAvailable?.()
+ .then(context => context ? runWizardScanFromContext(context) : (msg?.forceIndependent === true ? runWizardScan() : Promise.reject(new Error('Run main scan first'))))
  .then(results => sendResponse({ ok: true, count: results.length }))
  .catch(async error => {
  await wizardSetStatus(`Wizard scan failed - ${error?.message || error}`, { active: false, progress: 0 });

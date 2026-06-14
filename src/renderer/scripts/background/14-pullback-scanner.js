@@ -878,6 +878,13 @@ async function pullbackLoadSettings() {
     }
     const intraday = getContextCandles?.(context, item.symbol, '4h', settings.preferredIntradayCandles) || [];
     const result = pullbackAnalyzeSymbol(item.symbol, daily, intraday, item.ticker, { settings, marketIndex });
+    result.raw = {
+     ...(result.raw || {}),
+     candleSource: 'main_scan_context',
+     sourceScanId: context.scanId,
+     candleCount1d: daily.length,
+     candleCount4h: intraday.length,
+    };
     if (result.eventType === 'review') skipped.reviewOnly += 1;
     results.push(result);
    } catch (error) {
@@ -932,14 +939,8 @@ async function pullbackLoadSettings() {
    return false;
   }
   if (msg?.action === 'pullback:startScan') {
-   const context = globalThis.FWDTradeDeskScanContext?.getFresh?.();
-   const runner = context ? () => runPullbackScanFromContext(context) : (msg?.forceIndependent === true ? runPullbackScan : null);
-   if (!runner) {
-    pullbackSetStatus('Run main scan first - Pullback will derive from shared scan data', { active: false, progress: 0 })
-    .finally(() => sendResponse({ ok: false, error: 'Run main scan first' }));
-    return true;
-   }
-   runner()
+   globalThis.FWDTradeDeskScanContext?.getAvailable?.()
+   .then(context => context ? runPullbackScanFromContext(context) : (msg?.forceIndependent === true ? runPullbackScan() : Promise.reject(new Error('Run main scan first'))))
    .then(results => sendResponse({ ok: true, count: results.length }))
    .catch(async error => {
     await pullbackSetStatus(`Pullback scan failed - ${error?.message || error}`, { active: false, progress: 0 });

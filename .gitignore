@@ -29,6 +29,7 @@ yarn-error.log*
 .eslintcache
 dhan-instruments-cache.json
 scripts/dhan-instruments-cache.json
+research-data/
 
 # OS/editor noise
 Thumbs.db

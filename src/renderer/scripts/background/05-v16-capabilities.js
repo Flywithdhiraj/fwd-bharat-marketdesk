@@ -1313,6 +1313,9 @@ async function runV16PublicCandles(payload = {}) {
  const endMs = v16ToEpochMs(payload.endTime || payload.endTs || 0);
  const startSec = startMs > 0 ? Math.floor(startMs / 1000) : 0;
  const endSec = endMs > 0 ? Math.floor(endMs / 1000) : 0;
+ const localOnly = payload.localOnly === true;
+ const forceRefresh = payload.forceRefresh === true;
+ let sourceUpdatedAt = 0;
  const aggregateWeeklyCandles = rows => {
   const weeks = new Map();
   (Array.isArray(rows) ? rows : []).forEach(candle => {
@@ -1331,15 +1334,42 @@ async function runV16PublicCandles(payload = {}) {
   });
   return Array.from(weeks.values()).filter(candle => candle.open > 0 && candle.high > 0 && candle.low > 0 && candle.close > 0).sort((a, b) => a.time - b.time);
  };
+ const readLocalCandles = async (targetResolution, targetLimit = limit) => {
+ const persisted = await loadPersistentCandleCacheRecord(symbol, targetResolution);
+  sourceUpdatedAt = Math.max(sourceUpdatedAt, Number(persisted?.updatedAt || 0));
+  let rows = Array.isArray(persisted?.rows) ? persisted.rows : [];
+  if (!rows.length) {
+   const scanContext = globalThis.FWDTradeDeskScanContext?.getFresh?.();
+   const contextRows = globalThis.FWDTradeDeskScanContext?.getCandles?.(
+    scanContext,
+    symbol,
+    targetResolution,
+    Math.max(targetLimit, targetResolution === '1d' ? 260 : 320)
+   ) || [];
+   if (contextRows.length) {
+    rows = await persistPersistentCandleCacheRecord(symbol, targetResolution, contextRows);
+    sourceUpdatedAt = Math.max(sourceUpdatedAt, Number(scanContext?.finishedAt || scanContext?.startedAt || Date.now()));
+   }
+  }
+  if (startSec > 0 && endSec > startSec) {
+   return filterCandlesByRequestedRange(rows, startSec, endSec, targetResolution);
+  }
+  return rows.slice(-targetLimit);
+ };
+ const loadCandles = async (targetResolution, targetLimit = limit, options = {}) => {
+  if (localOnly) return readLocalCandles(targetResolution, targetLimit);
+  if (startSec > 0 && endSec > startSec && typeof fetchCandlesRange === 'function') {
+   return fetchCandlesRange(symbol, targetResolution, startSec, endSec, { force: forceRefresh });
+  }
+  return fetchCandles(symbol, targetResolution, targetLimit, { ...options, force: forceRefresh });
+ };
  const candles = resolution === '1w'
- ? aggregateWeeklyCandles(startSec > 0 && endSec > startSec && typeof fetchCandlesRange === 'function'
- ? await fetchCandlesRange(symbol, '1d', startSec, endSec)
- : await fetchCandles(symbol, '1d', Math.min(20000, (limit * 7) + 20), { closedOnly: true })).slice(-limit)
- : startSec > 0 && endSec > startSec && typeof fetchCandlesRange === 'function'
- ? await fetchCandlesRange(symbol, resolution, startSec, endSec)
- : await fetchCandles(symbol, resolution, limit);
+ ? aggregateWeeklyCandles(await loadCandles('1d', Math.min(20000, (limit * 7) + 20), { closedOnly: true })).slice(-limit)
+ : await loadCandles(resolution, limit);
  if (!Array.isArray(candles) || !candles.length) {
- throw new Error(`No public candles available for ${symbol} (${resolution})`);
+ throw new Error(localOnly
+  ? `No local candles are stored for ${symbol} (${resolution}). Run a scan or click Refresh to download them.`
+  : `No public candles available for ${symbol} (${resolution})`);
  }
  const normalizedCandles = startSec > 0 && endSec > startSec
  ? candles.slice()
@@ -1365,14 +1395,18 @@ async function runV16PublicCandles(payload = {}) {
  const [dayCandles, tf4hCandles] = await Promise.all([
  resolution === '1d' && normalizedCandles.length >= 80
  ? Promise.resolve(normalizedCandles.slice(-Math.max(80, Math.min(normalizedCandles.length, 240))))
+ : (localOnly
+ ? readLocalCandles('1d', 180)
  : (startSec > 0 && endSec > startSec && typeof fetchCandlesRange === 'function'
- ? fetchCandlesRange(symbol, '1d', Math.max(0, startSec - (200 * 24 * 60 * 60)), endSec)
- : fetchCandles(symbol, '1d', 180)),
+ ? fetchCandlesRange(symbol, '1d', Math.max(0, startSec - (200 * 24 * 60 * 60)), endSec, { force: forceRefresh })
+ : fetchCandles(symbol, '1d', 180, { force: forceRefresh }))),
  resolution === '4h' && normalizedCandles.length >= 120
  ? Promise.resolve(normalizedCandles.slice(-Math.max(120, Math.min(normalizedCandles.length, 320))))
+ : (localOnly
+ ? readLocalCandles('4h', 260)
  : (startSec > 0 && endSec > startSec && typeof fetchCandlesRange === 'function'
- ? fetchCandlesRange(symbol, '4h', Math.max(0, startSec - (260 * 4 * 60 * 60)), endSec)
- : fetchCandles(symbol, '4h', 260)),
+ ? fetchCandlesRange(symbol, '4h', Math.max(0, startSec - (260 * 4 * 60 * 60)), endSec, { force: forceRefresh })
+ : fetchCandles(symbol, '4h', 260, { force: forceRefresh }))),
  ]);
  keyLevels = typeof detectKeyLevels === 'function'
  ? detectKeyLevels(dayCandles || [], tf4hCandles || [], currentPrice, keyLevelSettings)
@@ -1384,6 +1418,9 @@ async function runV16PublicCandles(payload = {}) {
  ok: true,
  symbol,
  resolution,
+ localOnly,
+ refreshed: forceRefresh,
+ sourceUpdatedAt,
  candles: normalizedCandles.map(candle => ({
  time: Number(candle?.time || 0),
  open: Number(candle?.open || 0),

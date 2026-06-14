@@ -10,6 +10,9 @@ const {
  buildCommodityFuturePairs,
  buildCommoditySpreadPairs,
  buildCommoditySpreadCandles,
+ buildCommoditySpreadLegSeries,
+ validateCommoditySpreadLegPrices,
+ buildCommodityNearestExpiryEvents,
  clipCommoditySpreadRowsForPair,
  analyzeCommoditySpreadCandles,
  commoditySpreadCostEstimate,
@@ -22,6 +25,7 @@ const {
  normalizeUniverseId,
  isNseEquityInstrument,
  buildIntradayChunks,
+ buildHistoricalChunks,
  mergeCandleRows,
  aggregateCandleRows,
  normalizeDhanCandles,
@@ -46,6 +50,14 @@ assert.strictEqual(dhanErrorMessage({ errorCode: 'DH-905', errorMessage: 'System
 assert.strictEqual(isDhanNoHistoricalDataResponse({ status: 400, raw: { errorCode: 'DH-905', errorMessage: 'System is unable to fetch data due to incorrect parameters or no data present' } }), true);
 assert.strictEqual(feedRequestCodeForMode('quote'), 17);
 assert.strictEqual(feedRequestCodeForMode('full'), 21);
+
+const historicalChunks = buildHistoricalChunks(
+ Date.UTC(2023, 0, 1),
+ Date.UTC(2026, 0, 1),
+ 365
+);
+assert.strictEqual(historicalChunks.length >= 3, true);
+assert.strictEqual(historicalChunks.every(chunk => chunk.endMs > chunk.startMs), true);
 
 assert.strictEqual(normalizeExchangeSegment('', 'NSE', 'E', 'EQUITY'), 'NSE_EQ');
 assert.strictEqual(normalizeExchangeSegment('NFO', '', '', 'FUTIDX'), 'NSE_FNO');
@@ -174,6 +186,10 @@ assert.strictEqual(commodityPairs[0].nextFuture.securityId, '9002');
 assert.strictEqual(commodityPairs[0].futures.length, 2);
 assert.deepStrictEqual(commodityPriceMultiplier({ underlyingSymbol: 'GOLDM' }), { symbol: 'GOLDM', multiplier: 10, known: true });
 assert.deepStrictEqual(commodityMatchedLotRatio({ underlyingSymbol: 'GOLD' }, { underlyingSymbol: 'GOLDM' }), { firstLots: 1, secondLots: 10, matched: true });
+assert.deepStrictEqual(commodityMatchedLotRatio({ underlyingSymbol: 'SILVER' }, { underlyingSymbol: 'SILVERM' }), { firstLots: 1, secondLots: 6, matched: true });
+assert.deepStrictEqual(commodityMatchedLotRatio({ underlyingSymbol: 'SILVER' }, { underlyingSymbol: 'SILVERMIC' }), { firstLots: 1, secondLots: 30, matched: true });
+assert.deepStrictEqual(commodityMatchedLotRatio({ underlyingSymbol: 'CRUDEOIL' }, { underlyingSymbol: 'CRUDEOILM' }), { firstLots: 1, secondLots: 10, matched: true });
+assert.deepStrictEqual(commodityMatchedLotRatio({ underlyingSymbol: 'NATURALGAS' }, { underlyingSymbol: 'NATGASMINI' }), { firstLots: 1, secondLots: 5, matched: true });
 
 const goldmNear = { ...commodityNear, securityId: '9011', symbol: 'GOLDM', underlyingSymbol: 'GOLDM', tradingSymbol: 'GOLDM-05JUN2026-FUT' };
 const goldmPairs = buildCommodityFuturePairs([goldmNear], Date.UTC(2026, 4, 26));
@@ -186,6 +202,43 @@ const syntheticCandles = buildCommoditySpreadCandles(
  [{ time: 1, open: 110, high: 116, low: 108, close: 114, volume: 8 }]
 );
 assert.deepStrictEqual(syntheticCandles[0], { time: 1, open: 10, high: 18, low: 3, close: 12, volume: 8 });
+const syntheticLegs = buildCommoditySpreadLegSeries(
+ [{ time: 1, close: 102 }, { time: 2, close: 104 }],
+ [{ time: 1, close: 114 }, { time: 2, close: 119 }]
+);
+assert.deepStrictEqual(syntheticLegs, {
+ near: [{ time: 1, value: 102 }, { time: 2, value: 104 }],
+ far: [{ time: 1, value: 114 }, { time: 2, value: 119 }],
+});
+assert.strictEqual(syntheticLegs.far[0].value - syntheticLegs.near[0].value, syntheticCandles[0].close);
+assert.deepStrictEqual(validateCommoditySpreadLegPrices(syntheticCandles, syntheticLegs), {
+ checked: 1,
+ maxAbsoluteError: 0,
+ valid: true,
+ formula: 'Far close - Near close = displayed spread close',
+});
+const nearestExpiryEvents = buildCommodityNearestExpiryEvents({
+ type: 'calendar',
+ firstInstrument: { securityId: 'near-old', underlyingSymbol: 'GOLD', expiry: '2026-06-30', tradingSymbol: 'GOLD-JUN' },
+ secondInstrument: { securityId: 'far-active', underlyingSymbol: 'GOLD', expiry: '2026-08-31', tradingSymbol: 'GOLD-AUG' },
+}, {
+ contracts: {
+  'near-old': { securityId: 'near-old', underlyingSymbol: 'GOLD', expiry: '2026-06-30', tradingSymbol: 'GOLD-JUN' },
+  'far-active': { securityId: 'far-active', underlyingSymbol: 'GOLD', expiry: '2026-08-31', tradingSymbol: 'GOLD-AUG' },
+ },
+ pairSnapshots: {
+  GOLD: [{ observedAt: Date.UTC(2026, 5, 1), nearSecurityId: 'near-old', farSecurityId: 'far-active', nearExpiry: '2026-06-30' }],
+ },
+}, [
+ { time: Date.UTC(2026, 5, 29) / 1000, close: 2100 },
+], {
+ near: [{ time: Date.UTC(2026, 5, 29) / 1000, value: 150000 }],
+ far: [{ time: Date.UTC(2026, 5, 29) / 1000, value: 152100 }],
+}, Date.UTC(2026, 6, 1));
+assert.strictEqual(nearestExpiryEvents.length, 1);
+assert.strictEqual(nearestExpiryEvents[0].spreadPrice, 2100);
+assert.strictEqual(nearestExpiryEvents[0].firstPrice, 150000);
+assert.strictEqual(nearestExpiryEvents[0].expired, true);
 const clippedSpreadRows = clipCommoditySpreadRowsForPair(
  { firstInstrument: { underlyingSymbol: 'GOLDM', expiry: '2026-06-30 23:30:00' }, secondInstrument: { underlyingSymbol: 'GOLDM', expiry: '2026-08-31 23:30:00' } },
  [
@@ -213,9 +266,42 @@ assert.strictEqual(wideningAnalysis.targetSpread > wideningAnalysis.latest, true
 const spreadCosts = commoditySpreadCostEstimate({ firstInstrument: { underlyingSymbol: 'GOLDM' }, secondInstrument: { underlyingSymbol: 'GOLDM' }, firstLots: 1, secondLots: 1 }, { spread: 100, wideningEntrySpread: 101, narrowingEntrySpread: 99 });
 assert.strictEqual(spreadCosts.brokerage, 80);
 assert.strictEqual(spreadCosts.fixedBrokerageAndGst, 94.4);
+const matchedGoldCosts = commoditySpreadCostEstimate({
+ type: 'matched',
+ firstInstrument: { underlyingSymbol: 'GOLD' },
+ secondInstrument: { underlyingSymbol: 'GOLDM' },
+ firstLots: 1,
+ secondLots: 10,
+}, { spread: 100, wideningEntrySpread: 101, narrowingEntrySpread: 99 });
+assert.strictEqual(matchedGoldCosts.matchedExposure, true);
+assert.strictEqual(matchedGoldCosts.firstExposure, 100);
+assert.strictEqual(matchedGoldCosts.secondExposure, 100);
+assert.strictEqual(matchedGoldCosts.valuePerSpreadPoint, 100);
 const spreadGuard = commoditySpreadSafeguards({ firstInstrument: commodityNear, secondInstrument: commodityNext }, { firstPrice: 100, secondPrice: 110, depthConfirmed: false, firstVolume: 0, secondVolume: 0, firstOi: 0, secondOi: 0 }, Date.UTC(2026, 4, 26));
 assert.strictEqual(spreadGuard.tradeAllowed, false);
 assert.strictEqual(spreadGuard.warnings.length > 0, true);
+const invalidMatchedGuard = commoditySpreadSafeguards({
+ type: 'matched',
+ firstInstrument: { underlyingSymbol: 'GOLD', expiry: '2026-06-30' },
+ secondInstrument: { underlyingSymbol: 'GOLDM', expiry: '2026-08-31' },
+ firstLots: 1,
+ secondLots: 10,
+}, {
+ firstPrice: 150000,
+ secondPrice: 150100,
+ depthConfirmed: true,
+ firstVolume: 100,
+ secondVolume: 100,
+ firstOi: 100,
+ secondOi: 100,
+ firstBid: 149999,
+ firstAsk: 150001,
+ secondBid: 150099,
+ secondAsk: 150101,
+ validity: { valid: true },
+}, Date.UTC(2026, 5, 1));
+assert.strictEqual(invalidMatchedGuard.tradeAllowed, false);
+assert.strictEqual(invalidMatchedGuard.warnings.some(reason => /same expiry/i.test(reason)), true);
 
 const calendarHistory = buildCommoditySpreadHistory({
  buyInstrument: { underlyingSymbol: 'GOLDM' },

@@ -100,6 +100,14 @@
    .replace(/'/g, '&#39;');
  }
 
+ function friendlyMarketError(value = '') {
+  const text = String(value || '');
+  if (/authentication failed|client id|token invalid|401|808/i.test(text)) {
+   return 'Dhan connection needs attention. Open Settings & API, save valid credentials, then run the connection check.';
+  }
+  return text || 'Market data is unavailable. Check the connection and try again.';
+ }
+
  function number(value, decimals = 2) {
   const n = Number(value);
   if (!Number.isFinite(n)) return '--';
@@ -448,7 +456,7 @@
     <div class="carry-refresh-state ${state.error ? 'bad' : state.status === 'loading' ? 'warn' : 'good'}">
      <span>Snapshot</span>
      <strong>${esc(state.status === 'loading' ? 'Refreshing...' : state.error ? 'Unavailable' : state.updatedAt ? new Date(state.updatedAt).toLocaleTimeString('en-IN') : 'Ready')}</strong>
-     <small>${esc(state.error || 'Read-only market data')}</small>
+     <small>${esc(state.error ? friendlyMarketError(state.error) : 'Read-only market data')}</small>
     </div>
    </header>
    <div class="carry-controls">

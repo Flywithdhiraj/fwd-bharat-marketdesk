@@ -1,19 +1,30 @@
 // Surface rendering, delegated controls, keyboard and storage listeners
- function queueSurfaceRender(surface = SURFACE_PREVIEW, force = false) {
+ function queueSurfaceRender(surface = SURFACE_PREVIEW, force = false, forceData = false) {
  const runRender = () => {
  if (surface === SURFACE_TAB) {
- tabRenderPromise = tabRenderPromise.then(() => renderSurface(SURFACE_TAB, force)).catch(() => {});
+ tabRenderPromise = tabRenderPromise.then(() => renderSurface(SURFACE_TAB, force, forceData)).catch(() => {});
  return tabRenderPromise;
  }
  if (surface === SURFACE_REVIEW) {
- reviewRenderPromise = reviewRenderPromise.then(() => renderSurface(SURFACE_REVIEW, force)).catch(() => {});
+ reviewRenderPromise = reviewRenderPromise.then(() => renderSurface(SURFACE_REVIEW, force, forceData)).catch(() => {});
  return reviewRenderPromise;
  }
  if (surface === SURFACE_DETACHED) {
- detachedRenderPromise = detachedRenderPromise.then(() => renderSurface(SURFACE_DETACHED, force)).catch(() => {});
+ detachedRenderPromise = detachedRenderPromise
+ .then(() => renderSurface(SURFACE_DETACHED, force, forceData))
+ .catch(error => {
+ const root = detachedSurface.root;
+ if (root) {
+ root.innerHTML = `<section class="chart-pane-loading chart-load-error" role="alert">
+ <div class="chart-pane-loading-title">Chart could not open</div>
+ <div class="chart-pane-loading-copy">${escapeHtml(error?.message || 'The detached chart failed while loading local data.')}</div>
+ </section>`;
+ }
+ console.error('[FWD chart] Detached render failed', error);
+ });
  return detachedRenderPromise;
  }
- previewRenderPromise = previewRenderPromise.then(() => renderSurface(SURFACE_PREVIEW, force)).catch(() => {});
+ previewRenderPromise = previewRenderPromise.then(() => renderSurface(SURFACE_PREVIEW, force, forceData)).catch(() => {});
  return previewRenderPromise;
  };
  if (!force) {
@@ -159,7 +170,7 @@
  presetMeta,
  })
  : null;
- const shouldLoadIndexContext = dataset?.ok && !dataset?.syntheticIndex && state.compareWithIndex !== false;
+ const shouldLoadIndexContext = dataset?.ok && !dataset?.syntheticIndex && !dataset?.commoditySpread && state.compareWithIndex !== false;
  const indexDataset = shouldLoadIndexContext
  ? await loadFwdIndexChartDataset({ symbol: FWD_INDEX_SYMBOL, timeframe: '1d' }, strategy).catch(() => null)
  : null;
@@ -189,6 +200,8 @@
  const executionPayload = fastSingle
  ? { state: executionState, dataset: null, model: null, indicators: {}, intelligence: null }
  : await buildChartPayload(`${surface}-execution`, executionState, strategy, orderContext, activeSignal, signalState?.marketIndex || null, force, forceData);
+ const renderRoot = surfaceRef.root;
+ if (!surfaceRef.mounted || !renderRoot || !document.body.contains(renderRoot)) return;
  const scanResults = Array.isArray(signalState?.scanResults) ? signalState.scanResults : [];
  const contextData = {
  scanResults,
@@ -199,7 +212,7 @@
  const markup = buildDeskMarkup(surface, state, strategy, primaryPayload, executionPayload, activeSignal, signalState?.marketIndex || null, contextData);
  if (!force && markup === surfaceRef.lastMarkup) return;
  surfaceRef.lastMarkup = markup;
- surfaceRef.root.innerHTML = markup;
+ renderRoot.innerHTML = markup;
  bindSurfaceControls(surface, state, executionPayload.model || primaryPayload.model);
  const renderCharts = () => {
  const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
@@ -209,7 +222,8 @@
  ];
  for (const item of chartItems) {
  const chartId = `${surface}-${item.key}`;
- const chartContainer = surfaceRef.root.querySelector(`[data-ds-lwc-chart="${chartId}"]`);
+ if (!surfaceRef.mounted || surfaceRef.root !== renderRoot || !document.body.contains(renderRoot)) return;
+ const chartContainer = renderRoot.querySelector(`[data-ds-lwc-chart="${chartId}"]`);
  if (chartContainer && item.payload.model && item.payload.dataset?.ok && globalThis.FWDTradeDeskChartEngine?.render) {
  globalThis.FWDTradeDeskChartEngine.render(chartContainer, {
  surface: chartId,
@@ -239,11 +253,12 @@
  }
  }
 
- async function renderSurface(surface = SURFACE_PREVIEW, force = false) {
+ async function renderSurface(surface = SURFACE_PREVIEW, force = false, forceData = false) {
  const surfaceRef = getSurfaceRef(surface);
  if (!surfaceRef.mounted || !surfaceRef.root || !document.body.contains(surfaceRef.root)) return;
  const strategy = await getStrategy();
  const state = await getChartState();
+ const directForceData = forceData === true;
  let orderContext = surface === SURFACE_PREVIEW && typeof previewSurface.getOrderContext === 'function'
  ? normalizeOrderContext(previewSurface.getOrderContext())
  : normalizeOrderContext(state.orderContext);
@@ -253,19 +268,21 @@
  if (surface === SURFACE_PREVIEW && orderContext) {
  await persistPreviewOrderContext(orderContext, state);
  }
- const refreshChanged = surfaceRef.refreshNonce !== Number(state.refreshNonce || 0);
+ const hasRenderedBefore = surfaceRef.refreshNonce !== null && surfaceRef.refreshNonce !== undefined;
+ const previousRefreshNonce = Number(surfaceRef.refreshNonce || 0);
+ const refreshChanged = hasRenderedBefore && previousRefreshNonce !== Number(state.refreshNonce || 0);
  const signalState = await localGet(['scanResults', 'marketIndex', 'decisionShortlist', 'manualWatchlist', 'watchlist', 'autoWatchlist']);
  const activeSignal = (Array.isArray(signalState?.scanResults) ? signalState.scanResults : [])
  .find(item => String(item?.symbol || '').trim().toUpperCase() === String(state.symbol || '').trim().toUpperCase()) || null;
  surfaceRef.refreshNonce = Number(state.refreshNonce || 0);
  const uiMode = String(state.uiMode || surfaceRef.uiMode || 'default').trim().toLowerCase() || 'default';
  if ((surface === SURFACE_TAB || surface === SURFACE_DETACHED) && uiMode !== 'journal') {
- await renderDeskSurface(surface, surfaceRef, state, strategy, orderContext, signalState, activeSignal, force || refreshChanged, refreshChanged);
+ await renderDeskSurface(surface, surfaceRef, state, strategy, orderContext, signalState, activeSignal, force || refreshChanged || directForceData, refreshChanged || directForceData);
  return;
  }
  const dataset = await loadChartDataset(state, strategy, {
- force: force || refreshChanged,
- forceData: refreshChanged,
+ force: force || refreshChanged || directForceData,
+ forceData: refreshChanged || directForceData,
  });
  const chartState = chartStateForDataset(state, dataset);
  const model = dataset?.ok ? buildChartModel(dataset, chartState, strategy, orderContext) : null;
@@ -294,7 +311,7 @@
  presetMeta,
  })
  : null;
- const shouldLoadIndexContext = dataset?.ok && !dataset?.syntheticIndex && state.compareWithIndex !== false;
+ const shouldLoadIndexContext = dataset?.ok && !dataset?.syntheticIndex && !dataset?.commoditySpread && state.compareWithIndex !== false;
  const indexDataset = shouldLoadIndexContext
  ? await loadFwdIndexChartDataset({ symbol: FWD_INDEX_SYMBOL, timeframe: '1d' }, strategy).catch(() => null)
  : null;
@@ -302,6 +319,8 @@
  ? await buildIndexCorrelation(chartState.symbol, signalState?.marketIndex || null, indexDataset).catch(() => null)
  : null;
  const indexComparison = shouldLoadIndexContext ? buildIndexComparison(chartState.symbol, signalState?.marketIndex || null, indexDataset) : null;
+ const renderRoot = surfaceRef.root;
+ if (!surfaceRef.mounted || !renderRoot || !document.body.contains(renderRoot)) return;
  const markup = buildChartMarkup(
  surface,
  chartState,
@@ -317,11 +336,12 @@
  );
  if (!force && markup === surfaceRef.lastMarkup) return;
  surfaceRef.lastMarkup = markup;
- surfaceRef.root.innerHTML = markup;
+ renderRoot.innerHTML = markup;
  bindSurfaceControls(surface, state, model);
  const renderChart = () => {
  const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
- const chartContainer = surfaceRef.root.querySelector(`[data-ds-lwc-chart="${surface}"]`);
+ if (!surfaceRef.mounted || surfaceRef.root !== renderRoot || !document.body.contains(renderRoot)) return;
+ const chartContainer = renderRoot.querySelector(`[data-ds-lwc-chart="${surface}"]`);
  if (!chartContainer || !model || !dataset?.ok || !globalThis.FWDTradeDeskChartEngine?.render) return;
  globalThis.FWDTradeDeskChartEngine.render(chartContainer, {
  surface,
@@ -857,6 +877,14 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  await updateChartState(surface, currentState => ({ showGrid: currentState.showGrid !== true }));
  return;
  }
+ if (key === 'showSpreadLegs') {
+ await updateChartState(surface, currentState => ({ showSpreadLegs: currentState.showSpreadLegs === false }), { forceRender: true });
+ return;
+ }
+ if (key === 'showSpreadExpiries') {
+ await updateChartState(surface, currentState => ({ showSpreadExpiries: currentState.showSpreadExpiries === false }), { forceRender: true });
+ return;
+ }
  if (key === 'hideEventCandles') {
  await updateChartState(surface, currentState => ({ hideEventCandles: currentState.hideEventCandles !== true }), { forceRender: true });
  }
@@ -1118,7 +1146,26 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  });
  root.querySelectorAll('[data-ds-chart-refresh]').forEach(button => {
  button.addEventListener('click', async () => {
- await updateChartState(surface, { refreshNonce: Date.now() }, { forceRender: true });
+ const surfaceRef = getSurfaceRef(surface);
+ if (button.disabled) return;
+ const symbol = String(state.symbol || '').trim().toUpperCase();
+ const timeframe = normalizeTimeframe(state.timeframe || '4h');
+ button.disabled = true;
+ button.classList.add('loading');
+ button.textContent = 'Downloading...';
+ const status = root.querySelector('#dsChartStatus');
+ if (status) {
+  status.className = 'ds-chart-status loading';
+  status.innerHTML = `<span>Downloading missing ${escapeHtml(timeframe.toUpperCase())} candles for ${escapeHtml(symbol)} from Dhan...</span><span class="ds-chart-download-progress" aria-hidden="true"><i></i></span>`;
+ }
+ try {
+  await queueSurfaceRender(surface, true, true);
+ } catch (error) {
+  button.disabled = false;
+  button.classList.remove('loading');
+  button.textContent = 'Refresh';
+  if (status) status.textContent = `Refresh failed: ${error?.message || 'candle download failed'}`;
+ }
  });
  });
  root.querySelectorAll('[data-ds-desk-tf]').forEach(select => {

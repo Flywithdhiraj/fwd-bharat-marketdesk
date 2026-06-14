@@ -287,7 +287,7 @@ function loadPopupScriptOnce(src) {
  }
  script.addEventListener('load', finish, { once: true });
  script.addEventListener('error', fail, { once: true });
- if (existing && (existing.dataset.loaded === 'true' || existing.readyState === 'complete' || existing.readyState === 'loaded' || document.readyState === 'complete')) {
+ if (existing) {
  queueMicrotask(finish);
  }
  setTimeout(() => {
@@ -332,7 +332,7 @@ function loadPopupStyleOnce(href) {
  link.dataset.popupLazyStyle = 'true';
  document.head.appendChild(link);
  }
- if (existing && (existing.dataset.loaded === 'true' || document.readyState === 'complete')) {
+ if (existing) {
  queueMicrotask(finish);
  }
  setTimeout(() => {
@@ -483,6 +483,7 @@ async function openSignalInChartWorkspace(signal = {}, options = {}) {
  intelligenceOverlays: false,
  deskLayoutMode: 'single',
  overlayDensity: 'minimal',
+ compareWithIndex: options.compareWithIndex === true,
  primaryTimeframe: options.primaryTimeframe || reviewTimeframe,
  returnTab: options.returnTab || '',
  returnSymbol: options.returnSymbol || signal.symbol || '',
@@ -538,15 +539,16 @@ document.addEventListener('DOMContentLoaded', async () => {
  isDesktopMode = true;
  }
  if (params.get('chart') === '1') {
- migrateStrategy();
  document.body.classList.add('chart-mode');
  globalThis.__fwdDetachedChartRenderComplete = false;
- ensureChartWorkspaceLoaded()
- .then(() => {
- const initDetached = globalThis.FWDTradeDeskChartWorkspace?.initDetachedChartWorkspace;
- if (typeof initDetached !== 'function') throw new Error('Chart workspace API is unavailable.');
- return initDetached();
- })
+ const detachedStartup = globalThis.FWDDetachedChartStartup || Promise.resolve(globalThis.FWDChartAuthReady)
+  .then(() => ensureChartWorkspaceLoaded())
+  .then(() => {
+   const initDetached = globalThis.FWDTradeDeskChartWorkspace?.initDetachedChartWorkspace;
+   if (typeof initDetached !== 'function') throw new Error('Chart workspace API is unavailable.');
+   return initDetached();
+  });
+ Promise.resolve(detachedStartup)
  .catch(error => {
  globalThis.FWDRecoverBlankChartMode?.('Chart workspace could not load. Scanner controls were restored.');
  globalThis.reportUiError?.('Chart workspace failed', error, { timeoutMs: 7000 });

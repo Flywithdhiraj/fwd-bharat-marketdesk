@@ -14,7 +14,6 @@
  keyLevelSettings: nextSettings,
  },
  });
- await setChartState({ refreshNonce: Date.now() });
  await queueSurfaceRender(surface, true);
  return nextSettings;
  }
@@ -141,10 +140,10 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  contextTab: current.contextTab || 'watchlist',
  watchlistTab: current.watchlistTab || '1',
  overlayDensity: options.overlayDensity || current.overlayDensity || 'minimal',
+ compareWithIndex: hasOption('compareWithIndex') ? options.compareWithIndex === true : false,
  panelWidths: current.panelWidths || { ...DEFAULT_PANEL_WIDTHS },
  collapsedPanels: current.collapsedPanels || {},
  maximizedPanel: null,
- refreshNonce: Date.now(),
  });
  }
 
@@ -349,13 +348,19 @@ function signalTimeframe(signal = {}, fallback = '4h') {
 
  function resolutionCoverageRequirement(state = {}) {
  const timeframe = normalizeTimeframe(state.timeframe);
- const maxHistoryCount = timeframe === '4h' ? MAX_4H_HISTORY_CANDLES : MAX_RENDER_CANDLES;
+ const maxHistoryCount = timeframe === '4h'
+ ? MAX_4H_HISTORY_CANDLES
+ : timeframe === '1d'
+ ? MAX_DAILY_HISTORY_CANDLES
+ : timeframe === '1w'
+ ? MAX_WEEKLY_HISTORY_CANDLES
+ : MAX_RENDER_CANDLES;
  const baseVisible = state.replaySeed?.baselineVisibleCount || defaultVisibleCount(timeframe);
  const visible = Math.max(baseVisible, Math.round(Number(state.visibleCandleCount || baseVisible) || baseVisible));
  const paddedCount = Math.min(maxHistoryCount, Math.max(80, visible + (FETCH_BUFFER_COUNTS[timeframe] || 80)));
  if (!state.replaySeed) {
  return {
- count: maxHistoryCount,
+ count: paddedCount,
  startMs: 0,
  endMs: 0,
  };
@@ -1229,6 +1234,13 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  }
  if (state.commoditySpread && symbol.startsWith('MCX-SPREAD:')) {
  const requirement = resolutionCoverageRequirement(state);
+ if (options.forceData === true && !requirement.startMs) {
+  requirement.count = timeframe === '1d'
+   ? MAX_DAILY_HISTORY_CANDLES
+   : timeframe === '1w'
+   ? MAX_WEEKLY_HISTORY_CANDLES
+   : MAX_4H_HISTORY_CANDLES;
+ }
  const bridge = globalThis.fwdDesktopNative;
  const response = bridge?.sendNativeMessage
  ? await bridge.sendNativeMessage({
@@ -1265,6 +1277,8 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  spreadAnalysis: response.decision || response.analysis || null,
  spreadDecision: response.decision || null,
  spreadBands: response.bands || null,
+ spreadLegSeries: response.legSeries || { near: [], far: [] },
+ spreadNearestExpiryEvents: response.nearestExpiryEvents || [],
  spreadRollEvents: response.rollEvents || [],
  spreadCoverage: response.coverage || null,
  spreadSourceQuality: response.sourceQuality || null,
@@ -1276,6 +1290,7 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  spreadContractDetails: response.contractDetails || null,
  spreadDataQuality: response.dataQuality || null,
  spreadSnapshot: response.snapshot || null,
+ spreadPnlModel: response.pnlModel || null,
  chartType: response.chartType || (timeframe === '1d' ? 'line' : 'candles'),
  };
  }
@@ -1299,6 +1314,7 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  },
  keyLevels: normalizeKeyLevels(cachedEntry.keyLevels || null),
  fetchedAt: Number(cachedEntry.fetchedAt || 0),
+ localOnly: true,
  };
  }
  const response = await runtimeSend('v16:getPublicCandles', {
@@ -1308,6 +1324,8 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  keyLevelSettings: sanitizeKeyLevelSettings(strategy.keyLevelSettings || {}),
  startTime: requirement.startMs || undefined,
  endTime: requirement.endMs || undefined,
+ localOnly: options.forceData !== true,
+ forceRefresh: options.forceData === true,
  });
  if (!response?.ok) {
  if (cachedEntry && Array.isArray(cachedEntry.candles) && cachedEntry.candles.length) {
@@ -1326,11 +1344,12 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  fetchedAt: Number(cachedEntry.fetchedAt || 0),
  error: response?.error || 'Failed to refresh the chart.',
  stale: true,
+ localOnly: true,
  };
  }
  return {
  ok: false,
- error: response?.error || 'Failed to load public candles.',
+ error: response?.error || 'No local candle data is available. Run a scan or click Refresh.',
  candles: [],
  studies: {},
  keyLevels: null,
@@ -1352,7 +1371,8 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  candles,
  studies,
  keyLevels,
- fetchedAt: Date.now(),
+ fetchedAt: Number(response?.sourceUpdatedAt || 0) || Date.now(),
+ localOnly: response?.localOnly === true,
  candleCount: candles.length,
  oldestTime: candles[0]?.time || 0,
  newestTime: candles[candles.length - 1]?.time || 0,
@@ -1368,6 +1388,7 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  studies,
  keyLevels,
  fetchedAt: payload.fetchedAt,
+ localOnly: payload.localOnly,
  };
  }
 

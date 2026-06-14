@@ -48,6 +48,11 @@ function assertCriticalSurfaces() {
  const hardening = read('src/renderer/styles/09-design-system-hardening.css');
  const finalTheme = read('src/renderer/styles/10-vivid-trader-theme.css');
  const bharatTheme = read('src/renderer/styles/11-bharat-marketdesk-theme.css');
+ const modernInterface = read('src/renderer/styles/18-modern-interface.css');
+ const workspaceRedesign = read('src/renderer/styles/19-full-workspace-redesign.css');
+ const optionsHub = read('src/renderer/scripts/popup/08-options-hub.js');
+ const fnoCarry = read('src/renderer/scripts/popup/10-fno-carry.js');
+ const commodities = read('src/renderer/scripts/popup/11-commodities.js');
 
  [
   'pane-chart',
@@ -98,6 +103,21 @@ function assertCriticalSurfaces() {
  assert(shell.includes('const breadthPct = Number(mi.sentiment?.breadthPct ?? 0);'), 'Index detail modal must define its breadth value before rendering.');
  assert(finalTheme.includes('Final command-desk polish') && finalTheme.includes("--font-ui: 'Aptos'") && finalTheme.includes('.command-next-card'), 'Final theme polish must define calm tokens, typography, and decision-card styling.');
  assert(styles.includes("styles/11-bharat-marketdesk-theme.css") && bharatTheme.includes('FWD Bharat MarketDesk') && bharatTheme.includes('.india-module-card'), 'Bharat MarketDesk theme and module styling must be loaded.');
+ assert(styles.includes("styles/18-modern-interface.css"), 'Modern interface stylesheet is not imported.');
+ assert(styles.includes("styles/19-full-workspace-redesign.css"), 'Full workspace redesign stylesheet is not imported.');
+ assert(!styles.includes('19-audit-modernization.css'), 'Superseded audit modernization stylesheet must stay removed.');
+ assert(html.includes('class="app-rail"') && html.includes('id="btnAppRailToggle"') && html.includes('id="btnCommandSearch"'), 'Persistent navigation rail and command search trigger are missing.');
+ assert(html.includes('data-tab="options"') && html.includes('data-tab="commodities"') && html.includes('data-tab="strategy"'), 'Primary navigation rail is missing required destinations.');
+ assert(modernInterface.includes('body.desktop-mode[data-workspace-group] .app') && modernInterface.includes('body.desktop-mode.app-rail-collapsed'), 'Modern shell must remain stable across workspace and collapsed navigation states.');
+ assert(workspaceRedesign.includes('.options-chain-table') && workspaceRedesign.includes('.commodity-spread-desk-layout') && workspaceRedesign.includes('#pane-strategy .settings-left-rail'), 'Workspace redesign must cover options, commodities, and settings surfaces.');
+ assert(workspaceRedesign.includes('.strategy-decision-inspector') && workspaceRedesign.includes('max-height: calc(100dvh - 128px)'), 'Strategy inspector must stay compact and independently scrollable.');
+ assert(commodities.includes('commodity-spread-chart-primary') && commodities.includes('Open Spread Chart'), 'Commodity Spread Desk must expose a prominent chart action.');
+ assert(read('src/renderer/scripts/popup/09-strategy-lab.js').includes('Full evidence') && read('src/renderer/scripts/popup/09-strategy-lab.js').includes('Research data'), 'Strategy detail must keep optional evidence collapsed behind concise disclosures.');
+ assert(workspaceRedesign.includes('#pane-strategy.pane.active') && workspaceRedesign.includes('overflow-x: hidden'), 'Settings workspace must suppress fractional horizontal overflow.');
+ assert(workspaceRedesign.includes('body.desktop-mode .setup-guide') && workspaceRedesign.includes('display: none !important'), 'Duplicate expanded setup guide must not push workspace tools below the fold.');
+ [optionsHub, fnoCarry, commodities].forEach(source => assert(source.includes('friendlyMarketError'), 'Market-data surfaces must translate raw broker errors into actionable copy.'));
+ assert(commandCore.includes("btn.closest('.app-rail-nav')") && commandCore.includes("getElementById('headerWorkspaceTitle')"), 'Workspace synchronization must preserve the persistent rail and header title.');
+ assert(shell.includes("getElementById('btnAppRailToggle')") && shell.includes("fwd-app-rail-collapsed"), 'Navigation collapse behavior and persistence are missing.');
  assert(popupBoot.includes('installRendererBootRecovery') && popupBoot.includes('FWDRecoverBlankChartMode') && popupBoot.includes('Chart startup recovered'), 'Renderer must recover from blank chart-mode startup instead of leaving a dark window.');
  assert(popupBoot.includes('isDetachedChartStartup') && popupBoot.includes('reloadToNormalWorkspace') && popupBoot.includes("querySelector('.live-order-chart-card, .ds-lwc-chart, canvas')"), 'Renderer recovery must be scoped to detached chart startup and require real chart content.');
  assert(!popupBoot.includes('setTimeout(() => {\\n   recoverBlankChartMode'), 'Detached chart recovery must not use a fixed startup timer that can interrupt slow chart renders.');

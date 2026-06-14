@@ -3,7 +3,13 @@
 (function initSharedMainScanContext(global) {
  const DEFAULT_TTL_MS = 8 * 60 * 1000;
  const BUFFER_MS = 90 * 1000;
+ const DURABLE_CONTEXT_KEY = 'lastMainScanContextSnapshotV1';
+ const COMPLETED_CONTEXT_KEY = 'lastCompletedMainScanContextSnapshotV1';
  let latestContext = null;
+ let completedContext = null;
+ let restorePromise = null;
+ let deriveQueue = Promise.resolve();
+ let latestDeriveRequest = null;
 
  function now() {
   return Date.now();
@@ -55,6 +61,36 @@
    partial: !!context.partial,
    scannedRows: Number(context.scannedRows || 0),
    candidateRows: Number(context.candidateRows || 0),
+   durable: context.durable === true,
+  };
+ }
+
+ function buildDurableSnapshot(context = latestContext) {
+  if (!context) return null;
+  const candleSymbols = context.candles instanceof Map
+   ? Array.from(context.candles.keys()).filter(Boolean)
+   : [];
+  const candleSymbolSet = new Set(candleSymbols);
+  const tickerMap = Object.fromEntries(
+   Object.entries(context.tickerMap || {}).filter(([symbol]) => candleSymbolSet.has(normalizeSymbol(symbol)))
+  );
+  const products = (Array.isArray(context.products) ? context.products : [])
+   .filter(product => candleSymbolSet.has(normalizeSymbol(product?.symbol)));
+  return {
+   scanId: context.scanId,
+   startedAt: Number(context.startedAt || 0),
+   finishedAt: Number(context.finishedAt || 0),
+   expiresAt: Number(context.expiresAt || 0),
+   tickerMap,
+   products,
+   marketIndex: context.marketIndex || null,
+   fundingHeatmap: Array.isArray(context.fundingHeatmap) ? context.fundingHeatmap : [],
+   scanResults: Array.isArray(context.scanResults) ? context.scanResults : [],
+   decisionShortlist: Array.isArray(context.decisionShortlist) ? context.decisionShortlist : [],
+   partial: !!context.partial,
+   scannedRows: Number(context.scannedRows || 0),
+   candidateRows: Number(context.candidateRows || 0),
+   candleSymbols,
   };
  }
 
@@ -74,6 +110,7 @@
    partial: !!seed.partial,
    scannedRows: Number(seed.scannedRows || 0),
    candidateRows: Number(seed.candidateRows || 0),
+   durable: seed.durable === true,
    candles: new Map(),
   };
  }
@@ -112,11 +149,21 @@
   context.partial = !!patch.partial;
   context.scannedRows = Number(patch.scannedRows || context.scannedRows || 0);
   context.candidateRows = Number(patch.candidateRows || context.candidateRows || 0);
+  context.durable = true;
   latestContext = context;
   const meta = buildMeta(context);
   try {
    await chrome.storage.local.set({ lastMainScanContextMeta: meta });
   } catch (_) {}
+  try {
+   await chrome.storage.local.set({ [DURABLE_CONTEXT_KEY]: buildDurableSnapshot(context) });
+  } catch (_) {}
+  if (!context.partial) {
+   completedContext = context;
+   try {
+    await chrome.storage.local.set({ [COMPLETED_CONTEXT_KEY]: buildDurableSnapshot(context) });
+   } catch (_) {}
+  }
   return context;
  }
 
@@ -126,8 +173,120 @@
 
  function getFresh() {
   if (!latestContext) return null;
-  if (Number(latestContext.expiresAt || 0) <= now()) return null;
+  latestContext.stale = Number(latestContext.expiresAt || 0) <= now();
   return latestContext;
+ }
+
+ function contextCoverage(context) {
+  return Number(context?.scannedRows || context?.candidateRows || context?.candles?.size || 0);
+ }
+
+ function bestAvailableContext() {
+  if (!latestContext) return completedContext;
+  if (!completedContext) return latestContext;
+  if (latestContext.partial && contextCoverage(completedContext) >= contextCoverage(latestContext)) return completedContext;
+  return contextCoverage(completedContext) > contextCoverage(latestContext) ? completedContext : latestContext;
+ }
+
+ function isCanonicalCandleSymbol(symbol = '') {
+  return !/^(?:NSE|BSE|IDX|MCX)_[A-Z]+_\d+_/i.test(String(symbol || ''));
+ }
+
+ async function hydrateContextFromLocalCandles(context) {
+  if (!context) return null;
+  let symbols = Array.from(new Set([
+   ...Object.keys(context.tickerMap || {}),
+   ...(Array.isArray(context.products) ? context.products.map(item => item?.symbol) : []),
+   ...(context.candles instanceof Map ? Array.from(context.candles.keys()) : []),
+  ].map(normalizeSymbol).filter(Boolean)));
+  if (symbols.length < Math.max(20, Number(context.candidateRows || 0) * 0.5) && typeof global.v17ListPersistentCandleCache === 'function') {
+   const records = await global.v17ListPersistentCandleCache('1d').catch(() => []);
+   symbols = Array.from(new Set([
+    ...symbols,
+    ...records.filter(record => isCanonicalCandleSymbol(record?.symbol)).map(record => normalizeSymbol(record.symbol)),
+   ]));
+  }
+  const hydrateSymbol = async symbol => {
+   let daily = getCandles(context, symbol, '1d');
+   let intraday = getCandles(context, symbol, '4h');
+   if (!daily.length) {
+    const record = await loadPersistentCandleCacheRecord(symbol, '1d').catch(() => null);
+    daily = record?.rows || [];
+    recordCandles(context, symbol, '1d', daily);
+   }
+   if (!intraday.length) {
+    const record = await loadPersistentCandleCacheRecord(symbol, '4h').catch(() => null);
+    intraday = record?.rows || [];
+    recordCandles(context, symbol, '4h', intraday);
+   }
+   const last = daily[daily.length - 1] || intraday[intraday.length - 1];
+   if (!last || context.tickerMap[symbol]) return;
+   context.tickerMap[symbol] = {
+    symbol,
+    price: Number(last.close || 0),
+    usdVol24h: Number(last.volume || 0) * Number(last.close || 0),
+    volume: Number(last.volume || 0),
+   };
+  };
+  const batchSize = 24;
+  for (let index = 0; index < symbols.length; index += batchSize) {
+   await Promise.all(symbols.slice(index, index + batchSize).map(hydrateSymbol));
+  }
+  const productSymbols = new Set((context.products || []).map(item => normalizeSymbol(item?.symbol)));
+  symbols.forEach(symbol => {
+   if (context.tickerMap[symbol] && !productSymbols.has(symbol)) {
+    context.products.push({ symbol, name: symbol, description: symbol });
+    productSymbols.add(symbol);
+   }
+  });
+  return context;
+ }
+
+ async function restoreDurable() {
+  if (latestContext || completedContext) return bestAvailableContext();
+  if (restorePromise) return restorePromise;
+  restorePromise = new Promise(resolve => {
+   try {
+    chrome.storage.local.get([DURABLE_CONTEXT_KEY, COMPLETED_CONTEXT_KEY], async data => {
+     const snapshot = data?.[DURABLE_CONTEXT_KEY];
+     const completedSnapshot = data?.[COMPLETED_CONTEXT_KEY];
+     if (!snapshot?.scanId && !completedSnapshot?.scanId) {
+      resolve(null);
+      return;
+     }
+     const restoreSnapshot = async source => {
+      if (!source?.scanId) return null;
+      const context = create({ ...source, durable: true });
+      context.finishedAt = Number(source.finishedAt || 0);
+      context.expiresAt = Number(source.expiresAt || 0);
+      const symbols = Array.isArray(source.candleSymbols) ? source.candleSymbols : [];
+      for (const symbol of symbols) {
+       for (const resolution of ['1d', '4h']) {
+        try {
+         const record = await loadPersistentCandleCacheRecord(symbol, resolution);
+         recordCandles(context, symbol, resolution, record?.rows || []);
+        } catch (_) {}
+       }
+      }
+      context.stale = Number(context.expiresAt || 0) <= now();
+      return hydrateContextFromLocalCandles(context);
+     };
+     latestContext = await restoreSnapshot(snapshot);
+     completedContext = await restoreSnapshot(completedSnapshot);
+     resolve(bestAvailableContext());
+    });
+   } catch (_) {
+    resolve(null);
+   }
+  }).finally(() => {
+   restorePromise = null;
+  });
+  return restorePromise;
+ }
+
+ async function getAvailable() {
+  const context = bestAvailableContext() || await restoreDurable();
+  return hydrateContextFromLocalCandles(context);
  }
 
  async function setUnifiedStatus(status, extra = {}) {
@@ -142,11 +301,97 @@
   } catch (_) {}
  }
 
- async function deriveAll(options = {}) {
-  const context = getFresh();
+ function cloneContextForDerive(context) {
+  const clone = create({
+   scanId: context.scanId,
+   startedAt: context.startedAt,
+   tickerMap: { ...(context.tickerMap || {}) },
+   products: cloneRows(context.products),
+   marketIndex: context.marketIndex,
+   fundingHeatmap: cloneRows(context.fundingHeatmap),
+   scanResults: cloneRows(context.scanResults),
+   decisionShortlist: cloneRows(context.decisionShortlist),
+   partial: !!context.partial,
+   scannedRows: Number(context.scannedRows || 0),
+   candidateRows: Number(context.candidateRows || 0),
+   durable: context.durable === true,
+  });
+  clone.finishedAt = Number(context.finishedAt || 0);
+  clone.expiresAt = Number(context.expiresAt || 0);
+  clone.stale = !!context.stale;
+  if (context.candles instanceof Map) {
+   context.candles.forEach((resolutions, symbol) => {
+    Object.entries(resolutions || {}).forEach(([resolution, rows]) => {
+     recordCandles(clone, symbol, resolution, cloneRows(rows));
+    });
+   });
+  }
+  return clone;
+ }
+
+ async function readStrategyRows(strategyId) {
+  return new Promise(resolve => {
+   const resultKey = `strategyResults.${strategyId}`;
+   const statusKey = `strategyStatus.${strategyId}`;
+   try {
+    chrome.storage.local.get([resultKey, statusKey], data => resolve({
+     rows: Array.isArray(data?.[resultKey]) ? data[resultKey] : [],
+     status: data?.[statusKey] || {},
+    }));
+   } catch (_) {
+    resolve({ rows: [], status: {} });
+   }
+  });
+ }
+
+ function mergeStrategyRows(previousRows = [], nextRows = []) {
+  const merged = new Map();
+  previousRows.forEach(row => {
+   const symbol = normalizeSymbol(row?.symbol);
+   if (symbol) merged.set(symbol, row);
+  });
+  nextRows.forEach(row => {
+   const symbol = normalizeSymbol(row?.symbol);
+   if (symbol) merged.set(symbol, row);
+  });
+  return Array.from(merged.values()).sort((a, b) =>
+   Number(b?.score || b?.confidence || 0) - Number(a?.score || a?.confidence || 0)
+   || normalizeSymbol(a?.symbol).localeCompare(normalizeSymbol(b?.symbol))
+  );
+ }
+
+ async function runStrategyDerive(strategyId, runner, context) {
+  const previous = await readStrategyRows(strategyId);
+  const result = typeof runner === 'function' ? await runner() : null;
+  if (!Array.isArray(result)) return result;
+  if (String(previous.status?.scanId || '') !== String(context.scanId || '')) return result;
+  const merged = mergeStrategyRows(previous.rows, result);
+  if (merged.length <= result.length) return result;
+  const resultKey = `strategyResults.${strategyId}`;
+  const statusKey = `strategyStatus.${strategyId}`;
+  const current = await readStrategyRows(strategyId);
+  await chrome.storage.local.set({
+   [resultKey]: merged,
+   [statusKey]: {
+    ...(current.status || {}),
+    retainedRows: merged.length - result.length,
+    mergedRows: merged.length,
+   },
+  });
+  return merged;
+ }
+
+ async function executeDerive(context, options = {}, request = {}) {
+  if (
+   latestDeriveRequest
+   && latestDeriveRequest.scanId === request.scanId
+   && Number(latestDeriveRequest.scannedRows || 0) > Number(request.scannedRows || 0)
+  ) {
+   return { ok: true, skipped: true, reason: 'Superseded by newer scan checkpoint', scanId: request.scanId, derived: {} };
+  }
  if (!context) {
-  await setUnifiedStatus('Run main scan first - no fresh shared scan context', { active: false, ok: false });
-  return { ok: false, error: 'No fresh shared scan context' };
+  await setUnifiedStatus('Run main scan first - no saved scanner context', { active: false, ok: false });
+  return { ok: false, error: 'No saved scanner context' };
  }
  await global.FWDTradeDeskBackgroundLazyModules?.ensureStrategyLabScannersLoaded?.({ includeNative: false, includeCryptoOnly: false });
  await setUnifiedStatus(context.partial ? 'Deriving Strategy Lab from partial scanner checkpoint' : 'Deriving Strategy Lab scanners from main scan context', {
@@ -167,8 +412,7 @@
   const derived = {};
   for (const [id, runner] of tasks) {
    try {
-    const fn = runner;
-    const result = typeof fn === 'function' ? await fn() : null;
+    const result = await runStrategyDerive(id, runner, context);
     if (Array.isArray(result)) derived[id] = { ok: true, count: result.length };
     else if (result && result.ok === false) derived[id] = result;
     else derived[id] = { ok: false, error: 'Scanner derive function unavailable' };
@@ -197,15 +441,40 @@
   };
  }
 
+ async function deriveAll(options = {}) {
+  const available = await getAvailable();
+  if (!available) {
+   await setUnifiedStatus('Run main scan first - no saved scanner context', { active: false, ok: false });
+   return { ok: false, error: 'No saved scanner context' };
+  }
+  const context = cloneContextForDerive(available);
+  const request = {
+   scanId: context.scanId,
+   scannedRows: Number(context.scannedRows || 0),
+   candidateRows: Number(context.candidateRows || 0),
+   partial: !!context.partial,
+   source: String(options.source || ''),
+  };
+  latestDeriveRequest = request;
+  const queued = deriveQueue
+   .catch(() => null)
+   .then(() => executeDerive(context, options, request));
+  deriveQueue = queued.catch(() => null);
+  return queued;
+ }
+
  global.FWDTradeDeskScanContext = Object.freeze({
   create,
   recordCandles,
   getCandles,
   finalize,
-  getLatest,
+ getLatest,
   getFresh,
+  getAvailable,
+  restoreDurable,
   buildMeta,
   deriveAll,
   setUnifiedStatus,
  });
+ restoreDurable().catch(() => {});
 })(globalThis);

@@ -881,14 +881,8 @@ async function radarLoadSettings() {
    return false;
   }
   if (msg?.action === 'radar:startScan') {
-   const context = globalThis.FWDTradeDeskScanContext?.getFresh?.();
-   const runner = context ? () => runRadarScanFromContext(context) : (msg?.forceIndependent === true ? runRadarScan : null);
-   if (!runner) {
-    radarSetStatus('Run main scan first - Radar will derive from shared scan data', { active: false, progress: 0 })
-    .finally(() => sendResponse({ ok: false, error: 'Run main scan first' }));
-    return true;
-   }
-   runner()
+   globalThis.FWDTradeDeskScanContext?.getAvailable?.()
+   .then(context => context ? runRadarScanFromContext(context) : (msg?.forceIndependent === true ? runRadarScan() : Promise.reject(new Error('Run main scan first'))))
    .then(results => sendResponse({ ok: true, count: results.length }))
    .catch(async error => {
     await radarSetStatus(`Radar scan failed - ${error?.message || error}`, { active: false, progress: 0 });

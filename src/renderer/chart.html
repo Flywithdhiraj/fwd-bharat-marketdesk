@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+ <meta charset="UTF-8">
+ <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.dhan.co https://images.dhan.co https://api.telegram.org;">
+ <meta name="viewport" content="width=device-width, initial-scale=1">
+ <title>FWD Bharat MarketDesk - Chart</title>
+ <link rel="icon" type="image/png" href="icons/icon32.png">
+ <link rel="stylesheet" href="styles.css">
+ <link rel="stylesheet" href="styles/05-chart-workspace.css">
+</head>
+<body class="desktop-mode chart-mode chart-fast-start">
+ <main id="chartWorkspaceRoot">
+  <section class="chart-fast-loader" id="chartFastLoader" aria-live="polite">
+   <img src="icons/icon128.png" alt="">
+   <div>
+    <strong>Opening market chart</strong>
+    <span>Loading saved context and recent candles...</span>
+   </div>
+  </section>
+ </main>
+ <script src="desktop-shim.js"></script>
+ <script src="scripts/shared/common.js"></script>
+ <script src="scripts/shared/ui-events.js"></script>
+ <script src="scripts/shared/strategy-registry.js"></script>
+ <script src="scripts/shared/action-brain.js"></script>
+ <script src="scripts/popup/00-core.js"></script>
+ <script src="chart-bootstrap.js"></script>
+ <script src="popup.js"></script>
+ <script src="vendor/lightweight-charts.standalone.production.js"></script>
+ <script src="scripts/shared/chart-indicators.js"></script>
+ <script src="scripts/popup/chart-engine.js"></script>
+ <script src="scripts/popup/07-chart-workspace.js"></script>
+ <script src="chart-entry.js"></script>
+</body>
+</html>

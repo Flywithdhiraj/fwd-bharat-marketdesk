@@ -141,7 +141,7 @@
  reviewSurface.mounted = false;
  reviewSurface.root = null;
  reviewSurface.uiMode = 'default';
- reviewSurface.refreshNonce = 0;
+ reviewSurface.refreshNonce = null;
  reviewSurface.lastMarkup = '';
  }
 
@@ -216,7 +216,6 @@
  chartTradingDraft: null,
  chartTradingMode: 'select',
  orderContext: null,
- refreshNonce: Date.now(),
  uiMode: 'journal',
  });
  }
@@ -234,6 +233,7 @@
  bindStorageListener();
  bindKeyboardShortcuts(SURFACE_DETACHED);
  await queueSurfaceRender(SURFACE_DETACHED, true);
+ document.getElementById('chartFastLoader')?.remove();
  globalThis.__fwdDetachedChartRenderComplete = true;
  }
 

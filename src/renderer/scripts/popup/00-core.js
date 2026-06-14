@@ -135,7 +135,7 @@ const WORKSPACE_GROUP_META = {
 
 const TAB_TITLES = {
 
- home: 'Scanner Activity',
+ home: 'Command Center',
 
  scanner: 'Scanner',
  options: 'Options Hub',
@@ -145,7 +145,7 @@ const TAB_TITLES = {
 
  chart: 'Chart',
  strategy: 'Settings & API',
- debug: 'Debug',
+ debug: 'Diagnostics',
 
 };
 
@@ -1057,7 +1057,8 @@ function syncWorkspaceShell() {
  });
  document.querySelectorAll('.tab').forEach(btn => {
 
- const hidden = btn.dataset.group !== workspaceGroup || secondaryTabs.has(btn.dataset.tab);
+ const isPrimaryRail = !!btn.closest('.app-rail-nav');
+ const hidden = isPrimaryRail ? false : (btn.dataset.group !== workspaceGroup || secondaryTabs.has(btn.dataset.tab));
  const selected = btn.dataset.tab === activeWorkspaceTab;
  btn.classList.toggle('group-hidden', hidden);
 
@@ -1101,12 +1102,14 @@ function syncWorkspaceShell() {
  const labelEl = document.getElementById('workspaceLabel');
 
  const titleEl = document.getElementById('workspaceTitle');
+ const headerTitleEl = document.getElementById('headerWorkspaceTitle');
 
  const copyEl = document.getElementById('workspaceCopy');
 
  if (labelEl) labelEl.textContent = groupMeta.label;
 
  if (titleEl) titleEl.textContent = TAB_TITLES[activeWorkspaceTab] || groupMeta.title;
+ if (headerTitleEl) headerTitleEl.textContent = TAB_TITLES[activeWorkspaceTab] || groupMeta.title;
 
  if (copyEl) copyEl.textContent = groupMeta.copy;
 
@@ -1868,6 +1871,7 @@ function closeCommandPalette() {
 function bindCommandPalette() {
  const overlay = document.getElementById('commandPaletteOverlay');
  const input = document.getElementById('commandPaletteInput');
+ document.getElementById('btnCommandSearch')?.addEventListener('click', () => openCommandPalette());
  document.getElementById('commandPaletteClose')?.addEventListener('click', closeCommandPalette);
  overlay?.addEventListener('click', event => {
  if (event.target === overlay) closeCommandPalette();
@@ -2778,7 +2782,7 @@ async function exportFullAppBackup(reason = 'manual') {
  const candleRows = Number(summary.candleRows || 0);
  setBackupStatus(candleRows > 0
  ? `OK Full backup saved: ${response.fileName || 'backup file'} (${Number(summary.candleFiles || 0)} candle files, ${candleRows} rows)`
- : `Backup saved but candle history is empty. Start 1D + 4H backfill before laptop migration.`, candleRows > 0 ? '#00e5a0' : '#ffc840');
+ : `Backup saved but candle history is empty. Start the Daily + Weekly Historical Backfill before laptop migration.`, candleRows > 0 ? '#00e5a0' : '#ffc840');
  return response;
  } catch (error) {
  setBackupStatus(`Full backup failed: ${error?.message || 'unknown error'}`, '#ff4560');

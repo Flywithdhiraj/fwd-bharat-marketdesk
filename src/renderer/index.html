@@ -6,23 +6,83 @@
  <title>FWD Bharat MarketDesk</title>
  <link rel="stylesheet" href="styles.css"/>
 </head>
-<body>
+<body class="app-auth-pending">
 <div class="app" id="app">
+ <aside class="app-rail" aria-label="Primary navigation">
+ <div class="app-rail-brand">
+ <img src="icons/fwd-bharat-marketdesk.svg" alt="">
+ <div>
+ <strong>FWD</strong>
+ <span>MarketDesk</span>
+ </div>
+ <button class="app-rail-toggle" id="btnAppRailToggle" type="button" aria-label="Collapse navigation" aria-expanded="true">
+ <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+ </button>
+ </div>
+
+ <nav class="tabs app-rail-nav" role="tablist" aria-label="Workspaces">
+ <div class="app-rail-section-label">Workspace</div>
+ <button class="tab active" data-group="command" data-tab="home" role="tab" aria-selected="true" tabindex="0" title="Command Center">
+ <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v10h-6zM4 14h6v6H4zM14 18h6v2h-6z"/></svg>
+ <span>Home</span>
+ </button>
+ <button class="tab" data-group="markets" data-tab="scanner" role="tab" aria-selected="false" tabindex="-1" title="Scanner">
+ <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h7"/><circle cx="18" cy="12" r="2"/><circle cx="15" cy="18" r="2"/></svg>
+ <span>Scanner</span>
+ </button>
+ <button class="tab" data-group="markets" data-tab="options" role="tab" aria-selected="false" tabindex="-1" title="Options Hub">
+ <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18V9m7 9V5m7 13v-6"/><path d="M3 18h18"/></svg>
+ <span>Options Hub</span>
+ </button>
+ <button class="tab" data-group="markets" data-tab="carry" role="tab" aria-selected="false" tabindex="-1" title="F&amp;O Carry">
+ <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14l-2 10H7z"/><path d="M9 7V5h6v2M9 12h6"/></svg>
+ <span>F&amp;O Carry</span>
+ </button>
+ <button class="tab" data-group="markets" data-tab="commodities" role="tab" aria-selected="false" tabindex="-1" title="Commodities">
+ <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 5v8l-7 5-7-5V8z"/><path d="M8 10h8M8 14h8"/></svg>
+ <span>Commodities</span>
+ </button>
+ <button class="tab" data-group="markets" data-tab="strategies" role="tab" aria-selected="false" tabindex="-1" title="Strategies">
+ <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19V9m7 10V5m7 14v-7"/><circle cx="5" cy="7" r="2"/><circle cx="12" cy="3" r="2"/><circle cx="19" cy="10" r="2"/></svg>
+ <span>Strategies</span>
+ </button>
+ <button class="tab" data-group="markets" data-tab="chart" role="tab" aria-selected="false" tabindex="-1" title="Chart">
+ <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18l5-6 4 3 7-9"/><path d="M4 4v16h16"/></svg>
+ <span>Chart</span>
+ </button>
+ <div class="app-rail-spacer"></div>
+ <div class="app-rail-section-label">System</div>
+ <button class="tab" data-group="settings" data-tab="strategy" role="tab" aria-selected="false" tabindex="-1" title="Settings &amp; API">
+ <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1A8 8 0 0 0 15 6l-.3-2.6h-4L10.4 6A8 8 0 0 0 8.9 7L6.5 6l-2 3.4 2 1.5a7 7 0 0 0 0 2L4.5 14.5l2 3.4 2.4-1A8 8 0 0 0 10.4 18l.3 2.6h4L15 18a8 8 0 0 0 1.5-1.1l2.4 1 2-3.4-2-1.5a7 7 0 0 0 .1-1z"/></svg>
+ <span>Settings &amp; API</span>
+ </button>
+ <button class="tab" data-group="settings" data-tab="debug" role="tab" aria-selected="false" tabindex="-1" title="Diagnostics">
+ <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 9h8v9a4 4 0 0 1-8 0zM9 9V6h6v3M5 13h3m8 0h3M5 17h3m8 0h3M9 4l-2-2m8 2l2-2"/></svg>
+ <span>Diagnostics</span>
+ </button>
+ </nav>
+ </aside>
+
+ <div class="app-main-shell">
 
  <!-- ---------------------------------------------------
  HEADER
  --------------------------------------------------- -->
  <header class="hdr">
  <div class="hdr-brand">
- <img class="hdr-brand-mark" src="icons/fwd-bharat-marketdesk.svg" alt="FWD Bharat MarketDesk logo">
  <div class="hdr-brand-copy">
- <div class="hn"><span>FWD</span> Bharat MarketDesk</div>
- <div class="hsub">Scanner activity, strategies, chart view, and live market data</div>
+ <div class="hdr-eyebrow">Live workspace</div>
+ <div class="hn" id="headerWorkspaceTitle">Command Center</div>
  </div>
  </div>
  <div class="hdr-right">
+ <button class="hdr-command-search" id="btnCommandSearch" type="button" aria-label="Open command palette">
+ <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M16 16l4 4"/></svg>
+ <span>Search or jump</span>
+ <kbd>Ctrl K</kbd>
+ </button>
  <div class="hdr-status-group" aria-label="Market status">
- <div class="hdr-group-label">Market status</div>
+ <div class="hdr-group-label">Desk pulse</div>
  <div class="hdr-stats">
  <div class="hs"><span id="cSignals">0</span><b>Signals</b></div>
  <div class="hs"><span id="cAlerts">0</span><b>Alerts</b></div>
@@ -122,18 +182,6 @@
  </div>
  </div>
 
- <nav class="tabs" role="tablist" aria-label="Workspace tabs">
- <button class="tab active" data-group="command" data-tab="home" role="tab" aria-selected="true" tabindex="0">Scanner Activity</button>
- <button class="tab" data-group="markets" data-tab="scanner" role="tab" aria-selected="false" tabindex="-1">Scanner</button>
- <button class="tab" data-group="markets" data-tab="options" role="tab" aria-selected="false" tabindex="-1">Options Hub</button>
- <button class="tab" data-group="markets" data-tab="carry" role="tab" aria-selected="false" tabindex="-1">F&amp;O Carry</button>
- <button class="tab" data-group="markets" data-tab="commodities" role="tab" aria-selected="false" tabindex="-1">Commodities</button>
- <button class="tab" data-group="markets" data-tab="strategies" role="tab" aria-selected="false" tabindex="-1">Strategies</button>
- <button class="tab" data-group="markets" data-tab="chart" role="tab" aria-selected="false" tabindex="-1">Chart</button>
- <button class="tab" data-group="settings" data-tab="strategy" role="tab" aria-selected="false" tabindex="-1">Settings &amp; API</button>
- <button class="tab" data-group="settings" data-tab="debug" role="tab" aria-selected="false" tabindex="-1">Debug</button>
- </nav>
-
  <div class="trust-bar" id="trustBar"></div>
  <div class="setup-readiness" id="setupReadiness"></div>
  <div class="setup-guide" id="setupGuide" hidden></div>
@@ -201,6 +249,7 @@
  <section class="pane" id="pane-debug" role="tabpanel" aria-label="Debug">
  </section>
 
+ </div><!-- end .app-main-shell -->
 </div><!-- end .app -->
 
 <!-- ---------------------------------------------------

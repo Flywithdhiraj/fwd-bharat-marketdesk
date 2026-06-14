@@ -15,6 +15,14 @@
   .replace(/'/g, '&#39;');
  }
 
+ function friendlyMarketError(value = '') {
+  const text = String(value || '');
+  if (/authentication failed|client id|token invalid|401|808/i.test(text)) {
+   return 'Dhan connection needs attention. Open Settings & API, save valid credentials, then run the connection check.';
+  }
+  return text || 'Market data is unavailable. Check the connection and try again.';
+ }
+
  function num(value, decimals = 2) {
   const n = Number(value);
   if (!Number.isFinite(n)) return '--';
@@ -129,7 +137,7 @@
     <button type="button" class="bsm" id="optionsRefresh" ${state.status === 'loading' || coolingDown ? 'disabled' : ''}>Refresh Chain</button>
     <button type="button" class="bsm secondary" id="optionsLiveSubscribe">Start WebSocket</button>
     <button type="button" class="bsm secondary" id="optionsLiveStop">Stop WebSocket</button>
-    <span class="options-status ${state.error ? 'bad' : state.status === 'loading' ? 'warn' : 'good'}">${esc(state.error || (state.status === 'loading' ? 'Loading...' : state.updatedAt ? `Updated ${new Date(state.updatedAt).toLocaleTimeString()}` : 'Ready'))}</span>
+    <span class="options-status ${state.error ? 'bad' : state.status === 'loading' ? 'warn' : 'good'}">${esc(state.error ? friendlyMarketError(state.error) : (state.status === 'loading' ? 'Loading...' : state.updatedAt ? `Updated ${new Date(state.updatedAt).toLocaleTimeString()}` : 'Ready'))}</span>
    </div>
    <div class="options-metrics">${summaryCards()}</div>
    <div class="options-table-wrap">

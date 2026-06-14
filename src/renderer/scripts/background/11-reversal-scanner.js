@@ -567,14 +567,8 @@ async function reversalLoadSettings() {
    return false;
   }
   if (msg?.action === 'reversal:startScan') {
-   const context = globalThis.FWDTradeDeskScanContext?.getFresh?.();
-   const runner = context ? () => runReversalScanFromContext(context) : (msg?.forceIndependent === true ? runReversalScan : null);
-   if (!runner) {
-    reversalSetStatus('Run main scan first - Reversal will derive from shared scan data', { active: false, progress: 0 })
-    .finally(() => sendResponse({ ok: false, error: 'Run main scan first' }));
-    return true;
-   }
-   runner()
+   globalThis.FWDTradeDeskScanContext?.getAvailable?.()
+   .then(context => context ? runReversalScanFromContext(context) : (msg?.forceIndependent === true ? runReversalScan() : Promise.reject(new Error('Run main scan first'))))
    .then(results => sendResponse({ ok: true, count: results.length }))
    .catch(async error => {
     await reversalSetStatus(`Reversal scan failed - ${error?.message || error}`, { active: false, progress: 0 });
