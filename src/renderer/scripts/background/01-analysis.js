@@ -2079,6 +2079,13 @@ async function fetchCandles(symbol, resolution, limit = 200, options = {}) {
     mergeCachedCandleRows(cachedRows, fetchedRows),
     instrument
     );
+    if (instrument?.exchangeSegment && instrument?.securityId) {
+     await persistPersistentCandleCacheRecord(
+      safeSymbol,
+      safeResolution,
+      mergedRows
+     );
+    }
    let candles = mergedRows.slice();
    if (closedOnly) candles = filterClosedCandles(candles, safeResolution);
    candles = candles.slice(-limit);

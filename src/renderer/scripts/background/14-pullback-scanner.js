@@ -878,6 +878,13 @@ async function pullbackLoadSettings() {
     }
     const intraday = getContextCandles?.(context, item.symbol, '4h', settings.preferredIntradayCandles) || [];
     const result = pullbackAnalyzeSymbol(item.symbol, daily, intraday, item.ticker, { settings, marketIndex });
+    result.raw = {
+     ...(result.raw || {}),
+     candleSource: 'main_scan_context',
+     sourceScanId: context.scanId,
+     candleCount1d: daily.length,
+     candleCount4h: intraday.length,
+    };
     if (result.eventType === 'review') skipped.reviewOnly += 1;
     results.push(result);
    } catch (error) {

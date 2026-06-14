@@ -18,6 +18,7 @@
  let strategyLabMinScore = 0;
  let strategyLabHideAvoid = false;
  let strategyLabAdvancedOpen = false;
+ let strategyLabEvidenceOpenKey = '';
  let strategyLabMasterSearchOpen = false;
  let strategyLabMasterSearchQuery = '';
  const STRATEGY_LAB_ROW_STALE_MS = 30 * 60 * 1000;
@@ -2881,6 +2882,7 @@ ${buildCheck('Reward acceptable', Number(raw.rrToTarget1 || 0) >= 1.2, 'RR', 'WE
 <div><span>FWD Index</span><strong>${labPct(market.changePct, 2)}</strong><small>current scan</small></div>
 <div><span>Daily Proof</span><strong>${labEsc(dailyProof.label || '--')}</strong><small>${labEsc(`${dailyProof.closePosition || 0}% close | ${dailyProof.bodyRatio || 0}% body`)}</small></div>
 <div><span>Distance</span><strong>${labPct(raw.extensionPct, 2)}</strong><small>${labFmt(raw.extensionAtr || 0, 2)} ATR from 9 EMA</small></div>
+<div><span>Data Used</span><strong>${labEsc(raw.candleCount1d || 0)} daily / ${labEsc(raw.candleCount4h || 0)} 4H</strong><small>${labEsc(raw.candleSource === 'main_scan_context' ? 'Fresh main scan context' : raw.candleSource || 'Stored candle data')}</small></div>
 </div>
 </div>
 <div class="strategy-report-block">
@@ -3052,6 +3054,8 @@ function buildDetail(row = null) {
  const stop = row.stop || row.protectLevel || plan.stop || levels.stop || levels.invalidation || raw.stop;
  const target = row.targets?.target1 || row.targets?.target2R || plan.target || levels.target1 || raw.target;
  const reason = pack.whyNotNow[0] || pack.whySelected[0] || labPlainWhy(row) || row.setupLabel || 'Review the chart before taking action.';
+ const evidenceKey = `${String(row.strategyId || activeStrategyLabId || '').trim().toLowerCase()}:${String(row.symbol || '').trim().toUpperCase()}`;
+ const evidenceOpen = strategyLabEvidenceOpenKey === evidenceKey;
  return `<aside class="strategy-lab-detail strategy-decision-inspector ${labDirectionClass(row)}">
   <div class="strategy-detail-head">
    <div><span>${labEsc(getStrategyMeta(row.strategyId || activeStrategyLabId)?.displayName || 'Strategy')}</span><strong>${labSymbolWithDirection(row)}</strong></div>
@@ -3073,7 +3077,7 @@ function buildDetail(row = null) {
    <button type="button" data-strategy-entry-chart="${labEsc(row.symbol)}">Entry 4H</button>
    <button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button>
   </div>
-  <details class="strategy-inspector-evidence">
+  <details class="strategy-inspector-evidence" data-strategy-evidence-key="${labEsc(evidenceKey)}"${evidenceOpen ? ' open' : ''}>
    <summary>Full evidence</summary>
    <div class="strategy-inspector-evidence-body">${buildFullDetail(row)}</div>
   </details>
@@ -3441,6 +3445,10 @@ function bindStrategyLab(root, rows) {
  alignStrategyHelpTooltips(root);
  root.querySelector('.strategy-advanced-details')?.addEventListener('toggle', event => {
   strategyLabAdvancedOpen = event.currentTarget.open === true;
+ });
+ root.querySelector('.strategy-inspector-evidence')?.addEventListener('toggle', event => {
+  const key = String(event.currentTarget.dataset.strategyEvidenceKey || '');
+  strategyLabEvidenceOpenKey = event.currentTarget.open === true ? key : '';
  });
  root.querySelector('#btnStrategyMasterStock')?.addEventListener('click', () => {
   strategyLabMasterSearchOpen = !strategyLabMasterSearchOpen;

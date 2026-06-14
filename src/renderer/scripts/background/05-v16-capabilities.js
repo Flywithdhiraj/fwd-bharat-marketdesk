@@ -1337,7 +1337,20 @@ async function runV16PublicCandles(payload = {}) {
  const readLocalCandles = async (targetResolution, targetLimit = limit) => {
  const persisted = await loadPersistentCandleCacheRecord(symbol, targetResolution);
   sourceUpdatedAt = Math.max(sourceUpdatedAt, Number(persisted?.updatedAt || 0));
-  const rows = Array.isArray(persisted?.rows) ? persisted.rows : [];
+  let rows = Array.isArray(persisted?.rows) ? persisted.rows : [];
+  if (!rows.length) {
+   const scanContext = globalThis.FWDTradeDeskScanContext?.getFresh?.();
+   const contextRows = globalThis.FWDTradeDeskScanContext?.getCandles?.(
+    scanContext,
+    symbol,
+    targetResolution,
+    Math.max(targetLimit, targetResolution === '1d' ? 260 : 320)
+   ) || [];
+   if (contextRows.length) {
+    rows = await persistPersistentCandleCacheRecord(symbol, targetResolution, contextRows);
+    sourceUpdatedAt = Math.max(sourceUpdatedAt, Number(scanContext?.finishedAt || scanContext?.startedAt || Date.now()));
+   }
+  }
   if (startSec > 0 && endSec > startSec) {
    return filterCandlesByRequestedRange(rows, startSec, endSec, targetResolution);
   }

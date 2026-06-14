@@ -17,6 +17,7 @@ async function wait(ms) {
 
 async function main() {
  const symbol = String(process.argv[2] || 'RELIANCE').trim().toUpperCase();
+ const universe = String(process.argv[3] || 'fno_stocks').trim().toLowerCase();
  app.setName(PRODUCT_NAME);
  app.setPath('userData', process.platform === 'win32'
   ? path.join(String(process.env.FWD_BHARAT_MARKETDESK_HOME || '').trim() || DEFAULT_WINDOWS_HOME, 'Data')
@@ -34,7 +35,7 @@ async function main() {
 
  await service.handle({
   action: 'equity_history_backfill_start',
-  universe: 'fno_stocks',
+  universe,
   symbols: [symbol],
   force: true,
  });
