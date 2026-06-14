@@ -2111,6 +2111,9 @@ async function fetchCandles(symbol, resolution, limit = 200, options = {}) {
    } else {
     dlog(`Candle error ${safeSymbol} ${safeResolution} (${instrumentLabel}): ${message}`);
    }
+   if (options?.throwOnError === true && !/DH-905|incorrect parameters|no data present/i.test(message)) {
+    throw e;
+   }
   }
  }
   if (persistedCandles.length >= 20) {

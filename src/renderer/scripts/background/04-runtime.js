@@ -1,6 +1,8 @@
 const STALE_SCAN_HEARTBEAT_MS = 10 * 60 * 1000;
 const SCAN_HARD_DEADLINE_MS = 50 * 60 * 1000; // Full Nifty 500 scans are deliberately paced to avoid broker chart limits.
 const FULL_EQUITY_SCAN_HARD_DEADLINE_MS = 90 * 60 * 1000;
+const SCAN_RESUME_ALARM_NAME = 'scanResume';
+const SCAN_RESUME_DELAY_MINUTES = 2;
 let strategyLabAutoScanPromise = null;
 let scanExecutionPromise = null;
 globalThis.scanAbortRequested = false;
@@ -19,10 +21,21 @@ function hasFreshPartialScanContext() {
 
 async function markScanStoppedWithPartialFallback(defaultStatus = 'Scan stopped - restart scan') {
  const hasPartial = hasFreshPartialScanContext();
- await markScanStopped(hasPartial ? 'Scan stopped - using partial results; restart to finish' : defaultStatus, 0);
+ await markScanStopped(hasPartial ? 'Scan paused - partial results saved; automatic resume scheduled' : defaultStatus, 0);
  if (hasPartial) {
   await runStrategyLabAutoScans().catch(error => dlog(`Partial Strategy Lab derive err: ${error?.message || error}`));
  }
+}
+
+async function scheduleScanResume(status = 'Scan paused; automatic resume scheduled') {
+ if (String(globalThis.scanAbortReason || '') === 'user') return false;
+ await chrome.storage.local.set({
+  scanStatus: status,
+  scanActive: false,
+  scanHeartbeat: Date.now(),
+ });
+ chrome.alarms.create(SCAN_RESUME_ALARM_NAME, { delayInMinutes: SCAN_RESUME_DELAY_MINUTES });
+ return true;
 }
 
 async function resolveScanHardDeadlineMs() {
@@ -42,6 +55,7 @@ async function runScanWithDeadline() {
  if (settled) return;
  settled = true;
  globalThis.scanAbortRequested = true;
+ globalThis.scanAbortReason = 'deadline';
  markScanStoppedWithPartialFallback('Scan timed out - restarting next cycle')
  .then(() => resumeMarketLiveFeedAfterScan())
  .catch(() => {})
@@ -125,12 +139,18 @@ function kickStrategyLabDeriveAfterManualScan() {
  });
 }
 
-chrome.storage.local.get(['scanActive', 'scanHeartbeat', 'scanStatus', 'scannedCoins'], async data => {
+chrome.storage.local.get(['scanActive', 'scanHeartbeat', 'scanStatus', 'scannedCoins', 'mainScanResumeCheckpointV1'], async data => {
  if (chrome.runtime.lastError) return;
  const scanActive = !!data?.scanActive;
- if (!scanActive) return;
- await markScanStopped('Ready - previous scan state cleared', 0);
- dlog('Cleared stored scan-active state on startup; scans now start only from Scan Now or Auto Scan alarm.');
+ const hasCheckpoint = Array.isArray(data?.mainScanResumeCheckpointV1?.completedSymbols)
+  && data.mainScanResumeCheckpointV1.completedSymbols.length > 0;
+ if (hasCheckpoint) {
+  await scheduleScanResume(`Previous scan checkpoint found at ${data.mainScanResumeCheckpointV1.completedSymbols.length} stocks; automatic resume scheduled`);
+  dlog(`Recovered scan checkpoint with ${data.mainScanResumeCheckpointV1.completedSymbols.length} completed symbols`);
+ } else if (scanActive) {
+  await markScanStopped('Ready - previous scan state cleared', 0);
+  dlog('Cleared stored scan-active state on startup; scans now start only from Scan Now or Auto Scan alarm.');
+ }
 });
 
 chrome.alarms.onAlarm.addListener(alarm => {
@@ -175,6 +195,22 @@ chrome.alarms.onAlarm.addListener(alarm => {
  .finally(() => {
  scanRunPromise = null;
  });
+ }
+ if (alarm.name === SCAN_RESUME_ALARM_NAME) {
+  if (scanRunPromise) return;
+  globalThis.scanAbortRequested = false;
+  globalThis.scanAbortReason = '';
+  scanRunPromise = runScanWithDeadline()
+  .then(() => runStrategyLabAutoScans())
+  .catch(async error => {
+   await markScanStoppedWithPartialFallback('Scan paused after market API failure');
+   await scheduleScanResume(`Market API unavailable; retrying automatically in ${SCAN_RESUME_DELAY_MINUTES} minutes`);
+   dlog(`Resume scan err: ${error?.message || error}`);
+  })
+  .finally(() => {
+   scanRunPromise = null;
+  });
+  return;
  }
 });
 
@@ -328,6 +364,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
  // -- Scan ------------------------------------------------------
  if (msg.action === 'startScan') {
   globalThis.scanAbortRequested = false;
+  globalThis.scanAbortReason = '';
   const alreadyRunning = !!scanRunPromise;
   if (!scanRunPromise) {
    scanRunPromise = runScanWithDeadline()
@@ -337,6 +374,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
    })
    .catch(async e => {
     await markScanStoppedWithPartialFallback();
+    await scheduleScanResume(`Scan paused after market API failure; retrying automatically in ${SCAN_RESUME_DELAY_MINUTES} minutes`);
     dlog(`Manual scan failed: ${e?.message || e}`);
     throw e;
    })
@@ -356,6 +394,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
  if (msg.action === 'stopScan') {
   globalThis.scanAbortRequested = true;
+  globalThis.scanAbortReason = 'user';
+  chrome.alarms.clear(SCAN_RESUME_ALARM_NAME);
  markScanStopped('Scan stopped by user', 0)
   .then(() => resumeMarketLiveFeedAfterScan())
   .then(() => sendResponse({ ok: true, stopped: true }))

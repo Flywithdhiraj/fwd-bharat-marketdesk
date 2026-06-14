@@ -73,6 +73,21 @@ const checks = [
    && runtime.includes('globalThis.scanAbortRequested = true;'),
  },
  {
+  name: 'main scan persists and resumes completed symbols',
+  pass: scan.includes("const SCAN_RESUME_CHECKPOINT_KEY = 'mainScanResumeCheckpointV1'")
+   && scan.includes('saveScanResumeCheckpoint(candidates, strat')
+   && scan.includes('readScanResumeCheckpoint(candidates, strat)')
+   && scan.includes('completedSymbols.has(symbol)')
+   && scan.includes('SCAN_CANDLE_TIMEOUT_MS = 4 * 60 * 1000'),
+ },
+ {
+  name: 'failed and timed-out scans schedule automatic resume',
+  pass: runtime.includes("const SCAN_RESUME_ALARM_NAME = 'scanResume'")
+   && runtime.includes('scheduleScanResume(')
+   && runtime.includes('alarm.name === SCAN_RESUME_ALARM_NAME')
+   && runtime.includes("globalThis.scanAbortReason = 'deadline'"),
+ },
+ {
   name: 'strategy lab Run All uses unified main scan action',
   pass: lab.includes("action: 'strategy-lab:runUnifiedScan'")
    && !lab.includes('index * 450'),

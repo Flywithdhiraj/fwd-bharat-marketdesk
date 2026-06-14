@@ -107,7 +107,7 @@ assert.strictEqual(sandbox.resolveScanLimitForUniverse('bse_only', 0), 650, 'BSE
 assert.strictEqual(sandbox.resolveDeepScanLimitForStrategy({ scanUniverse: 'all_nse', scanMode: 'penny_awakening' }, 900), 900, 'Full equity scans should deep scan only the ranked shortlist');
 assert.strictEqual(sandbox.resolveDeepScanLimitForStrategy({ scanUniverse: 'nse_af' }, 900), 650, 'Chunk scans should cap deep candle work for speed');
 assert(scanText.includes("strat.scanMode = 'standard';"), 'Full equity scans should force standard mode during full scan');
-assert(scanText.includes('scannedCoins: 0, scannedStocks: 0') && scanText.includes('completed ${i}, pending ${Math.max(0, deepTotal - i)}'), 'Scanner progress should report completed candle work instead of queued candidates');
+assert(scanText.includes('scannedCoins: completedBefore') && scanText.includes('completed ${completedBefore}/${deepTotal}'), 'Scanner progress should report completed candle work instead of queued candidates');
 assert(runtimeText.includes('FULL_EQUITY_SCAN_HARD_DEADLINE_MS') && runtimeText.includes("['all_nse', 'all_bse'].includes(universe)"), 'Full equity scans should have a dedicated hard deadline');
 assert(runtimeText.includes('globalThis.scanAbortRequested = true;'), 'A hard deadline should request cancellation of the underlying scan loop');
 

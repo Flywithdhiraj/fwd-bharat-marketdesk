@@ -4562,12 +4562,23 @@ async function startCommoditySpreadBackfill(message = {}) {
   const lastResponse = chunks[chunks.length - 1] || { ok: true, status: 200, data: {} };
   const fetchedRows = aggregateCandleRows(mergeCandleRows(chunks), resolution.aggregateSeconds || 0);
   let mergedRows = fetchedRows;
+  const completedFullHistoricalRequest = resolution.kind === 'historical'
+   && boundedStartMs <= historicalEarliestMs + DAY_MS
+   && chunks.length === ranges.length;
+  const historicalCoverage = completedFullHistoricalRequest
+   ? {
+    backfilledAt: Date.now(),
+    coverageStart: boundedStartMs,
+    coverageEnd: endMs,
+   }
+   : {};
   if (candleCache?.isNativeCandleResolution?.(cacheResolution) && cacheSymbol && (fetchedRows.length || cachedRows.length)) {
    const saved = await candleCache.put({
     symbol: cacheSymbol,
     resolution: cacheResolution,
     rows: [...cachedRows, ...fetchedRows],
     updatedAt: Date.now(),
+    ...historicalCoverage,
    }).catch(error => {
     errorJournal?.append?.('dhan:candle-cache-write', error, { cacheSymbol, cacheResolution });
     return null;
@@ -4575,6 +4586,20 @@ async function startCommoditySpreadBackfill(message = {}) {
    if (saved?.ok && Array.isArray(saved.rows)) mergedRows = saved.rows;
   } else if (cachedRows.length) {
    mergedRows = candleCache?.mergeRows ? candleCache.mergeRows(cachedRows, fetchedRows) : fetchedRows;
+  }
+  if (completedFullHistoricalRequest && cacheResolution === '1d' && mergedRows.length) {
+   const weeklyRows = aggregateDailyCandlesToWeekly(mergedRows);
+   if (weeklyRows.length) {
+    await candleCache.put({
+     symbol: cacheSymbol,
+     resolution: '1w',
+     rows: weeklyRows,
+     updatedAt: Date.now(),
+     ...historicalCoverage,
+    }, 'replace').catch(error => {
+     errorJournal?.append?.('dhan:candle-cache-weekly-write', error, { cacheSymbol });
+    });
+   }
   }
   const requestedRows = mergedRows.filter(row => Number(row.time || 0) * 1000 >= boundedStartMs && Number(row.time || 0) * 1000 <= endMs);
   return {
