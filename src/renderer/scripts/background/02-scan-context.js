@@ -6,6 +6,8 @@
  const DURABLE_CONTEXT_KEY = 'lastMainScanContextSnapshotV1';
  let latestContext = null;
  let restorePromise = null;
+ let deriveQueue = Promise.resolve();
+ let latestDeriveRequest = null;
 
  function now() {
   return Date.now();
@@ -219,8 +221,94 @@
   } catch (_) {}
  }
 
- async function deriveAll(options = {}) {
-  const context = getFresh() || await restoreDurable();
+ function cloneContextForDerive(context) {
+  const clone = create({
+   scanId: context.scanId,
+   startedAt: context.startedAt,
+   tickerMap: { ...(context.tickerMap || {}) },
+   products: cloneRows(context.products),
+   marketIndex: context.marketIndex,
+   fundingHeatmap: cloneRows(context.fundingHeatmap),
+   scanResults: cloneRows(context.scanResults),
+   decisionShortlist: cloneRows(context.decisionShortlist),
+   partial: !!context.partial,
+   scannedRows: Number(context.scannedRows || 0),
+   candidateRows: Number(context.candidateRows || 0),
+   durable: context.durable === true,
+  });
+  clone.finishedAt = Number(context.finishedAt || 0);
+  clone.expiresAt = Number(context.expiresAt || 0);
+  clone.stale = !!context.stale;
+  if (context.candles instanceof Map) {
+   context.candles.forEach((resolutions, symbol) => {
+    Object.entries(resolutions || {}).forEach(([resolution, rows]) => {
+     recordCandles(clone, symbol, resolution, cloneRows(rows));
+    });
+   });
+  }
+  return clone;
+ }
+
+ async function readStrategyRows(strategyId) {
+  return new Promise(resolve => {
+   const resultKey = `strategyResults.${strategyId}`;
+   const statusKey = `strategyStatus.${strategyId}`;
+   try {
+    chrome.storage.local.get([resultKey, statusKey], data => resolve({
+     rows: Array.isArray(data?.[resultKey]) ? data[resultKey] : [],
+     status: data?.[statusKey] || {},
+    }));
+   } catch (_) {
+    resolve({ rows: [], status: {} });
+   }
+  });
+ }
+
+ function mergeStrategyRows(previousRows = [], nextRows = []) {
+  const merged = new Map();
+  previousRows.forEach(row => {
+   const symbol = normalizeSymbol(row?.symbol);
+   if (symbol) merged.set(symbol, row);
+  });
+  nextRows.forEach(row => {
+   const symbol = normalizeSymbol(row?.symbol);
+   if (symbol) merged.set(symbol, row);
+  });
+  return Array.from(merged.values()).sort((a, b) =>
+   Number(b?.score || b?.confidence || 0) - Number(a?.score || a?.confidence || 0)
+   || normalizeSymbol(a?.symbol).localeCompare(normalizeSymbol(b?.symbol))
+  );
+ }
+
+ async function runStrategyDerive(strategyId, runner, context) {
+  const previous = await readStrategyRows(strategyId);
+  const result = typeof runner === 'function' ? await runner() : null;
+  if (!Array.isArray(result)) return result;
+  if (String(previous.status?.scanId || '') !== String(context.scanId || '')) return result;
+  const merged = mergeStrategyRows(previous.rows, result);
+  if (merged.length <= result.length) return result;
+  const resultKey = `strategyResults.${strategyId}`;
+  const statusKey = `strategyStatus.${strategyId}`;
+  const current = await readStrategyRows(strategyId);
+  await chrome.storage.local.set({
+   [resultKey]: merged,
+   [statusKey]: {
+    ...(current.status || {}),
+    retainedRows: merged.length - result.length,
+    mergedRows: merged.length,
+   },
+  });
+  return merged;
+ }
+
+ async function executeDerive(context, options = {}, request = {}) {
+  if (
+   latestDeriveRequest
+   && latestDeriveRequest.scanId === request.scanId
+   && Number(latestDeriveRequest.scannedRows || 0) > Number(request.scannedRows || 0)
+  ) {
+   return { ok: true, skipped: true, reason: 'Superseded by newer scan checkpoint', scanId: request.scanId, derived: {} };
+  }
  if (!context) {
   await setUnifiedStatus('Run main scan first - no saved scanner context', { active: false, ok: false });
   return { ok: false, error: 'No saved scanner context' };
@@ -244,8 +332,7 @@
   const derived = {};
   for (const [id, runner] of tasks) {
    try {
-    const fn = runner;
-    const result = typeof fn === 'function' ? await fn() : null;
+    const result = await runStrategyDerive(id, runner, context);
     if (Array.isArray(result)) derived[id] = { ok: true, count: result.length };
     else if (result && result.ok === false) derived[id] = result;
     else derived[id] = { ok: false, error: 'Scanner derive function unavailable' };
@@ -272,6 +359,28 @@
    mainCount: Array.isArray(context.scanResults) ? context.scanResults.length : 0,
    derived,
   };
+ }
+
+ async function deriveAll(options = {}) {
+  const available = getFresh() || await restoreDurable();
+  if (!available) {
+   await setUnifiedStatus('Run main scan first - no saved scanner context', { active: false, ok: false });
+   return { ok: false, error: 'No saved scanner context' };
+  }
+  const context = cloneContextForDerive(available);
+  const request = {
+   scanId: context.scanId,
+   scannedRows: Number(context.scannedRows || 0),
+   candidateRows: Number(context.candidateRows || 0),
+   partial: !!context.partial,
+   source: String(options.source || ''),
+  };
+  latestDeriveRequest = request;
+  const queued = deriveQueue
+   .catch(() => null)
+   .then(() => executeDerive(context, options, request));
+  deriveQueue = queued.catch(() => null);
+  return queued;
  }
 
  global.FWDTradeDeskScanContext = Object.freeze({

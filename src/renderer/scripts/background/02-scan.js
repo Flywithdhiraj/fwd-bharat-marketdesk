@@ -1928,7 +1928,7 @@ async function runScan() {
  },
  });
  }
- if (completedRows > 0 && (completedRows % SCAN_PARTIAL_CHECKPOINT_EVERY === 0 || completedRows === candidates.length)) {
+ if (completedRows > 0 && completedRows < deepTotal && completedRows % SCAN_PARTIAL_CHECKPOINT_EVERY === 0) {
  await savePartialScanCheckpoint(scanContext, {
  tickerMap,
  products,
@@ -2208,8 +2208,6 @@ async function runScan() {
  scannedRows: candidates.length,
  candidateRows: candidates.length,
  });
- await globalThis.FWDTradeDeskScanContext?.deriveAll?.({ includeNative: false, source: 'main_scan_complete' })
- .catch(error => dlog(`Strategy Lab derive after scan failed: ${error?.message || error}`));
  }
  if (liveFeedPausedForScan) await setScanLiveFeedPaused(false);
  return enrichedResults;

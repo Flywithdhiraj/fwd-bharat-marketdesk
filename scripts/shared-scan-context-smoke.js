@@ -61,6 +61,7 @@ const checks = [
  name: 'scan creates partial checkpoints for Strategy Lab during long runs',
  pass: scan.includes('savePartialScanCheckpoint')
    && scan.includes('SCAN_PARTIAL_CHECKPOINT_EVERY')
+   && scan.includes('completedRows < deepTotal')
    && scan.includes('STRATEGY_LAB_PARTIAL_DERIVE_MIN_MS')
    && scan.includes("source: 'partial_checkpoint'")
    && scan.includes('scanResults,')
@@ -116,6 +117,20 @@ const checks = [
    && darvas.includes('runDarvasScanFromContext')
    && pullback.includes('runPullbackScanFromContext')
    && context.includes('runPullbackScanFromContext'),
+},
+{
+ name: 'scan completes before final Strategy Lab derivation',
+ pass: !scan.includes("deriveAll?.({ includeNative: false, source: 'main_scan_complete' })")
+  && runtime.includes('.then(() => runStrategyLabAutoScans())')
+  && runtime.includes('kickStrategyLabDeriveAfterManualScan'),
+},
+{
+ name: 'Strategy Lab derivations are serialized and retain same-scan rows',
+ pass: context.includes('let deriveQueue = Promise.resolve()')
+  && context.includes('cloneContextForDerive')
+  && context.includes('runStrategyDerive')
+  && context.includes('mergeStrategyRows(previous.rows, result)')
+  && context.includes('Superseded by newer scan checkpoint'),
 },
  {
   name: 'individual scanner actions require shared context unless explicitly independent',
