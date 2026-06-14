@@ -3889,3 +3889,32 @@ body.desktop-mode[data-workspace-tab='chart'] .workspace-shell {
  font-size: 9px;
  }
 }
+.ds-chart-download-progress {
+ display: inline-block;
+ width: min(240px, 38vw);
+ height: 4px;
+ margin-left: 10px;
+ overflow: hidden;
+ vertical-align: middle;
+ border-radius: 999px;
+ background: rgba(255, 255, 255, .1);
+}
+
+.ds-chart-download-progress i {
+ display: block;
+ width: 38%;
+ height: 100%;
+ border-radius: inherit;
+ background: #d3a45f;
+ animation: ds-chart-download-slide 1.1s ease-in-out infinite;
+}
+
+[data-ds-chart-refresh].loading {
+ cursor: wait;
+ opacity: .8;
+}
+
+@keyframes ds-chart-download-slide {
+ from { transform: translateX(-110%); }
+ to { transform: translateX(270%); }
+}

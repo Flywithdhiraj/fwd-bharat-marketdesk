@@ -6427,3 +6427,27 @@ body.desktop-mode .overlay.live-order-chart-only-overlay > .modal.live-order-cha
  grid-template-columns: 1fr;
  }
 }
+.history-backfill-card {
+ margin-top: 14px;
+}
+
+.history-backfill-progress {
+ height: 7px;
+ margin: 10px 0;
+ overflow: hidden;
+ border-radius: 999px;
+ background: rgba(255, 255, 255, .08);
+}
+
+.history-backfill-progress span,
+.history-backfill-progress i {
+ display: block;
+ height: 100%;
+}
+
+.history-backfill-progress i {
+ width: 2%;
+ border-radius: inherit;
+ background: linear-gradient(90deg, #d3a45f, #24dab1);
+ transition: width .25s ease;
+}

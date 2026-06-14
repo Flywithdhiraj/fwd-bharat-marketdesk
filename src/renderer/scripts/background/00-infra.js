@@ -496,6 +496,9 @@ async function v17WriteNativeCandleCache(symbol = '', resolution = '', payload =
  symbol,
  resolution,
  rows: Array.isArray(payload.rows) ? payload.rows : [],
+ backfilledAt: Number(payload.backfilledAt || 0),
+ coverageStart: Number(payload.coverageStart || 0),
+ coverageEnd: Number(payload.coverageEnd || 0),
  });
 }
 

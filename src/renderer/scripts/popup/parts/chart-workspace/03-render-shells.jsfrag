@@ -1558,7 +1558,15 @@ function buildChartTabPicker(state = {}, options = {}) {
  const primaryIndex = primaryPayload.dataset?.syntheticIndex || executionPayload.dataset?.syntheticIndex;
  const restore = maximized ? `<button class="bsm active" type="button" data-ds-desk-restore="1">Restore Layout</button>` : '';
  const deskTitleBlock = '';
- const deskStatusBlock = '';
+ const deskDataset = isSingleChart ? primaryPayload.dataset : (executionPayload.dataset || primaryPayload.dataset);
+ const deskModel = isSingleChart ? primaryPayload.model : (executionPayload.model || primaryPayload.model);
+ const deskStatusText = !state.symbol
+ ? 'Choose a symbol to load the chart.'
+ : deskDataset?.ok
+ ? `${RESOLUTION_LABELS[normalizeTimeframe((isSingleChart ? primaryState : executionState).timeframe)]} | loaded ${deskModel?.totalCount || deskDataset?.candles?.length || 0} candles${deskDataset?.localOnly ? ' | local storage' : ''}`
+ : (deskDataset?.error || 'Chart data is unavailable.');
+ const deskStatusClass = deskDataset?.ok ? 'account-inline-note good' : 'account-inline-note bad';
+ const deskStatusBlock = `<div class="${deskStatusClass}" id="dsChartStatus">${escapeHtml(deskStatusText)}</div>`;
  const deskInstrumentBlock = '';
  const deskClass = [
  'ds-chart-desk',

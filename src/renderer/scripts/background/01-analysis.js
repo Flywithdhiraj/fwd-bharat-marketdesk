@@ -198,6 +198,9 @@ async function loadPersistentCandleCacheRecord(symbol, resolution, instrument = 
  return {
  rows,
  updatedAt: Number(record?.updatedAt || 0),
+ backfilledAt: Number(record?.backfilledAt || 0),
+ coverageStart: Number(record?.coverageStart || 0),
+ coverageEnd: Number(record?.coverageEnd || 0),
  memoryKey,
  fromMemory: false,
  };

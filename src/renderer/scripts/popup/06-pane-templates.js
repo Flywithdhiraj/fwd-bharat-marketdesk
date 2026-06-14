@@ -1211,6 +1211,19 @@ const PANE_TEMPLATES = {
  <button class="btn secondary" type="button" id="btnClearCandleCache">Clear Candle Cache</button>
  </div>
  <div class="account-inline-note">When the data service limits requests, the app pauses extra refreshes and uses cached data where available.</div>
+ <div class="settings-structured-card history-backfill-card">
+ <div class="settings-structured-title">Daily + Weekly Historical Backfill</div>
+ <div class="account-editor-grid">
+ <label class="account-field"><span>Stock universe</span><select class="si" id="historyBackfillUniverse"><option value="fno_stocks">F&amp;O Stocks</option><option value="all_nse">All NSE Stocks</option></select></label>
+ <div class="account-field"><span>Storage policy</span><div class="account-inline-note">Downloads up to 10 years of 1D candles and derives local 1W candles. Existing complete symbols are skipped.</div></div>
+ </div>
+ <div class="account-editor-actions">
+ <button class="bsm primary" type="button" id="btnStartHistoryBackfill">Start / Resume Backfill</button>
+ <button class="bsm" type="button" id="btnCancelHistoryBackfill">Cancel</button>
+ </div>
+ <div class="history-backfill-progress" id="historyBackfillProgress" hidden><span><i></i></span></div>
+ <div class="account-inline-note" id="historyBackfillStatus">Backfill not started. The app can remain open while it runs in the background.</div>
+ </div>
  </div>
 
  <div class="account-editor-section" data-settings-panel="risk">

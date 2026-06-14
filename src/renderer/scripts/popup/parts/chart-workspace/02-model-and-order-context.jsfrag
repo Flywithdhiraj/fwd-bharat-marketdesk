@@ -1234,6 +1234,13 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  }
  if (state.commoditySpread && symbol.startsWith('MCX-SPREAD:')) {
  const requirement = resolutionCoverageRequirement(state);
+ if (options.forceData === true && !requirement.startMs) {
+  requirement.count = timeframe === '1d'
+   ? MAX_DAILY_HISTORY_CANDLES
+   : timeframe === '1w'
+   ? MAX_WEEKLY_HISTORY_CANDLES
+   : MAX_4H_HISTORY_CANDLES;
+ }
  const bridge = globalThis.fwdDesktopNative;
  const response = bridge?.sendNativeMessage
  ? await bridge.sendNativeMessage({

@@ -69,6 +69,10 @@ npm run dist
 
 Daily, 4-hour, and weekly candles are stored in the native `candle-store` for every supported stock or instrument requested through the shared Dhan candle service. After the first backfill, later scans request only the missing tail with a small overlap and merge it into local history by timestamp.
 
+To build long-term history, open **Settings → API Health → Daily + Weekly Historical Backfill**. Choose **F&O Stocks** or **All NSE Stocks**, then select **Start / Resume Backfill**. The app downloads up to ten years of daily candles in yearly batches, derives weekly candles locally, shows symbol/batch/row progress, and skips completed symbols when resumed. Dhan limits 4-hour history to the recent execution window, so long-term analysis uses the complete daily and weekly stores.
+
+Normal chart opening reads local storage only. Use the chart **Refresh** button to download missing candles for that symbol. Full scans use the same stored daily history and request only the missing tail after a completed backfill.
+
 Before changing laptops, open Settings and use **Export Laptop Backup**. The backup includes settings, Strategy Lab data, journals, and native candle files. On the new laptop, use **Restore on New Laptop**, restart the app, and enter API credentials again because encrypted credentials are intentionally machine-specific.
 
 ## Remaining External Work

@@ -14,8 +14,10 @@ const scanner = read('src/renderer/scripts/background/02-scan.js');
 
 assert(chartModel.includes('localOnly: options.forceData !== true'));
 assert(chartModel.includes('forceRefresh: options.forceData === true'));
-assert(chartEvents.includes('forceData: refreshChanged'));
-assert(chartEvents.includes('{ refreshNonce: Date.now() }'));
+assert(chartModel.includes('requirement.count = timeframe ==='));
+assert(chartEvents.includes('function queueSurfaceRender(surface = SURFACE_PREVIEW, force = false, forceData = false)'));
+assert(chartEvents.includes('await queueSurfaceRender(surface, true, true)'));
+assert(chartEvents.includes('Downloading missing'));
 assert(publicCandles.includes('const localOnly = payload.localOnly === true'));
 assert(publicCandles.includes('const forceRefresh = payload.forceRefresh === true'));
 assert(publicCandles.includes('return readLocalCandles(targetResolution, targetLimit)'));
@@ -28,5 +30,6 @@ assert(chartEvents.includes('const hasRenderedBefore = surfaceRef.refreshNonce !
 assert(chartEvents.includes('hasRenderedBefore && previousRefreshNonce !== Number(state.refreshNonce || 0)'));
 assert(scanner.includes('const SCAN_CANDLE_FETCH_OPTIONS = Object.freeze({'));
 assert(scanner.includes('force: true'));
+assert(scanner.includes('const SCAN_CONTEXT_DAILY_CANDLES = 3650'));
 
 console.log('Chart local-first smoke checks passed.');

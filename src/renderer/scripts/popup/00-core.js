@@ -2782,7 +2782,7 @@ async function exportFullAppBackup(reason = 'manual') {
  const candleRows = Number(summary.candleRows || 0);
  setBackupStatus(candleRows > 0
  ? `OK Full backup saved: ${response.fileName || 'backup file'} (${Number(summary.candleFiles || 0)} candle files, ${candleRows} rows)`
- : `Backup saved but candle history is empty. Start 1D + 4H backfill before laptop migration.`, candleRows > 0 ? '#00e5a0' : '#ffc840');
+ : `Backup saved but candle history is empty. Start the Daily + Weekly Historical Backfill before laptop migration.`, candleRows > 0 ? '#00e5a0' : '#ffc840');
  return response;
  } catch (error) {
  setBackupStatus(`Full backup failed: ${error?.message || 'unknown error'}`, '#ff4560');

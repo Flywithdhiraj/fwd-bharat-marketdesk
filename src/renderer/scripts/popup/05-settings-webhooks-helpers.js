@@ -107,6 +107,51 @@ function refreshRuntimeHealthStatus() {
  });
 }
 
+let historyBackfillPollTimer = null;
+
+function sendHistoryBackfillMessage(action, payload = {}) {
+ const bridge = globalThis.fwdDesktopNative;
+ if (!bridge?.sendNativeMessage) return Promise.resolve({ ok: false, error: 'Desktop market-data bridge is unavailable.' });
+ return bridge.sendNativeMessage({ type: 'dhan_data', action, ...payload });
+}
+
+function renderHistoryBackfillStatus(response = null) {
+ const status = response?.status || {};
+ const target = document.getElementById('historyBackfillStatus');
+ const progress = document.getElementById('historyBackfillProgress');
+ const startButton = document.getElementById('btnStartHistoryBackfill');
+ const cancelButton = document.getElementById('btnCancelHistoryBackfill');
+ if (!target) return;
+ const completed = Number(status.completed || 0);
+ const total = Number(status.total || 0);
+ const percent = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+ const errors = Array.isArray(status.errors) ? status.errors.length : 0;
+ const chunk = Number(status.currentChunk || 0);
+ const chunks = Number(status.currentChunks || 0);
+ if (status.running) {
+  target.textContent = `${completed}/${total} stocks (${percent}%) | ${status.currentSymbol || 'preparing'}${chunks ? ` | yearly batch ${chunk}/${chunks}` : ''} | ${Number(status.dailyRows || 0).toLocaleString()} daily rows | ${errors} warning(s)`;
+ } else if (status.startedAt) {
+  target.textContent = `${status.cancelRequested ? 'Paused' : 'Complete'}: ${completed}/${total} stocks | skipped ${Number(status.skipped || 0)} already complete | ${Number(status.dailyRows || 0).toLocaleString()} daily + ${Number(status.weeklyRows || 0).toLocaleString()} weekly rows | ${errors} warning(s)`;
+ } else {
+  target.textContent = 'Backfill not started. The app can remain open while it runs in the background.';
+ }
+ if (progress) {
+  progress.hidden = !status.running;
+  const bar = progress.querySelector('i');
+  if (bar) bar.style.width = `${Math.max(2, percent)}%`;
+ }
+ if (startButton) startButton.disabled = status.running === true;
+ if (cancelButton) cancelButton.disabled = status.running !== true;
+ if (historyBackfillPollTimer) clearTimeout(historyBackfillPollTimer);
+ historyBackfillPollTimer = status.running ? setTimeout(refreshHistoryBackfillStatus, 1200) : null;
+}
+
+async function refreshHistoryBackfillStatus() {
+ const response = await sendHistoryBackfillMessage('equity_history_backfill_status')
+  .catch(error => ({ ok: false, error: error?.message || String(error) }));
+ renderHistoryBackfillStatus(response);
+}
+
 const SETTINGS_STRATEGY_PRESETS = Object.freeze({
  manual_clean: {
  label: 'Manual Clean',
@@ -237,6 +282,7 @@ function loadStrategy() {
  globalThis.v16LiveOrderPreviewChartEnabled = s.liveOrderPreviewChart !== false;
  globalThis.v16SyncLiveAccountSyncButtons?.();
  refreshRuntimeHealthStatus();
+ refreshHistoryBackfillStatus();
  globalThis.__fwdTradeDeskOptionsAutoSettings = settingsSanitizeOptionsAutoTradeSettings({ enabled: false, straddleEnabled: false, nativeStraddlePreferred: false });
  document.getElementById('sKeyPivotLength').value = keyLevelSettings.pivotLength;
  document.getElementById('sKeyPivotMemory').value = keyLevelSettings.pivotMemory;
@@ -518,7 +564,28 @@ document.addEventListener('click', (e) => {
 document.addEventListener('click', (e) => {
  if (e.target?.id !== 'btnRefreshRuntimeHealth' && !e.target?.closest('#btnRefreshRuntimeHealth')) return;
  refreshRuntimeHealthStatus();
+ refreshHistoryBackfillStatus();
  updateApiUsageMeter?.(true);
+});
+
+document.addEventListener('click', async (e) => {
+ if (e.target?.id !== 'btnStartHistoryBackfill' && !e.target?.closest('#btnStartHistoryBackfill')) return;
+ const universe = document.getElementById('historyBackfillUniverse')?.value || 'fno_stocks';
+ const response = await sendHistoryBackfillMessage('equity_history_backfill_start', { universe })
+  .catch(error => ({ ok: false, error: error?.message || String(error) }));
+ if (!response?.ok) {
+  renderRuntimeHealthLine('historyBackfillStatus', `Backfill failed to start: ${response?.error || 'unknown error'}`);
+  return;
+ }
+ renderHistoryBackfillStatus(response);
+ setTimeout(refreshHistoryBackfillStatus, 250);
+});
+
+document.addEventListener('click', async (e) => {
+ if (e.target?.id !== 'btnCancelHistoryBackfill' && !e.target?.closest('#btnCancelHistoryBackfill')) return;
+ const response = await sendHistoryBackfillMessage('equity_history_backfill_cancel')
+  .catch(error => ({ ok: false, error: error?.message || String(error) }));
+ renderHistoryBackfillStatus(response);
 });
 
 document.addEventListener('click', async (e) => {

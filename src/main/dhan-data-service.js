@@ -2758,6 +2758,23 @@ function createDhanDataService({ app, credentialStore, errorJournal, candleCache
   total: 0,
   errors: [],
  };
+ let equityHistoryBackfillPromise = null;
+ let equityHistoryBackfillStatus = {
+  running: false,
+  cancelRequested: false,
+  startedAt: 0,
+  completedAt: 0,
+  currentSymbol: '',
+  currentChunk: 0,
+  currentChunks: 0,
+  completed: 0,
+  skipped: 0,
+  total: 0,
+  apiCalls: 0,
+  dailyRows: 0,
+  weeklyRows: 0,
+  errors: [],
+ };
  let liveSocket = null;
  let liveFeedMode = 'quote';
  let liveFeedDesired = false;
@@ -4402,7 +4419,9 @@ async function startCommoditySpreadBackfill(message = {}) {
   const oldestCachedMs = cachedRows.length ? Number(cachedRows[0]?.time || 0) * 1000 : 0;
   const newestCachedMs = cachedRows.length ? Number(cachedRows[cachedRows.length - 1]?.time || 0) * 1000 : 0;
   const overlapMs = Math.max(resolution.seconds * 1000 * 2, DAY_MS);
-  const cacheCoversStart = oldestCachedMs > 0 && oldestCachedMs <= boundedStartMs + (resolution.seconds * 1000);
+  const cacheWasBackfilled = Number(cachedRecord?.backfilledAt || 0) > 0
+   && Number(cachedRecord?.coverageStart || 0) <= boundedStartMs + (resolution.seconds * 1000);
+  const cacheCoversStart = cacheWasBackfilled || (oldestCachedMs > 0 && oldestCachedMs <= boundedStartMs + (resolution.seconds * 1000));
   const cacheCoversEnd = newestCachedMs > 0 && newestCachedMs >= endMs - (resolution.seconds * 1000);
   const cacheFresh = Date.now() - Number(cachedRecord?.updatedAt || 0) < Math.max(60 * 1000, Math.min(resolution.seconds * 1000, 6 * 60 * 60 * 1000));
   if (cachedRows.length && cacheCoversStart && cacheCoversEnd && cacheFresh && message.force !== true) {
@@ -4481,6 +4500,27 @@ async function startCommoditySpreadBackfill(message = {}) {
     if (attempt < DHAN_CANDLE_MAX_RETRIES) await sleep(backoffMs);
    }
    if (!response.ok) {
+    if (resolution.kind === 'historical' && isDhanNoHistoricalDataResponse(response)) {
+     chunks.push({
+      ok: true,
+      status: 200,
+      data: {},
+      fromDate: body.fromDate,
+      toDate: body.toDate,
+      rows: [],
+      empty: true,
+     });
+     if (typeof message.onProgress === 'function') {
+      message.onProgress({
+       chunk: chunks.length,
+       chunks: ranges.length,
+       fromDate: body.fromDate,
+       toDate: body.toDate,
+       rows: 0,
+      });
+     }
+     continue;
+    }
     if (isDhanRateLimitResponse(response)) {
      const retryAfterMs = Math.max(0, candleBlockedUntil - Date.now());
      return {
@@ -4509,6 +4549,15 @@ async function startCommoditySpreadBackfill(message = {}) {
     toDate: body.toDate,
     rows: normalizeDhanCandles(response.data || {}),
    });
+   if (typeof message.onProgress === 'function') {
+    message.onProgress({
+     chunk: chunks.length,
+     chunks: ranges.length,
+     fromDate: body.fromDate,
+     toDate: body.toDate,
+     rows: chunks[chunks.length - 1].rows.length,
+    });
+   }
   }
   const lastResponse = chunks[chunks.length - 1] || { ok: true, status: 200, data: {} };
   const fetchedRows = aggregateCandleRows(mergeCandleRows(chunks), resolution.aggregateSeconds || 0);
@@ -4552,6 +4601,171 @@ async function startCommoditySpreadBackfill(message = {}) {
     endpoint,
    },
   };
+ }
+
+ function aggregateDailyCandlesToWeekly(rows = []) {
+  const weeks = new Map();
+  (Array.isArray(rows) ? rows : []).forEach(row => {
+   const time = Number(row?.time || 0);
+   if (!(time > 0)) return;
+   const date = new Date(time * 1000);
+   const day = date.getUTCDay();
+   const monday = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() - ((day + 6) % 7)) / 1000;
+   const current = weeks.get(monday) || { time: monday, open: 0, high: 0, low: 0, close: 0, volume: 0 };
+   if (!(current.open > 0)) current.open = Number(row.open || row.close || 0);
+   current.high = Math.max(Number(current.high || 0), Number(row.high || row.close || 0));
+   current.low = current.low > 0 ? Math.min(current.low, Number(row.low || row.close || 0)) : Number(row.low || row.close || 0);
+   current.close = Number(row.close || current.close || 0);
+   current.volume += Math.max(0, Number(row.volume || 0));
+   weeks.set(monday, current);
+  });
+  return Array.from(weeks.values())
+   .filter(row => row.open > 0 && row.high > 0 && row.low > 0 && row.close > 0)
+   .sort((a, b) => a.time - b.time);
+ }
+
+ async function runEquityHistoryBackfill(message = {}) {
+  const cache = await loadInstrumentCache(false);
+  const requestedUniverse = normalizeUniverseId(message.universe || 'fno_stocks');
+  const membership = getUniverseMembershipSet(cache, requestedUniverse);
+  const bySecurityId = new Map((cache.instruments || []).map(item => [String(item.securityId || ''), item]));
+  const source = membership.securityIds.size
+   ? Array.from(membership.securityIds).map(id => bySecurityId.get(String(id))).filter(Boolean)
+   : (cache.fnoStockUniverse || []);
+  const instruments = sortUniverseInstruments(source)
+   .filter(item => isNseEquityInstrument(item))
+   .filter(item => !Array.isArray(message.symbols) || !message.symbols.length
+    || message.symbols.map(value => String(value || '').trim().toUpperCase()).includes(String(item.tradingSymbol || '').toUpperCase()));
+  const nowMs = Date.now();
+  const startMs = nowMs - (DHAN_HISTORICAL_MAX_HISTORY_DAYS * DAY_MS);
+  equityHistoryBackfillStatus = {
+   running: true,
+   cancelRequested: false,
+   startedAt: Date.now(),
+   completedAt: 0,
+   currentSymbol: '',
+   currentChunk: 0,
+   currentChunks: 0,
+   completed: 0,
+   skipped: 0,
+   total: instruments.length,
+   apiCalls: 0,
+   dailyRows: 0,
+   weeklyRows: 0,
+   errors: [],
+   universe: requestedUniverse,
+  };
+  for (const instrument of instruments) {
+   if (equityHistoryBackfillStatus.cancelRequested) break;
+   const symbol = String(instrument.tradingSymbol || instrument.symbol || '').trim().toUpperCase();
+   equityHistoryBackfillStatus.currentSymbol = symbol;
+   equityHistoryBackfillStatus.currentChunk = 0;
+   equityHistoryBackfillStatus.currentChunks = 0;
+   try {
+    const existing = await candleCache.get(symbol, '1d').catch(() => null);
+    const alreadyBackfilled = Number(existing?.backfilledAt || 0) > 0
+     && Number(existing?.coverageStart || 0) <= startMs + DAY_MS;
+    if (alreadyBackfilled && message.force !== true) {
+     equityHistoryBackfillStatus.skipped += 1;
+     equityHistoryBackfillStatus.dailyRows += Number(existing?.rows?.length || 0);
+     const existingWeekly = await candleCache.get(symbol, '1w').catch(() => null);
+     equityHistoryBackfillStatus.weeklyRows += Number(existingWeekly?.rows?.length || 0);
+     equityHistoryBackfillStatus.completed += 1;
+     continue;
+    }
+    const response = await getCandles({
+     instrument,
+     symbol,
+     resolution: '1d',
+     start: startMs,
+     end: nowMs,
+     force: true,
+     timeoutMs: 45000,
+     onProgress(progress = {}) {
+      equityHistoryBackfillStatus.currentChunk = Number(progress.chunk || 0);
+      equityHistoryBackfillStatus.currentChunks = Number(progress.chunks || 0);
+     },
+    });
+    if (!response?.ok || !Array.isArray(response.rows) || !response.rows.length) {
+     throw new Error(response?.error || 'No daily candle history returned.');
+    }
+    const dailyRows = response.rows;
+    const weeklyRows = aggregateDailyCandlesToWeekly(dailyRows);
+    await candleCache.put({
+     symbol,
+     resolution: '1d',
+     rows: dailyRows,
+     updatedAt: Date.now(),
+     backfilledAt: Date.now(),
+     coverageStart: startMs,
+     coverageEnd: nowMs,
+    });
+    if (weeklyRows.length) {
+     await candleCache.put({
+      symbol,
+      resolution: '1w',
+      rows: weeklyRows,
+      updatedAt: Date.now(),
+      backfilledAt: Date.now(),
+      coverageStart: startMs,
+      coverageEnd: nowMs,
+     }, 'replace');
+    }
+    equityHistoryBackfillStatus.apiCalls += Number(response.apiCalls || 0);
+    equityHistoryBackfillStatus.dailyRows += dailyRows.length;
+    equityHistoryBackfillStatus.weeklyRows += weeklyRows.length;
+   } catch (error) {
+    equityHistoryBackfillStatus.errors.push({ symbol, error: error?.message || String(error) });
+    errorJournal?.append?.('dhan:equity-history-backfill', error, { symbol, universe: requestedUniverse });
+   }
+   equityHistoryBackfillStatus.completed += 1;
+  }
+  equityHistoryBackfillStatus.running = false;
+  equityHistoryBackfillStatus.completedAt = Date.now();
+  equityHistoryBackfillStatus.currentSymbol = '';
+  equityHistoryBackfillStatus.currentChunk = 0;
+  equityHistoryBackfillStatus.currentChunks = 0;
+  return { ...equityHistoryBackfillStatus };
+ }
+
+ async function startEquityHistoryBackfill(message = {}) {
+  if (equityHistoryBackfillPromise) return { ok: true, started: false, status: { ...equityHistoryBackfillStatus } };
+  equityHistoryBackfillStatus = {
+   running: true,
+   cancelRequested: false,
+   startedAt: Date.now(),
+   completedAt: 0,
+   currentSymbol: 'Preparing universe',
+   currentChunk: 0,
+   currentChunks: 0,
+   completed: 0,
+   skipped: 0,
+   total: 0,
+   apiCalls: 0,
+   dailyRows: 0,
+   weeklyRows: 0,
+   errors: [],
+   universe: normalizeUniverseId(message.universe || 'fno_stocks'),
+  };
+  equityHistoryBackfillPromise = runEquityHistoryBackfill(message)
+   .catch(error => {
+    equityHistoryBackfillStatus.running = false;
+    equityHistoryBackfillStatus.completedAt = Date.now();
+    equityHistoryBackfillStatus.errors.push({ symbol: equityHistoryBackfillStatus.currentSymbol, error: error?.message || String(error) });
+   })
+   .finally(() => {
+    equityHistoryBackfillPromise = null;
+   });
+  return { ok: true, started: true, status: { ...equityHistoryBackfillStatus } };
+ }
+
+ function getEquityHistoryBackfillStatus() {
+  return { ok: true, status: { ...equityHistoryBackfillStatus } };
+ }
+
+ function cancelEquityHistoryBackfill() {
+  equityHistoryBackfillStatus.cancelRequested = true;
+  return { ok: true, status: { ...equityHistoryBackfillStatus } };
  }
 
  function liveFeedStatus(extra = {}) {
@@ -4931,6 +5145,9 @@ async function testConnection() {
    if (action === 'commodity_spread_history_backfill_start') return startCommoditySpreadBackfill(message);
    if (action === 'commodity_spread_history_backfill_status') return getCommoditySpreadBackfillStatus();
    if (action === 'commodity_spread_history_backfill_cancel') return cancelCommoditySpreadBackfill();
+   if (action === 'equity_history_backfill_start') return startEquityHistoryBackfill(message);
+   if (action === 'equity_history_backfill_status') return getEquityHistoryBackfillStatus();
+   if (action === 'equity_history_backfill_cancel') return cancelEquityHistoryBackfill();
    if (action === 'commodity_spread_expiry_catalog') return getCommoditySpreadExpiryCatalog(message);
    if (action === 'commodity_spread_quotes') return getCommoditySpreadQuotes(message);
    if (action === 'commodity_margin_preview') return getCommodityMarginPreview(message);

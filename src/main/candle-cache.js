@@ -2,8 +2,8 @@ const fs = require('fs/promises');
 const path = require('path');
 const { readJsonFile, writeJsonFile, removeFileIfExists, listJsonFiles } = require('./json-store');
 
-const MAX_CANDLE_FILES = 2500;
-const MAX_CANDLE_BYTES = 2 * 1024 * 1024 * 1024;
+const MAX_CANDLE_FILES = 12000;
+const MAX_CANDLE_BYTES = 4 * 1024 * 1024 * 1024;
 const NATIVE_CANDLE_RESOLUTIONS = new Set(['1d', '4h', '1w']);
 
 function candleCacheKey(symbol = '', resolution = '') {
@@ -99,7 +99,8 @@ function createCandleCache({ app, errorJournal } = {}) {
   }
  }
 
- async function put({ symbol, resolution, rows, updatedAt }, mode = 'merge') {
+ async function put(payload = {}, mode = 'merge') {
+  const { symbol, resolution, rows, updatedAt } = payload;
   if (!isNativeCandleResolution(resolution)) return { ok: false, error: 'Native candle-store supports only 1d, 4h and 1w candles.' };
   const filePath = filePathFor(symbol, resolution);
   if (!filePath) return { ok: false, error: 'Symbol and resolution are required.' };
@@ -112,6 +113,9 @@ function createCandleCache({ app, errorJournal } = {}) {
    resolution: String(resolution || '').trim().toLowerCase(),
    rows: merged,
    updatedAt: Math.max(Number(updatedAt || 0), Date.now()),
+   backfilledAt: Math.max(Number(payload.backfilledAt || 0), Number(current.backfilledAt || 0)),
+   coverageStart: Math.max(0, Number(payload.coverageStart || current.coverageStart || 0)),
+   coverageEnd: Math.max(0, Number(payload.coverageEnd || current.coverageEnd || 0)),
   };
   await writeJsonFile(filePath, record);
   await enforceLimits();
@@ -141,6 +145,9 @@ function createCandleCache({ app, errorJournal } = {}) {
    resolution: String(resolution || '').trim().toLowerCase(),
    rows,
    updatedAt: Number(record.updatedAt || 0),
+   backfilledAt: Number(record.backfilledAt || 0),
+   coverageStart: Number(record.coverageStart || 0),
+   coverageEnd: Number(record.coverageEnd || 0),
   };
  }
 

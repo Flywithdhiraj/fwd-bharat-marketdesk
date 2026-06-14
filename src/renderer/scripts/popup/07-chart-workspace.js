@@ -2344,6 +2344,13 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  }
  if (state.commoditySpread && symbol.startsWith('MCX-SPREAD:')) {
  const requirement = resolutionCoverageRequirement(state);
+ if (options.forceData === true && !requirement.startMs) {
+  requirement.count = timeframe === '1d'
+   ? MAX_DAILY_HISTORY_CANDLES
+   : timeframe === '1w'
+   ? MAX_WEEKLY_HISTORY_CANDLES
+   : MAX_4H_HISTORY_CANDLES;
+ }
  const bridge = globalThis.fwdDesktopNative;
  const response = bridge?.sendNativeMessage
  ? await bridge.sendNativeMessage({
@@ -4736,7 +4743,15 @@ function buildChartTabPicker(state = {}, options = {}) {
  const primaryIndex = primaryPayload.dataset?.syntheticIndex || executionPayload.dataset?.syntheticIndex;
  const restore = maximized ? `<button class="bsm active" type="button" data-ds-desk-restore="1">Restore Layout</button>` : '';
  const deskTitleBlock = '';
- const deskStatusBlock = '';
+ const deskDataset = isSingleChart ? primaryPayload.dataset : (executionPayload.dataset || primaryPayload.dataset);
+ const deskModel = isSingleChart ? primaryPayload.model : (executionPayload.model || primaryPayload.model);
+ const deskStatusText = !state.symbol
+ ? 'Choose a symbol to load the chart.'
+ : deskDataset?.ok
+ ? `${RESOLUTION_LABELS[normalizeTimeframe((isSingleChart ? primaryState : executionState).timeframe)]} | loaded ${deskModel?.totalCount || deskDataset?.candles?.length || 0} candles${deskDataset?.localOnly ? ' | local storage' : ''}`
+ : (deskDataset?.error || 'Chart data is unavailable.');
+ const deskStatusClass = deskDataset?.ok ? 'account-inline-note good' : 'account-inline-note bad';
+ const deskStatusBlock = `<div class="${deskStatusClass}" id="dsChartStatus">${escapeHtml(deskStatusText)}</div>`;
  const deskInstrumentBlock = '';
  const deskClass = [
  'ds-chart-desk',
@@ -4948,19 +4963,19 @@ function buildChartTabPicker(state = {}, options = {}) {
  }
 
 // Surface rendering, delegated controls, keyboard and storage listeners
- function queueSurfaceRender(surface = SURFACE_PREVIEW, force = false) {
+ function queueSurfaceRender(surface = SURFACE_PREVIEW, force = false, forceData = false) {
  const runRender = () => {
  if (surface === SURFACE_TAB) {
- tabRenderPromise = tabRenderPromise.then(() => renderSurface(SURFACE_TAB, force)).catch(() => {});
+ tabRenderPromise = tabRenderPromise.then(() => renderSurface(SURFACE_TAB, force, forceData)).catch(() => {});
  return tabRenderPromise;
  }
  if (surface === SURFACE_REVIEW) {
- reviewRenderPromise = reviewRenderPromise.then(() => renderSurface(SURFACE_REVIEW, force)).catch(() => {});
+ reviewRenderPromise = reviewRenderPromise.then(() => renderSurface(SURFACE_REVIEW, force, forceData)).catch(() => {});
  return reviewRenderPromise;
  }
  if (surface === SURFACE_DETACHED) {
  detachedRenderPromise = detachedRenderPromise
- .then(() => renderSurface(SURFACE_DETACHED, force))
+ .then(() => renderSurface(SURFACE_DETACHED, force, forceData))
  .catch(error => {
  const root = detachedSurface.root;
  if (root) {
@@ -4973,7 +4988,7 @@ function buildChartTabPicker(state = {}, options = {}) {
  });
  return detachedRenderPromise;
  }
- previewRenderPromise = previewRenderPromise.then(() => renderSurface(SURFACE_PREVIEW, force)).catch(() => {});
+ previewRenderPromise = previewRenderPromise.then(() => renderSurface(SURFACE_PREVIEW, force, forceData)).catch(() => {});
  return previewRenderPromise;
  };
  if (!force) {
@@ -5202,11 +5217,12 @@ function buildChartTabPicker(state = {}, options = {}) {
  }
  }
 
- async function renderSurface(surface = SURFACE_PREVIEW, force = false) {
+ async function renderSurface(surface = SURFACE_PREVIEW, force = false, forceData = false) {
  const surfaceRef = getSurfaceRef(surface);
  if (!surfaceRef.mounted || !surfaceRef.root || !document.body.contains(surfaceRef.root)) return;
  const strategy = await getStrategy();
  const state = await getChartState();
+ const directForceData = forceData === true;
  let orderContext = surface === SURFACE_PREVIEW && typeof previewSurface.getOrderContext === 'function'
  ? normalizeOrderContext(previewSurface.getOrderContext())
  : normalizeOrderContext(state.orderContext);
@@ -5225,12 +5241,12 @@ function buildChartTabPicker(state = {}, options = {}) {
  surfaceRef.refreshNonce = Number(state.refreshNonce || 0);
  const uiMode = String(state.uiMode || surfaceRef.uiMode || 'default').trim().toLowerCase() || 'default';
  if ((surface === SURFACE_TAB || surface === SURFACE_DETACHED) && uiMode !== 'journal') {
- await renderDeskSurface(surface, surfaceRef, state, strategy, orderContext, signalState, activeSignal, force || refreshChanged, refreshChanged);
+ await renderDeskSurface(surface, surfaceRef, state, strategy, orderContext, signalState, activeSignal, force || refreshChanged || directForceData, refreshChanged || directForceData);
  return;
  }
  const dataset = await loadChartDataset(state, strategy, {
- force: force || refreshChanged,
- forceData: refreshChanged,
+ force: force || refreshChanged || directForceData,
+ forceData: refreshChanged || directForceData,
  });
  const chartState = chartStateForDataset(state, dataset);
  const model = dataset?.ok ? buildChartModel(dataset, chartState, strategy, orderContext) : null;
@@ -6094,7 +6110,26 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  });
  root.querySelectorAll('[data-ds-chart-refresh]').forEach(button => {
  button.addEventListener('click', async () => {
- await updateChartState(surface, { refreshNonce: Date.now() }, { forceRender: true });
+ const surfaceRef = getSurfaceRef(surface);
+ if (button.disabled) return;
+ const symbol = String(state.symbol || '').trim().toUpperCase();
+ const timeframe = normalizeTimeframe(state.timeframe || '4h');
+ button.disabled = true;
+ button.classList.add('loading');
+ button.textContent = 'Downloading...';
+ const status = root.querySelector('#dsChartStatus');
+ if (status) {
+  status.className = 'ds-chart-status loading';
+  status.innerHTML = `<span>Downloading missing ${escapeHtml(timeframe.toUpperCase())} candles for ${escapeHtml(symbol)} from Dhan...</span><span class="ds-chart-download-progress" aria-hidden="true"><i></i></span>`;
+ }
+ try {
+  await queueSurfaceRender(surface, true, true);
+ } catch (error) {
+  button.disabled = false;
+  button.classList.remove('loading');
+  button.textContent = 'Refresh';
+  if (status) status.textContent = `Refresh failed: ${error?.message || 'candle download failed'}`;
+ }
  });
  });
  root.querySelectorAll('[data-ds-desk-tf]').forEach(select => {
