@@ -1,6 +1,6 @@
 {
   "name": "fwd-bharat-marketdesk-nse-bse",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": true,
   "author": "Dhiraj Jha",
   "description": "FWD Bharat MarketDesk read-only NSE/BSE market-data desktop shell.",

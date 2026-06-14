@@ -939,14 +939,8 @@ async function pullbackLoadSettings() {
    return false;
   }
   if (msg?.action === 'pullback:startScan') {
-   const context = globalThis.FWDTradeDeskScanContext?.getFresh?.();
-   const runner = context ? () => runPullbackScanFromContext(context) : (msg?.forceIndependent === true ? runPullbackScan : null);
-   if (!runner) {
-    pullbackSetStatus('Run main scan first - Pullback will derive from shared scan data', { active: false, progress: 0 })
-    .finally(() => sendResponse({ ok: false, error: 'Run main scan first' }));
-    return true;
-   }
-   runner()
+   globalThis.FWDTradeDeskScanContext?.getAvailable?.()
+   .then(context => context ? runPullbackScanFromContext(context) : (msg?.forceIndependent === true ? runPullbackScan() : Promise.reject(new Error('Run main scan first'))))
    .then(results => sendResponse({ ok: true, count: results.length }))
    .catch(async error => {
     await pullbackSetStatus(`Pullback scan failed - ${error?.message || error}`, { active: false, progress: 0 });

@@ -31,10 +31,19 @@ const checks = [
    && scan.includes('FWDTradeDeskScanContext?.finalize'),
  },
  {
-  name: 'context service stores only latest memory context plus metadata',
+  name: 'context service restores durable metadata and candles from local storage',
   pass: context.includes('let latestContext = null')
    && context.includes('lastMainScanContextMeta')
+   && context.includes("const DURABLE_CONTEXT_KEY = 'lastMainScanContextSnapshotV1'")
+   && context.includes('loadPersistentCandleCacheRecord(symbol, resolution)')
+   && context.includes('restoreDurable().catch(() => {})')
    && !context.includes('chrome.storage.local.set({ candles'),
+ },
+ {
+  name: 'completed scanner totals use the eligible candidate count',
+  pass: scan.includes('requested: deepTotal')
+   && scan.includes('totalStocks: deepTotal, scannedStocks: deepTotal')
+   && scan.includes('sourceCount: Number(universeMeta.count || products.length || 0)'),
  },
  {
   name: 'auto-scan derives lab scanners from shared context',
@@ -116,6 +125,16 @@ const checks = [
    && reversal.includes('forceIndependent === true')
    && darvas.includes('forceIndependent === true')
    && pullback.includes('forceIndependent === true'),
+},
+{
+ name: 'individual scanner actions restore durable local context',
+ pass: context.includes('async function getAvailable()')
+  && wizard.includes('FWDTradeDeskScanContext?.getAvailable?.()')
+  && stage.includes('FWDTradeDeskScanContext?.getAvailable?.()')
+  && radar.includes('FWDTradeDeskScanContext?.getAvailable?.()')
+  && reversal.includes('FWDTradeDeskScanContext?.getAvailable?.()')
+  && darvas.includes('FWDTradeDeskScanContext?.getAvailable?.()')
+  && pullback.includes('FWDTradeDeskScanContext?.getAvailable?.()'),
 },
 ];
 

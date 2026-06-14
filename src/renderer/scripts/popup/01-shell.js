@@ -610,7 +610,7 @@ function updateHeaderStats(results, alerts, scanned, total, universeMeta = null)
    `Scanned this run: ${actualScanned || 0}`,
    requested ? `Deep scan target: ${requested}` : '',
    meta.returned ? `Quote rows loaded: ${meta.returned}` : '',
-   available ? `Available symbols in selected universe: ${available}` : '',
+   Number(meta.sourceCount || 0) ? `Source rows before eligibility filters: ${Number(meta.sourceCount)}` : (available ? `Available symbols in selected universe: ${available}` : ''),
   ].filter(Boolean).join('\n');
  }
  }

@@ -919,14 +919,8 @@ async function stageLoadSettings() {
  return false;
  }
  if (msg?.action === 'stage:startScan') {
- const context = globalThis.FWDTradeDeskScanContext?.getFresh?.();
- const runner = context ? () => runStageScanFromContext(context) : (msg?.forceIndependent === true ? runStageScan : null);
- if (!runner) {
- stageSetStatus('Run main scan first - Stage will derive from shared scan data', { active: false, progress: 0 })
- .finally(() => sendResponse({ ok: false, error: 'Run main scan first' }));
- return true;
- }
- runner()
+ globalThis.FWDTradeDeskScanContext?.getAvailable?.()
+ .then(context => context ? runStageScanFromContext(context) : (msg?.forceIndependent === true ? runStageScan() : Promise.reject(new Error('Run main scan first'))))
  .then(results => sendResponse({ ok: true, count: results.length }))
  .catch(async error => {
  await stageSetStatus(`Stage scan failed - ${error?.message || error}`, { active: false, progress: 0 });

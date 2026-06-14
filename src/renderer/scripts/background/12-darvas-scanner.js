@@ -531,14 +531,8 @@ async function darvasLoadSettings() {
    return false;
   }
   if (msg?.action === 'darvas:startScan') {
-   const context = globalThis.FWDTradeDeskScanContext?.getFresh?.();
-   const runner = context ? () => runDarvasScanFromContext(context) : (msg?.forceIndependent === true ? runDarvasScan : null);
-   if (!runner) {
-    darvasSetStatus('Run main scan first - Darvas will derive from shared scan data', { active: false, progress: 0 })
-    .finally(() => sendResponse({ ok: false, error: 'Run main scan first' }));
-    return true;
-   }
-   runner()
+   globalThis.FWDTradeDeskScanContext?.getAvailable?.()
+   .then(context => context ? runDarvasScanFromContext(context) : (msg?.forceIndependent === true ? runDarvasScan() : Promise.reject(new Error('Run main scan first'))))
    .then(results => sendResponse({ ok: true, count: results.length }))
    .catch(async error => {
     await darvasSetStatus(`Darvas scan failed - ${error?.message || error}`, { active: false, progress: 0 });
