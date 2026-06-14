@@ -179,6 +179,23 @@ function createCandleCache({ app, errorJournal } = {}) {
   return { ok: true, supported: true, entries: names.length, latestUpdatedAt, oldestUpdatedAt, bytes, maxEntries: MAX_CANDLE_FILES, maxBytes: MAX_CANDLE_BYTES };
  }
 
+ async function list(options = {}) {
+  const resolutionFilter = String(options.resolution || '').trim().toLowerCase();
+  const records = await listRecords();
+  return {
+   ok: true,
+   records: records
+   .filter(record => !resolutionFilter || record.resolution === resolutionFilter)
+   .map(record => ({
+    symbol: record.symbol,
+    resolution: record.resolution,
+    rowCount: record.rows.length,
+    updatedAt: record.updatedAt,
+    last: record.rows[record.rows.length - 1] || null,
+   })),
+  };
+ }
+
  return {
   dir,
   normalizeRow,
@@ -188,6 +205,7 @@ function createCandleCache({ app, errorJournal } = {}) {
   put,
   get,
   clear,
+  list,
   stats,
   enforceLimits,
  };

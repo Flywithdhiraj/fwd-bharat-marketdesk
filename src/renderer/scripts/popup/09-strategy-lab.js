@@ -987,7 +987,7 @@ function labEarlyOpportunityRows(snapshot = strategyLabSnapshot) {
  ? `<button type="button" class="bsm ${strategyLabScannerNotificationsEnabled ? 'primary active' : 'secondary'} radar-notify-toggle" id="btnStrategyLabNotificationToggle" aria-pressed="${strategyLabScannerNotificationsEnabled ? 'true' : 'false'}" title="Turn Scanner Lab desktop notifications on or off"><span>${strategyLabScannerNotificationsEnabled ? 'Notifications On' : 'Notifications Off'}</span></button>`
  : '';
  if (activeStrategyLabId === 'early') {
- return `${masterSearchButton}${notificationToggle}<button type="button" class="bsm primary" id="btnRunAllStrategyScans">Run All Scanners</button><button type="button" class="bsm secondary" id="btnRefreshStrategyLab">Refresh</button>`;
+ return `${masterSearchButton}${notificationToggle}<button type="button" class="bsm primary" id="btnRunAllStrategyScans">Run From Saved Data</button><button type="button" class="bsm secondary" id="btnRefreshStrategyLab">Refresh</button>`;
  }
  return `${masterSearchButton}${notificationToggle}<button type="button" class="bsm primary" id="btnRunStrategyScan" data-run-strategy="${labEsc(strategy.id)}">Run ${labEsc(strategy.shortName || strategy.displayName || strategy.id)} Scan</button>
  <button type="button" class="bsm secondary" id="btnRefreshStrategyLab">Refresh</button>`;
@@ -3512,13 +3512,13 @@ function bindStrategyLab(root, rows) {
  root.querySelector('#btnRunAllStrategyScans')?.addEventListener('click', () => {
  const btn = root.querySelector('#btnRunAllStrategyScans');
  if (btn) {
- btn.disabled = true;
- btn.textContent = 'Main scan...';
+  btn.disabled = true;
+  btn.textContent = 'Reading local data...';
  }
  startStrategyLabPolling();
- chrome.runtime.sendMessage({ action: 'strategy-lab:runUnifiedScan' }, resp => {
+ chrome.runtime.sendMessage({ action: 'strategy-lab:deriveFromLatestScan', includeNative: false }, resp => {
   if (chrome.runtime.lastError || !resp?.ok) {
-   global.reportUiError?.('Unified scanner run failed', chrome.runtime.lastError || new Error(resp?.error || 'Unknown error'), { timeoutMs: 7000 });
+   global.reportUiError?.('Saved-data scanner run failed', chrome.runtime.lastError || new Error(resp?.error || 'Unknown error'), { timeoutMs: 7000 });
   }
   loadStrategyLab();
  });

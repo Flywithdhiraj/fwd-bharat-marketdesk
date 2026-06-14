@@ -115,6 +115,7 @@ function createIpcHandlers({
    if (type === 'candle_get') return candleCache.get(message.symbol, message.resolution);
    if (type === 'candle_put') return candleCache.put(message);
    if (type === 'candle_clear') return candleCache.clear(message.symbol, message.resolution);
+   if (type === 'candle_list') return candleCache.list(message);
    if (type === 'candle_stats') return candleCache.stats();
    return { ok: false, error: `Unsupported native message type: ${type || 'unknown'}` };
   } catch (error) {

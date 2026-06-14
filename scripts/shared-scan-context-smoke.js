@@ -7,10 +7,13 @@ const root = path.resolve(__dirname, '..');
 const read = relativePath => fs.readFileSync(path.join(root, relativePath), 'utf8');
 
 const background = read('src/renderer/desktop-background.html');
+const infra = read('src/renderer/scripts/background/00-infra.js');
 const context = read('src/renderer/scripts/background/02-scan-context.js');
 const scan = read('src/renderer/scripts/background/02-scan.js');
 const runtime = read('src/renderer/scripts/background/04-runtime.js');
 const lab = read('src/renderer/scripts/popup/09-strategy-lab.js');
+const candleCache = read('src/main/candle-cache.js');
+const ipcHandlers = read('src/main/ipc-handlers.js');
 const wizard = read('src/renderer/scripts/background/08-wizard-scanner.js');
 const stage = read('src/renderer/scripts/background/09-stage-scanner.js');
 const radar = read('src/renderer/scripts/background/10-radar-scanner.js');
@@ -35,9 +38,25 @@ const checks = [
   pass: context.includes('let latestContext = null')
    && context.includes('lastMainScanContextMeta')
    && context.includes("const DURABLE_CONTEXT_KEY = 'lastMainScanContextSnapshotV1'")
+   && context.includes("const COMPLETED_CONTEXT_KEY = 'lastCompletedMainScanContextSnapshotV1'")
    && context.includes('loadPersistentCandleCacheRecord(symbol, resolution)')
    && context.includes('restoreDurable().catch(() => {})')
    && !context.includes('chrome.storage.local.set({ candles'),
+ },
+ {
+  name: 'local candle cache can enumerate saved symbols for context repair',
+  pass: candleCache.includes('async function list(options = {})')
+   && ipcHandlers.includes("type === 'candle_list'")
+   && infra.includes('async function v17ListPersistentCandleCache')
+   && infra.includes('globalThis.v17ListPersistentCandleCache = v17ListPersistentCandleCache'),
+ },
+ {
+  name: 'incomplete contexts rebuild scanner inputs from saved candles',
+  pass: context.includes('hydrateContextFromLocalCandles')
+   && context.includes("v17ListPersistentCandleCache('1d')")
+   && context.includes('bestAvailableContext()')
+   && context.includes('context.tickerMap[symbol] =')
+   && context.includes('Promise.all(symbols.slice(index, index + batchSize).map(hydrateSymbol))'),
  },
  {
   name: 'completed scanner totals use the eligible candidate count',
@@ -98,8 +117,9 @@ const checks = [
    && runtime.includes("globalThis.scanAbortReason = 'deadline'"),
  },
  {
-  name: 'strategy lab Run All uses unified main scan action',
-  pass: lab.includes("action: 'strategy-lab:runUnifiedScan'")
+  name: 'strategy lab Run All derives only from saved local data',
+  pass: lab.includes("action: 'strategy-lab:deriveFromLatestScan'")
+   && lab.includes('Run From Saved Data')
    && !lab.includes('index * 450'),
  },
  {

@@ -4,7 +4,9 @@
  const DEFAULT_TTL_MS = 8 * 60 * 1000;
  const BUFFER_MS = 90 * 1000;
  const DURABLE_CONTEXT_KEY = 'lastMainScanContextSnapshotV1';
+ const COMPLETED_CONTEXT_KEY = 'lastCompletedMainScanContextSnapshotV1';
  let latestContext = null;
+ let completedContext = null;
  let restorePromise = null;
  let deriveQueue = Promise.resolve();
  let latestDeriveRequest = null;
@@ -156,6 +158,12 @@
   try {
    await chrome.storage.local.set({ [DURABLE_CONTEXT_KEY]: buildDurableSnapshot(context) });
   } catch (_) {}
+  if (!context.partial) {
+   completedContext = context;
+   try {
+    await chrome.storage.local.set({ [COMPLETED_CONTEXT_KEY]: buildDurableSnapshot(context) });
+   } catch (_) {}
+  }
   return context;
  }
 
@@ -169,32 +177,103 @@
   return latestContext;
  }
 
+ function contextCoverage(context) {
+  return Number(context?.scannedRows || context?.candidateRows || context?.candles?.size || 0);
+ }
+
+ function bestAvailableContext() {
+  if (!latestContext) return completedContext;
+  if (!completedContext) return latestContext;
+  if (latestContext.partial && contextCoverage(completedContext) >= contextCoverage(latestContext)) return completedContext;
+  return contextCoverage(completedContext) > contextCoverage(latestContext) ? completedContext : latestContext;
+ }
+
+ function isCanonicalCandleSymbol(symbol = '') {
+  return !/^(?:NSE|BSE|IDX|MCX)_[A-Z]+_\d+_/i.test(String(symbol || ''));
+ }
+
+ async function hydrateContextFromLocalCandles(context) {
+  if (!context) return null;
+  let symbols = Array.from(new Set([
+   ...Object.keys(context.tickerMap || {}),
+   ...(Array.isArray(context.products) ? context.products.map(item => item?.symbol) : []),
+   ...(context.candles instanceof Map ? Array.from(context.candles.keys()) : []),
+  ].map(normalizeSymbol).filter(Boolean)));
+  if (symbols.length < Math.max(20, Number(context.candidateRows || 0) * 0.5) && typeof global.v17ListPersistentCandleCache === 'function') {
+   const records = await global.v17ListPersistentCandleCache('1d').catch(() => []);
+   symbols = Array.from(new Set([
+    ...symbols,
+    ...records.filter(record => isCanonicalCandleSymbol(record?.symbol)).map(record => normalizeSymbol(record.symbol)),
+   ]));
+  }
+  const hydrateSymbol = async symbol => {
+   let daily = getCandles(context, symbol, '1d');
+   let intraday = getCandles(context, symbol, '4h');
+   if (!daily.length) {
+    const record = await loadPersistentCandleCacheRecord(symbol, '1d').catch(() => null);
+    daily = record?.rows || [];
+    recordCandles(context, symbol, '1d', daily);
+   }
+   if (!intraday.length) {
+    const record = await loadPersistentCandleCacheRecord(symbol, '4h').catch(() => null);
+    intraday = record?.rows || [];
+    recordCandles(context, symbol, '4h', intraday);
+   }
+   const last = daily[daily.length - 1] || intraday[intraday.length - 1];
+   if (!last || context.tickerMap[symbol]) return;
+   context.tickerMap[symbol] = {
+    symbol,
+    price: Number(last.close || 0),
+    usdVol24h: Number(last.volume || 0) * Number(last.close || 0),
+    volume: Number(last.volume || 0),
+   };
+  };
+  const batchSize = 24;
+  for (let index = 0; index < symbols.length; index += batchSize) {
+   await Promise.all(symbols.slice(index, index + batchSize).map(hydrateSymbol));
+  }
+  const productSymbols = new Set((context.products || []).map(item => normalizeSymbol(item?.symbol)));
+  symbols.forEach(symbol => {
+   if (context.tickerMap[symbol] && !productSymbols.has(symbol)) {
+    context.products.push({ symbol, name: symbol, description: symbol });
+    productSymbols.add(symbol);
+   }
+  });
+  return context;
+ }
+
  async function restoreDurable() {
-  if (latestContext) return latestContext;
+  if (latestContext || completedContext) return bestAvailableContext();
   if (restorePromise) return restorePromise;
   restorePromise = new Promise(resolve => {
    try {
-    chrome.storage.local.get([DURABLE_CONTEXT_KEY], async data => {
+    chrome.storage.local.get([DURABLE_CONTEXT_KEY, COMPLETED_CONTEXT_KEY], async data => {
      const snapshot = data?.[DURABLE_CONTEXT_KEY];
-     if (!snapshot?.scanId) {
+     const completedSnapshot = data?.[COMPLETED_CONTEXT_KEY];
+     if (!snapshot?.scanId && !completedSnapshot?.scanId) {
       resolve(null);
       return;
      }
-     const context = create({ ...snapshot, durable: true });
-     context.finishedAt = Number(snapshot.finishedAt || 0);
-     context.expiresAt = Number(snapshot.expiresAt || 0);
-     const symbols = Array.isArray(snapshot.candleSymbols) ? snapshot.candleSymbols : [];
-     for (const symbol of symbols) {
-      for (const resolution of ['1d', '4h']) {
-       try {
-        const record = await loadPersistentCandleCacheRecord(symbol, resolution);
-        recordCandles(context, symbol, resolution, record?.rows || []);
-       } catch (_) {}
+     const restoreSnapshot = async source => {
+      if (!source?.scanId) return null;
+      const context = create({ ...source, durable: true });
+      context.finishedAt = Number(source.finishedAt || 0);
+      context.expiresAt = Number(source.expiresAt || 0);
+      const symbols = Array.isArray(source.candleSymbols) ? source.candleSymbols : [];
+      for (const symbol of symbols) {
+       for (const resolution of ['1d', '4h']) {
+        try {
+         const record = await loadPersistentCandleCacheRecord(symbol, resolution);
+         recordCandles(context, symbol, resolution, record?.rows || []);
+        } catch (_) {}
+       }
       }
-     }
-     context.stale = Number(context.expiresAt || 0) <= now();
-     latestContext = context;
-     resolve(context);
+      context.stale = Number(context.expiresAt || 0) <= now();
+      return hydrateContextFromLocalCandles(context);
+     };
+     latestContext = await restoreSnapshot(snapshot);
+     completedContext = await restoreSnapshot(completedSnapshot);
+     resolve(bestAvailableContext());
     });
    } catch (_) {
     resolve(null);
@@ -206,7 +285,8 @@
  }
 
  async function getAvailable() {
-  return getFresh() || await restoreDurable();
+  const context = bestAvailableContext() || await restoreDurable();
+  return hydrateContextFromLocalCandles(context);
  }
 
  async function setUnifiedStatus(status, extra = {}) {
@@ -362,7 +442,7 @@
  }
 
  async function deriveAll(options = {}) {
-  const available = getFresh() || await restoreDurable();
+  const available = await getAvailable();
   if (!available) {
    await setUnifiedStatus('Run main scan first - no saved scanner context', { active: false, ok: false });
    return { ok: false, error: 'No saved scanner context' };
