@@ -65,6 +65,12 @@ npm run dist
 4. Dhan credentials are stored through Electron `safeStorage` when available.
 5. All broker execution remains outside the app; trade tickets and chart levels are planning aids only.
 
+## Candle Storage And Laptop Migration
+
+Daily, 4-hour, and weekly candles are stored in the native `candle-store` for every supported stock or instrument requested through the shared Dhan candle service. After the first backfill, later scans request only the missing tail with a small overlap and merge it into local history by timestamp.
+
+Before changing laptops, open Settings and use **Export Laptop Backup**. The backup includes settings, Strategy Lab data, journals, and native candle files. On the new laptop, use **Restore on New Laptop**, restart the app, and enter API credentials again because encrypted credentials are intentionally machine-specific.
+
 ## Remaining External Work
 
 - Save fresh DhanHQ credentials and test live REST/option-chain/WebSocket responses during market hours.

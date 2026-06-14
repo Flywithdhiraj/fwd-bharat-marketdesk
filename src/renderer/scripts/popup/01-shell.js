@@ -1819,6 +1819,24 @@ document.querySelectorAll('.workspace-group').forEach(btn => {
  });
 });
 
+document.getElementById('btnAppRailToggle')?.addEventListener('click', event => {
+ const collapsed = document.body.classList.toggle('app-rail-collapsed');
+ event.currentTarget.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+ event.currentTarget.setAttribute('aria-label', collapsed ? 'Expand navigation' : 'Collapse navigation');
+ try {
+  localStorage.setItem('fwd-app-rail-collapsed', collapsed ? '1' : '0');
+ } catch (_) {}
+});
+
+try {
+ if (localStorage.getItem('fwd-app-rail-collapsed') === '1') {
+  document.body.classList.add('app-rail-collapsed');
+  const railToggle = document.getElementById('btnAppRailToggle');
+  railToggle?.setAttribute('aria-expanded', 'false');
+  railToggle?.setAttribute('aria-label', 'Expand navigation');
+ }
+} catch (_) {}
+
 document.getElementById('btnScan')?.addEventListener('click', startManualScan);
 document.getElementById('btnAutoScan')?.addEventListener('click', () => {
  toggleAutoScanFromHeader().catch(error => {

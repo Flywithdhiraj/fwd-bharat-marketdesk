@@ -100,6 +100,7 @@
   globalThis.FWDDesktopRuntime?.stop?.();
  }
  renderStatus();
+ document.body.classList.remove('app-auth-pending');
  }
 
  function renderQr(dataUrl) {

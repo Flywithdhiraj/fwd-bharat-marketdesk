@@ -11,6 +11,7 @@ const {
  sanitizeCommoditySpreadRows,
  isDegenerateCommoditySpread,
  commoditySpreadSnapshotValidity,
+ filterMatchedCommodityRows,
 } = __private;
 
 function rowsFromCloses(closes = [], start = 1700000000, step = 86400) {
@@ -58,6 +59,57 @@ const pair = {
  firstInstrument: { expiry: '2026-12-31', securityId: '1', tradingSymbol: 'GOLD-DEC', lotSize: 1 },
  secondInstrument: { expiry: '2027-02-28', securityId: '2', tradingSymbol: 'GOLD-FEB', lotSize: 1 },
 };
+
+{
+ const matchedPair = {
+  type: 'matched',
+  firstInstrument: { expiry: '2026-11-30', securityId: 'mini' },
+  secondInstrument: { expiry: '2026-11-30', securityId: 'micro' },
+ };
+ const first = rowsFromCloses(Array.from({ length: 30 }, (_, index) => 250000 + index * 20));
+ const second = rowsFromCloses(Array.from({ length: 30 }, (_, index) => 250500 + index * 20));
+ const filtered = filterMatchedCommodityRows(matchedPair, first, second, '1d');
+ assert.strictEqual(filtered.quality.valid, true);
+ assert.strictEqual(filtered.quality.retainedBars, 30);
+ assert.strictEqual(filtered.quality.excludedBars, 0);
+ console.log('PASS comparable same-expiry full/mini history is retained');
+}
+
+{
+ const matchedPair = {
+  type: 'matched',
+  firstInstrument: { expiry: '2026-11-30', securityId: 'mini' },
+  secondInstrument: { expiry: '2026-11-30', securityId: 'micro' },
+ };
+ const first = rowsFromCloses([
+  ...Array.from({ length: 30 }, (_, index) => 150000 + index * 50),
+  ...Array.from({ length: 25 }, (_, index) => 260000 + index * 20),
+ ]);
+ const second = rowsFromCloses([
+  ...Array.from({ length: 30 }, (_, index) => 350000 + index * 50),
+  ...Array.from({ length: 25 }, (_, index) => 261000 + index * 20),
+ ]);
+ const filtered = filterMatchedCommodityRows(matchedPair, first, second, '1d');
+ assert.strictEqual(filtered.quality.valid, true);
+ assert.strictEqual(filtered.quality.retainedBars, 25);
+ assert.strictEqual(filtered.quality.excludedBars, 30);
+ assert(filtered.quality.maximumRelativeGapPct <= 3);
+ console.log('PASS mismatched rolling history is removed before plotting a size-matched spread');
+}
+
+{
+ const matchedPair = {
+  type: 'matched',
+  firstInstrument: { expiry: '2026-11-30', securityId: 'mini' },
+  secondInstrument: { expiry: '2026-11-30', securityId: 'micro' },
+ };
+ const first = rowsFromCloses(Array.from({ length: 25 }, (_, index) => 100000 + index));
+ const second = rowsFromCloses(Array.from({ length: 25 }, (_, index) => 200000 + index));
+ const filtered = filterMatchedCommodityRows(matchedPair, first, second, '1d');
+ assert.strictEqual(filtered.quality.valid, false);
+ assert.strictEqual(filtered.quality.retainedBars, 0);
+ console.log('PASS wholly incompatible matched histories are rejected');
+}
 
 {
  const repaired = repairCommoditySpreadGlitches([

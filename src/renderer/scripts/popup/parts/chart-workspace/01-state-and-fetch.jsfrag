@@ -59,6 +59,8 @@
  });
  const MAX_RENDER_CANDLES = 20000;
  const MAX_4H_HISTORY_CANDLES = 3000;
+ const MAX_DAILY_HISTORY_CANDLES = 3650;
+ const MAX_WEEKLY_HISTORY_CANDLES = 1040;
  const DEFAULT_OBV_SMA_LENGTH = 100;
  const FETCH_BUFFER_COUNTS = Object.freeze({
  '1h': 180,
@@ -1017,8 +1019,10 @@ function defaultVisibleCount(resolution = '4h') {
  showReadout: false,
  showIndicatorLegend: true,
  showGrid: false,
- compareWithIndex: true,
+ compareWithIndex: false,
  commoditySpread: null,
+ showSpreadLegs: true,
+ showSpreadExpiries: true,
  hideEventCandles: true,
  darvasSettings: sanitizeDarvasBoxSettings({}, '4h'),
  chartReviewTabs: [],
@@ -1085,6 +1089,8 @@ function defaultVisibleCount(resolution = '4h') {
  showGrid: Object.prototype.hasOwnProperty.call(raw, 'showGrid') ? raw.showGrid === true : base.showGrid === true,
  compareWithIndex: Object.prototype.hasOwnProperty.call(raw, 'compareWithIndex') ? raw.compareWithIndex !== false : base.compareWithIndex !== false,
  commoditySpread: raw.commoditySpread && typeof raw.commoditySpread === 'object' ? raw.commoditySpread : null,
+ showSpreadLegs: Object.prototype.hasOwnProperty.call(raw, 'showSpreadLegs') ? raw.showSpreadLegs !== false : base.showSpreadLegs !== false,
+ showSpreadExpiries: Object.prototype.hasOwnProperty.call(raw, 'showSpreadExpiries') ? raw.showSpreadExpiries !== false : base.showSpreadExpiries !== false,
  hideEventCandles: Object.prototype.hasOwnProperty.call(raw, 'hideEventCandles') ? raw.hideEventCandles === true : base.hideEventCandles === true,
  darvasSettings: sanitizeDarvasBoxSettings(raw.darvasSettings || base.darvasSettings, timeframe),
  chartReviewTabs: sanitizeChartReviewTabs(raw.chartReviewTabs || base.chartReviewTabs),

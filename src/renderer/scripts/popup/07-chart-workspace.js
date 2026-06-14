@@ -61,6 +61,8 @@
  });
  const MAX_RENDER_CANDLES = 20000;
  const MAX_4H_HISTORY_CANDLES = 3000;
+ const MAX_DAILY_HISTORY_CANDLES = 3650;
+ const MAX_WEEKLY_HISTORY_CANDLES = 1040;
  const DEFAULT_OBV_SMA_LENGTH = 100;
  const FETCH_BUFFER_COUNTS = Object.freeze({
  '1h': 180,
@@ -1019,8 +1021,10 @@ function defaultVisibleCount(resolution = '4h') {
  showReadout: false,
  showIndicatorLegend: true,
  showGrid: false,
- compareWithIndex: true,
+ compareWithIndex: false,
  commoditySpread: null,
+ showSpreadLegs: true,
+ showSpreadExpiries: true,
  hideEventCandles: true,
  darvasSettings: sanitizeDarvasBoxSettings({}, '4h'),
  chartReviewTabs: [],
@@ -1087,6 +1091,8 @@ function defaultVisibleCount(resolution = '4h') {
  showGrid: Object.prototype.hasOwnProperty.call(raw, 'showGrid') ? raw.showGrid === true : base.showGrid === true,
  compareWithIndex: Object.prototype.hasOwnProperty.call(raw, 'compareWithIndex') ? raw.compareWithIndex !== false : base.compareWithIndex !== false,
  commoditySpread: raw.commoditySpread && typeof raw.commoditySpread === 'object' ? raw.commoditySpread : null,
+ showSpreadLegs: Object.prototype.hasOwnProperty.call(raw, 'showSpreadLegs') ? raw.showSpreadLegs !== false : base.showSpreadLegs !== false,
+ showSpreadExpiries: Object.prototype.hasOwnProperty.call(raw, 'showSpreadExpiries') ? raw.showSpreadExpiries !== false : base.showSpreadExpiries !== false,
  hideEventCandles: Object.prototype.hasOwnProperty.call(raw, 'hideEventCandles') ? raw.hideEventCandles === true : base.hideEventCandles === true,
  darvasSettings: sanitizeDarvasBoxSettings(raw.darvasSettings || base.darvasSettings, timeframe),
  chartReviewTabs: sanitizeChartReviewTabs(raw.chartReviewTabs || base.chartReviewTabs),
@@ -1245,6 +1251,7 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  contextTab: current.contextTab || 'watchlist',
  watchlistTab: current.watchlistTab || '1',
  overlayDensity: options.overlayDensity || current.overlayDensity || 'minimal',
+ compareWithIndex: hasOption('compareWithIndex') ? options.compareWithIndex === true : false,
  panelWidths: current.panelWidths || { ...DEFAULT_PANEL_WIDTHS },
  collapsedPanels: current.collapsedPanels || {},
  maximizedPanel: null,
@@ -1453,13 +1460,19 @@ function signalTimeframe(signal = {}, fallback = '4h') {
 
  function resolutionCoverageRequirement(state = {}) {
  const timeframe = normalizeTimeframe(state.timeframe);
- const maxHistoryCount = timeframe === '4h' ? MAX_4H_HISTORY_CANDLES : MAX_RENDER_CANDLES;
+ const maxHistoryCount = timeframe === '4h'
+ ? MAX_4H_HISTORY_CANDLES
+ : timeframe === '1d'
+ ? MAX_DAILY_HISTORY_CANDLES
+ : timeframe === '1w'
+ ? MAX_WEEKLY_HISTORY_CANDLES
+ : MAX_RENDER_CANDLES;
  const baseVisible = state.replaySeed?.baselineVisibleCount || defaultVisibleCount(timeframe);
  const visible = Math.max(baseVisible, Math.round(Number(state.visibleCandleCount || baseVisible) || baseVisible));
  const paddedCount = Math.min(maxHistoryCount, Math.max(80, visible + (FETCH_BUFFER_COUNTS[timeframe] || 80)));
  if (!state.replaySeed) {
  return {
- count: maxHistoryCount,
+ count: paddedCount,
  startMs: 0,
  endMs: 0,
  };
@@ -2369,6 +2382,8 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  spreadAnalysis: response.decision || response.analysis || null,
  spreadDecision: response.decision || null,
  spreadBands: response.bands || null,
+ spreadLegSeries: response.legSeries || { near: [], far: [] },
+ spreadNearestExpiryEvents: response.nearestExpiryEvents || [],
  spreadRollEvents: response.rollEvents || [],
  spreadCoverage: response.coverage || null,
  spreadSourceQuality: response.sourceQuality || null,
@@ -2380,6 +2395,7 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  spreadContractDetails: response.contractDetails || null,
  spreadDataQuality: response.dataQuality || null,
  spreadSnapshot: response.snapshot || null,
+ spreadPnlModel: response.pnlModel || null,
  chartType: response.chartType || (timeframe === '1d' ? 'line' : 'candles'),
  };
  }
@@ -3831,18 +3847,24 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  const execution = dataset.spreadExecution || {};
  const snapshot = dataset.spreadSnapshot || {};
  const quality = dataset.spreadDataQuality || decision.dataQuality || {};
+ const pnlModel = dataset.spreadPnlModel || {};
  const plan = decision.tradePlan || null;
  const blockers = Array.isArray(decision.blockers) ? decision.blockers : [];
  const action = String(decision.action || 'WAIT');
  const tone = action === 'BUY_SPREAD' ? 'buy' : action === 'SELL_SPREAD' ? 'sell' : 'wait';
  const near = contracts.near || {};
  const far = contracts.far || {};
+ const legCheck = quality.legPriceValidation || {};
+ const matchedQuality = quality.matchedHistory?.daily || quality.source?.matchedHistory?.daily || null;
+ const matched = contracts.pairType === 'matched';
+ const firstLabel = matched ? `First leg (${near.lots || 1} lot${Number(near.lots || 1) === 1 ? '' : 's'})` : 'Near contract';
+ const secondLabel = matched ? `Second leg (${far.lots || 1} lot${Number(far.lots || 1) === 1 ? '' : 's'})` : 'Far contract';
  const leg = item => item
   ? `<div class="${String(item.transactionType || '').toLowerCase()}"><span>${escapeHtml(item.transactionType || '')}</span><strong>${escapeHtml(item.tradingSymbol || '')}</strong><em>${escapeHtml(item.expiry || '')} | Qty ${escapeHtml(String(item.quantity || 0))} @ ${escapeHtml(formatPrice(item.executablePrice))}</em></div>`
   : '';
  return `<details class="ds-spread-trade-panel ${escapeHtml(tone)}">
  <summary>
- <span>Calendar Spread</span>
+ <span>${matched ? 'Size-matched Spread' : 'Calendar Spread'}</span>
  <strong>${escapeHtml(action.replace('_', ' '))}</strong>
  <em>${escapeHtml(contracts.formula || 'Far - Near')}</em>
  <b>Entry ${escapeHtml(formatPrice(decision.entry))} | Target ${escapeHtml(formatPrice(decision.target))} | Stop ${escapeHtml(formatPrice(decision.stop))}</b>
@@ -3854,8 +3876,8 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  <b>${escapeHtml(String(decision.confidence || 'low').toUpperCase())} ${escapeHtml(String(decision.confidenceScore || 0))}/100</b>
  </header>
  <div class="ds-spread-contract-line">
- <div><span>Near contract</span><strong>${escapeHtml(near.tradingSymbol || '')}</strong><em>${escapeHtml(near.expiry || '')}</em></div>
- <div><span>Far contract</span><strong>${escapeHtml(far.tradingSymbol || '')}</strong><em>${escapeHtml(far.expiry || '')}</em></div>
+ <div><span>${escapeHtml(firstLabel)}</span><strong>${escapeHtml(near.tradingSymbol || '')}</strong><em>${escapeHtml(near.expiry || '')}</em></div>
+ <div><span>${escapeHtml(secondLabel)}</span><strong>${escapeHtml(far.tradingSymbol || '')}</strong><em>${escapeHtml(far.expiry || '')}</em></div>
  <div><span>Formula</span><strong>${escapeHtml(contracts.formula || execution.formula || 'Far - Near')}</strong><em>Executable from both legs' bid/ask depth</em></div>
  </div>
  <div class="ds-spread-metrics">
@@ -3865,11 +3887,15 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  <div><span>Entry / target / stop</span><strong>${escapeHtml(formatPrice(decision.entry))} / ${escapeHtml(formatPrice(decision.target))} / ${escapeHtml(formatPrice(decision.stop))}</strong></div>
  <div><span>Risk/reward</span><strong>${escapeHtml(formatPrice(decision.rewardRisk))}x | Risk Rs ${escapeHtml(formatPrice(decision.maximumRiskPnl))}</strong></div>
  <div><span>Costs</span><strong>Brokerage Rs ${escapeHtml(formatPrice(decision.brokerageAndGst))} | Slip ${escapeHtml(formatPrice(decision.slippagePoints))} pts</strong></div>
+ <div><span>How this trade earns</span><strong>${escapeHtml(decision.action === 'SELL_SPREAD' ? pnlModel.sellSpreadProfitRule : pnlModel.buySpreadProfitRule || 'Profit comes from the change in the two-leg spread after costs.')}</strong></div>
+ <div><span>Spread point value</span><strong>Rs ${escapeHtml(formatPrice(pnlModel.valuePerSpreadPoint))} per point | ${escapeHtml(String(pnlModel.firstLots || 1))}:${escapeHtml(String(pnlModel.secondLots || 1))} lots${pnlModel.sameExpiry ? ' | same expiry' : ''}</strong></div>
  </div>
  <div class="ds-spread-liquidity">
  <span>Near Vol/OI <strong>${escapeHtml(String(snapshot.firstVolume || 0))} / ${escapeHtml(String(snapshot.firstOi || 0))}</strong></span>
  <span>Far Vol/OI <strong>${escapeHtml(String(snapshot.secondVolume || 0))} / ${escapeHtml(String(snapshot.secondOi || 0))}</strong></span>
  <span>Data <strong>${escapeHtml(String(quality.freshness || 'unverified'))}; ${escapeHtml(String(quality.badTicks || 0))} bad ticks, ${escapeHtml(String(quality.rollDiscontinuities || 0))} roll breaks excluded</strong></span>
+ <span>Price check <strong>${legCheck.valid ? 'PASS' : 'CHECK'}; ${escapeHtml(String(legCheck.checked || 0))} matched bars, max error ${escapeHtml(formatPrice(legCheck.maxAbsoluteError))}</strong></span>
+ ${matchedQuality ? `<span>Matched history <strong>${matchedQuality.valid ? 'PASS' : 'LIMITED'}; ${escapeHtml(String(matchedQuality.retainedBars || 0))} retained, ${escapeHtml(String(matchedQuality.excludedBars || 0))} incompatible bars excluded</strong></span>` : ''}
  </div>
  ${plan ? `<div class="ds-spread-exact-plan"><span>Trade Plan</span>${leg(plan.first)}${leg(plan.second)}</div>` : `<div class="ds-spread-wait"><strong>No trade plan while data or setup gates fail.</strong>${blockers.slice(0, 4).map(reason => `<span>${escapeHtml(reason)}</span>`).join('')}</div>`}
  </div>
@@ -4550,6 +4576,13 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  const gridOn = state.showGrid === true;
  const hideEventsOn = state.hideEventCandles === true;
  const ordersOn = state.showOrders === true;
+ const spreadControls = state.commoditySpread
+ ? `<div class="ds-chart-settings-section">
+ <div class="ds-chart-settings-title">Spread Display</div>
+ <button class="bsm ${state.showSpreadLegs !== false ? 'active' : ''}" type="button" data-ds-chart-setting-toggle="showSpreadLegs">Near + Far Legs</button>
+ <button class="bsm ${state.showSpreadExpiries !== false ? 'active' : ''}" type="button" data-ds-chart-setting-toggle="showSpreadExpiries">Front Expiry + Price</button>
+ </div>`
+ : '';
  return `<details class="ds-chart-settings-menu">
  <summary class="bsm">Settings</summary>
  <div class="ds-chart-settings-panel">
@@ -4577,6 +4610,7 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  <button class="bsm ${gridOn ? 'active' : ''}" type="button" data-ds-chart-setting-toggle="showGrid">Grid Lines</button>
  <button class="bsm ${hideEventsOn ? 'active' : ''}" type="button" data-ds-chart-setting-toggle="hideEventCandles">Hide Event Candles</button>
  </div>
+ ${spreadControls}
  </div>
  </details>`;
  }
@@ -4921,7 +4955,18 @@ function buildChartTabPicker(state = {}, options = {}) {
  return reviewRenderPromise;
  }
  if (surface === SURFACE_DETACHED) {
- detachedRenderPromise = detachedRenderPromise.then(() => renderSurface(SURFACE_DETACHED, force)).catch(() => {});
+ detachedRenderPromise = detachedRenderPromise
+ .then(() => renderSurface(SURFACE_DETACHED, force))
+ .catch(error => {
+ const root = detachedSurface.root;
+ if (root) {
+ root.innerHTML = `<section class="chart-pane-loading chart-load-error" role="alert">
+ <div class="chart-pane-loading-title">Chart could not open</div>
+ <div class="chart-pane-loading-copy">${escapeHtml(error?.message || 'The detached chart failed while loading local data.')}</div>
+ </section>`;
+ }
+ console.error('[FWD chart] Detached render failed', error);
+ });
  return detachedRenderPromise;
  }
  previewRenderPromise = previewRenderPromise.then(() => renderSurface(SURFACE_PREVIEW, force)).catch(() => {});
@@ -5070,7 +5115,7 @@ function buildChartTabPicker(state = {}, options = {}) {
  presetMeta,
  })
  : null;
- const shouldLoadIndexContext = dataset?.ok && !dataset?.syntheticIndex && state.compareWithIndex !== false;
+ const shouldLoadIndexContext = dataset?.ok && !dataset?.syntheticIndex && !dataset?.commoditySpread && state.compareWithIndex !== false;
  const indexDataset = shouldLoadIndexContext
  ? await loadFwdIndexChartDataset({ symbol: FWD_INDEX_SYMBOL, timeframe: '1d' }, strategy).catch(() => null)
  : null;
@@ -5100,6 +5145,8 @@ function buildChartTabPicker(state = {}, options = {}) {
  const executionPayload = fastSingle
  ? { state: executionState, dataset: null, model: null, indicators: {}, intelligence: null }
  : await buildChartPayload(`${surface}-execution`, executionState, strategy, orderContext, activeSignal, signalState?.marketIndex || null, force, forceData);
+ const renderRoot = surfaceRef.root;
+ if (!surfaceRef.mounted || !renderRoot || !document.body.contains(renderRoot)) return;
  const scanResults = Array.isArray(signalState?.scanResults) ? signalState.scanResults : [];
  const contextData = {
  scanResults,
@@ -5110,7 +5157,7 @@ function buildChartTabPicker(state = {}, options = {}) {
  const markup = buildDeskMarkup(surface, state, strategy, primaryPayload, executionPayload, activeSignal, signalState?.marketIndex || null, contextData);
  if (!force && markup === surfaceRef.lastMarkup) return;
  surfaceRef.lastMarkup = markup;
- surfaceRef.root.innerHTML = markup;
+ renderRoot.innerHTML = markup;
  bindSurfaceControls(surface, state, executionPayload.model || primaryPayload.model);
  const renderCharts = () => {
  const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
@@ -5120,7 +5167,8 @@ function buildChartTabPicker(state = {}, options = {}) {
  ];
  for (const item of chartItems) {
  const chartId = `${surface}-${item.key}`;
- const chartContainer = surfaceRef.root.querySelector(`[data-ds-lwc-chart="${chartId}"]`);
+ if (!surfaceRef.mounted || surfaceRef.root !== renderRoot || !document.body.contains(renderRoot)) return;
+ const chartContainer = renderRoot.querySelector(`[data-ds-lwc-chart="${chartId}"]`);
  if (chartContainer && item.payload.model && item.payload.dataset?.ok && globalThis.FWDTradeDeskChartEngine?.render) {
  globalThis.FWDTradeDeskChartEngine.render(chartContainer, {
  surface: chartId,
@@ -5205,7 +5253,7 @@ function buildChartTabPicker(state = {}, options = {}) {
  presetMeta,
  })
  : null;
- const shouldLoadIndexContext = dataset?.ok && !dataset?.syntheticIndex && state.compareWithIndex !== false;
+ const shouldLoadIndexContext = dataset?.ok && !dataset?.syntheticIndex && !dataset?.commoditySpread && state.compareWithIndex !== false;
  const indexDataset = shouldLoadIndexContext
  ? await loadFwdIndexChartDataset({ symbol: FWD_INDEX_SYMBOL, timeframe: '1d' }, strategy).catch(() => null)
  : null;
@@ -5213,6 +5261,8 @@ function buildChartTabPicker(state = {}, options = {}) {
  ? await buildIndexCorrelation(chartState.symbol, signalState?.marketIndex || null, indexDataset).catch(() => null)
  : null;
  const indexComparison = shouldLoadIndexContext ? buildIndexComparison(chartState.symbol, signalState?.marketIndex || null, indexDataset) : null;
+ const renderRoot = surfaceRef.root;
+ if (!surfaceRef.mounted || !renderRoot || !document.body.contains(renderRoot)) return;
  const markup = buildChartMarkup(
  surface,
  chartState,
@@ -5228,11 +5278,12 @@ function buildChartTabPicker(state = {}, options = {}) {
  );
  if (!force && markup === surfaceRef.lastMarkup) return;
  surfaceRef.lastMarkup = markup;
- surfaceRef.root.innerHTML = markup;
+ renderRoot.innerHTML = markup;
  bindSurfaceControls(surface, state, model);
  const renderChart = () => {
  const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
- const chartContainer = surfaceRef.root.querySelector(`[data-ds-lwc-chart="${surface}"]`);
+ if (!surfaceRef.mounted || surfaceRef.root !== renderRoot || !document.body.contains(renderRoot)) return;
+ const chartContainer = renderRoot.querySelector(`[data-ds-lwc-chart="${surface}"]`);
  if (!chartContainer || !model || !dataset?.ok || !globalThis.FWDTradeDeskChartEngine?.render) return;
  globalThis.FWDTradeDeskChartEngine.render(chartContainer, {
  surface,
@@ -5766,6 +5817,14 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  }
  if (key === 'showGrid') {
  await updateChartState(surface, currentState => ({ showGrid: currentState.showGrid !== true }));
+ return;
+ }
+ if (key === 'showSpreadLegs') {
+ await updateChartState(surface, currentState => ({ showSpreadLegs: currentState.showSpreadLegs === false }), { forceRender: true });
+ return;
+ }
+ if (key === 'showSpreadExpiries') {
+ await updateChartState(surface, currentState => ({ showSpreadExpiries: currentState.showSpreadExpiries === false }), { forceRender: true });
  return;
  }
  if (key === 'hideEventCandles') {
@@ -6629,6 +6688,7 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  bindStorageListener();
  bindKeyboardShortcuts(SURFACE_DETACHED);
  await queueSurfaceRender(SURFACE_DETACHED, true);
+ document.getElementById('chartFastLoader')?.remove();
  globalThis.__fwdDetachedChartRenderComplete = true;
  }
 

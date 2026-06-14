@@ -1524,7 +1524,7 @@ const PANE_TEMPLATES = {
  </div>
  </div>
  <div class="sg" data-settings-panel="backup">
- <div class="sgt">Local Backup Storage</div>
+ <div class="sgt">Laptop Migration &amp; Full Backup</div>
  <div class="scheck"><label><input type="checkbox" id="sExtBackupEnabled"/> Enable backup to a selected folder (outside Chrome storage)</label></div>
  <div class="scheck"><label><input type="checkbox" id="sExtBackupAuto"/> Auto backup after each completed scan (while popup is open)</label></div>
  <div class="scheck"><label><input type="checkbox" id="sExtArchiveEnabled"/> Auto-archive old alerts to folder when limit is exceeded</label></div>
@@ -1535,8 +1535,8 @@ const PANE_TEMPLATES = {
  <button class="bsm" id="btnBackupNow" style="flex:1">Backup Now</button>
  </div>
  <div class="srow" style="gap:6px">
- <button class="bsm primary" id="btnFullBackupDownload" style="flex:1">Download Full App Backup</button>
- <button class="bsm" id="btnFullBackupRestore" style="flex:1">Restore Full App Backup</button>
+ <button class="bsm primary" id="btnFullBackupDownload" style="flex:1">Export Laptop Backup</button>
+ <button class="bsm" id="btnFullBackupRestore" style="flex:1">Restore on New Laptop</button>
  </div>
  <div class="srow" style="gap:6px">
  <button class="bsm" id="btnArchiveNow" style="width:100%">Archive Old Alerts Now</button>
@@ -1544,7 +1544,7 @@ const PANE_TEMPLATES = {
  <div class="es" style="font-size:8.5px;line-height:1.5">
  Select your preferred folder once (for example: <b>D:\\Office Work Backup\\dheeraj\\P\\Chrome Extesnion\\FWD Bharat MarketDesk Data</b>).
  Browser security hides full path; folder name will be shown here.
- Use Download Full App Backup before uninstalling or moving to another PC. It includes local settings, but not machine-encrypted API keys.
+ Before changing laptops, export one full backup. It includes scanner settings, Strategy Lab data, journal data, and every native 1D/4H/1W candle file. Restore it on the new laptop, restart the app, then enter the API credentials again because machine-encrypted keys are intentionally excluded.
  </div>
  <div class="save-ok" id="backupSaveOK"></div>
  </div>

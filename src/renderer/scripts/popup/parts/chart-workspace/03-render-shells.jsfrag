@@ -673,18 +673,24 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  const execution = dataset.spreadExecution || {};
  const snapshot = dataset.spreadSnapshot || {};
  const quality = dataset.spreadDataQuality || decision.dataQuality || {};
+ const pnlModel = dataset.spreadPnlModel || {};
  const plan = decision.tradePlan || null;
  const blockers = Array.isArray(decision.blockers) ? decision.blockers : [];
  const action = String(decision.action || 'WAIT');
  const tone = action === 'BUY_SPREAD' ? 'buy' : action === 'SELL_SPREAD' ? 'sell' : 'wait';
  const near = contracts.near || {};
  const far = contracts.far || {};
+ const legCheck = quality.legPriceValidation || {};
+ const matchedQuality = quality.matchedHistory?.daily || quality.source?.matchedHistory?.daily || null;
+ const matched = contracts.pairType === 'matched';
+ const firstLabel = matched ? `First leg (${near.lots || 1} lot${Number(near.lots || 1) === 1 ? '' : 's'})` : 'Near contract';
+ const secondLabel = matched ? `Second leg (${far.lots || 1} lot${Number(far.lots || 1) === 1 ? '' : 's'})` : 'Far contract';
  const leg = item => item
   ? `<div class="${String(item.transactionType || '').toLowerCase()}"><span>${escapeHtml(item.transactionType || '')}</span><strong>${escapeHtml(item.tradingSymbol || '')}</strong><em>${escapeHtml(item.expiry || '')} | Qty ${escapeHtml(String(item.quantity || 0))} @ ${escapeHtml(formatPrice(item.executablePrice))}</em></div>`
   : '';
  return `<details class="ds-spread-trade-panel ${escapeHtml(tone)}">
  <summary>
- <span>Calendar Spread</span>
+ <span>${matched ? 'Size-matched Spread' : 'Calendar Spread'}</span>
  <strong>${escapeHtml(action.replace('_', ' '))}</strong>
  <em>${escapeHtml(contracts.formula || 'Far - Near')}</em>
  <b>Entry ${escapeHtml(formatPrice(decision.entry))} | Target ${escapeHtml(formatPrice(decision.target))} | Stop ${escapeHtml(formatPrice(decision.stop))}</b>
@@ -696,8 +702,8 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  <b>${escapeHtml(String(decision.confidence || 'low').toUpperCase())} ${escapeHtml(String(decision.confidenceScore || 0))}/100</b>
  </header>
  <div class="ds-spread-contract-line">
- <div><span>Near contract</span><strong>${escapeHtml(near.tradingSymbol || '')}</strong><em>${escapeHtml(near.expiry || '')}</em></div>
- <div><span>Far contract</span><strong>${escapeHtml(far.tradingSymbol || '')}</strong><em>${escapeHtml(far.expiry || '')}</em></div>
+ <div><span>${escapeHtml(firstLabel)}</span><strong>${escapeHtml(near.tradingSymbol || '')}</strong><em>${escapeHtml(near.expiry || '')}</em></div>
+ <div><span>${escapeHtml(secondLabel)}</span><strong>${escapeHtml(far.tradingSymbol || '')}</strong><em>${escapeHtml(far.expiry || '')}</em></div>
  <div><span>Formula</span><strong>${escapeHtml(contracts.formula || execution.formula || 'Far - Near')}</strong><em>Executable from both legs' bid/ask depth</em></div>
  </div>
  <div class="ds-spread-metrics">
@@ -707,11 +713,15 @@ function buildTradeReadPanel(intelligence = null, state = {}) {
  <div><span>Entry / target / stop</span><strong>${escapeHtml(formatPrice(decision.entry))} / ${escapeHtml(formatPrice(decision.target))} / ${escapeHtml(formatPrice(decision.stop))}</strong></div>
  <div><span>Risk/reward</span><strong>${escapeHtml(formatPrice(decision.rewardRisk))}x | Risk Rs ${escapeHtml(formatPrice(decision.maximumRiskPnl))}</strong></div>
  <div><span>Costs</span><strong>Brokerage Rs ${escapeHtml(formatPrice(decision.brokerageAndGst))} | Slip ${escapeHtml(formatPrice(decision.slippagePoints))} pts</strong></div>
+ <div><span>How this trade earns</span><strong>${escapeHtml(decision.action === 'SELL_SPREAD' ? pnlModel.sellSpreadProfitRule : pnlModel.buySpreadProfitRule || 'Profit comes from the change in the two-leg spread after costs.')}</strong></div>
+ <div><span>Spread point value</span><strong>Rs ${escapeHtml(formatPrice(pnlModel.valuePerSpreadPoint))} per point | ${escapeHtml(String(pnlModel.firstLots || 1))}:${escapeHtml(String(pnlModel.secondLots || 1))} lots${pnlModel.sameExpiry ? ' | same expiry' : ''}</strong></div>
  </div>
  <div class="ds-spread-liquidity">
  <span>Near Vol/OI <strong>${escapeHtml(String(snapshot.firstVolume || 0))} / ${escapeHtml(String(snapshot.firstOi || 0))}</strong></span>
  <span>Far Vol/OI <strong>${escapeHtml(String(snapshot.secondVolume || 0))} / ${escapeHtml(String(snapshot.secondOi || 0))}</strong></span>
  <span>Data <strong>${escapeHtml(String(quality.freshness || 'unverified'))}; ${escapeHtml(String(quality.badTicks || 0))} bad ticks, ${escapeHtml(String(quality.rollDiscontinuities || 0))} roll breaks excluded</strong></span>
+ <span>Price check <strong>${legCheck.valid ? 'PASS' : 'CHECK'}; ${escapeHtml(String(legCheck.checked || 0))} matched bars, max error ${escapeHtml(formatPrice(legCheck.maxAbsoluteError))}</strong></span>
+ ${matchedQuality ? `<span>Matched history <strong>${matchedQuality.valid ? 'PASS' : 'LIMITED'}; ${escapeHtml(String(matchedQuality.retainedBars || 0))} retained, ${escapeHtml(String(matchedQuality.excludedBars || 0))} incompatible bars excluded</strong></span>` : ''}
  </div>
  ${plan ? `<div class="ds-spread-exact-plan"><span>Trade Plan</span>${leg(plan.first)}${leg(plan.second)}</div>` : `<div class="ds-spread-wait"><strong>No trade plan while data or setup gates fail.</strong>${blockers.slice(0, 4).map(reason => `<span>${escapeHtml(reason)}</span>`).join('')}</div>`}
  </div>
@@ -1392,6 +1402,13 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  const gridOn = state.showGrid === true;
  const hideEventsOn = state.hideEventCandles === true;
  const ordersOn = state.showOrders === true;
+ const spreadControls = state.commoditySpread
+ ? `<div class="ds-chart-settings-section">
+ <div class="ds-chart-settings-title">Spread Display</div>
+ <button class="bsm ${state.showSpreadLegs !== false ? 'active' : ''}" type="button" data-ds-chart-setting-toggle="showSpreadLegs">Near + Far Legs</button>
+ <button class="bsm ${state.showSpreadExpiries !== false ? 'active' : ''}" type="button" data-ds-chart-setting-toggle="showSpreadExpiries">Front Expiry + Price</button>
+ </div>`
+ : '';
  return `<details class="ds-chart-settings-menu">
  <summary class="bsm">Settings</summary>
  <div class="ds-chart-settings-panel">
@@ -1419,6 +1436,7 @@ function buildIntelligenceOverlay(model = null, intelligence = null, state = {})
  <button class="bsm ${gridOn ? 'active' : ''}" type="button" data-ds-chart-setting-toggle="showGrid">Grid Lines</button>
  <button class="bsm ${hideEventsOn ? 'active' : ''}" type="button" data-ds-chart-setting-toggle="hideEventCandles">Hide Event Candles</button>
  </div>
+ ${spreadControls}
  </div>
  </details>`;
  }

@@ -14,6 +14,40 @@ body.chart-mode #app {
  display: none !important;
 }
 
+.chart-fast-loader {
+ display: flex;
+ align-items: center;
+ gap: 14px;
+ width: min(420px, calc(100vw - 48px));
+ margin: auto;
+ padding: 18px 20px;
+ border: 1px solid rgba(118, 228, 211, 0.22);
+ border-radius: 14px;
+ background: rgba(7, 23, 34, 0.94);
+ box-shadow: 0 24px 70px rgba(0, 0, 0, 0.38);
+ color: #eef8fb;
+}
+
+.chart-fast-loader img {
+ width: 44px;
+ height: 44px;
+ border-radius: 10px;
+}
+
+.chart-fast-loader div {
+ display: grid;
+ gap: 4px;
+}
+
+.chart-fast-loader strong {
+ font-size: 15px;
+}
+
+.chart-fast-loader span {
+ color: #8faabd;
+ font-size: 12px;
+}
+
 .chart-pane-loading {
  display: grid;
  gap: 8px;
@@ -36,6 +70,16 @@ body.chart-mode #app {
  color: rgba(172, 194, 225, 0.76);
  font-size: 12px;
  text-align: center;
+}
+
+.chart-load-error {
+ width: min(560px, calc(100vw - 48px));
+ margin: auto;
+ border-color: rgba(255, 96, 128, 0.4);
+}
+
+.chart-load-error .chart-pane-loading-title {
+ color: #ff91aa;
 }
 
 body.chart-mode #chartWorkspaceRoot {
@@ -2457,21 +2501,21 @@ body.chart-mode .ds-lwc-chart {
 }
 
 .ds-chart-indicator-row.ema9 {
- --ds-indicator-color: #57f3ca;
+ --ds-indicator-color: #2dd4bf;
 }
 
 .ds-chart-indicator-row.ema30 {
- --ds-indicator-color: #ffd277;
+ --ds-indicator-color: #facc15;
  font-size: 11.5px;
 }
 
 .ds-chart-indicator-row.ema100 {
- --ds-indicator-color: #4fd1ff;
+ --ds-indicator-color: #38bdf8;
  font-size: 12px;
 }
 
 .ds-chart-indicator-row.vwap {
- --ds-indicator-color: #ff9c33;
+ --ds-indicator-color: #f43f5e;
 }
 
 .ds-chart-indicator-row strong,
@@ -2512,18 +2556,18 @@ body.chart-mode .ds-lwc-chart {
  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.32);
 }
 
-.ds-indicator-swatch.ema9 { background: #57f3ca; }
-.ds-indicator-swatch.ema30 { background: #ffd277; }
-.ds-indicator-swatch.ema100 { background: #4fd1ff; }
+.ds-indicator-swatch.ema9 { background: #2dd4bf; }
+.ds-indicator-swatch.ema30 { background: #facc15; }
+.ds-indicator-swatch.ema100 { background: #38bdf8; }
 .ds-indicator-swatch.volume { background: rgba(29, 233, 182, 0.75); }
-.ds-indicator-swatch.sma20 { background: #c8a8ff; }
-.ds-indicator-swatch.vwap { background: #ff9c33; }
-.ds-indicator-swatch.bollinger { background: #9bb6ff; }
-.ds-indicator-swatch.supertrend { background: #1de9b6; }
-.ds-indicator-swatch.rsi { background: #79ddff; }
-.ds-indicator-swatch.macd { background: #57f3ca; }
-.ds-indicator-swatch.obv { background: #c8a8ff; }
-.ds-indicator-swatch.atr { background: #f2a65a; }
+.ds-indicator-swatch.sma20 { background: #f472b6; }
+.ds-indicator-swatch.vwap { background: #f43f5e; }
+.ds-indicator-swatch.bollinger { background: #a78bfa; }
+.ds-indicator-swatch.supertrend { background: #10b981; }
+.ds-indicator-swatch.rsi { background: #84cc16; }
+.ds-indicator-swatch.macd { background: #06b6d4; }
+.ds-indicator-swatch.obv { background: #f97316; }
+.ds-indicator-swatch.atr { background: #a3e635; }
 
 .ds-chart-indicator-row button,
 .ds-chart-indicator-settings summary {

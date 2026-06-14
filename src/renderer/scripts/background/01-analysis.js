@@ -2030,7 +2030,9 @@ async function fetchCandles(symbol, resolution, limit = 200, options = {}) {
   setCache(cKey, persistedCandles);
   return persistedCandles;
   }
- const cachedCoverageEnough = cachedRows.length >= Math.min(Math.max(20, Number(limit || 0)), Math.max(20, Number(limit || 0)));
+ const oldestCachedTs = cachedRows.length ? Number(cachedRows[0]?.time || 0) : 0;
+ const cachedCoverageEnough = cachedRows.length >= Math.max(20, Number(limit || 0))
+  || (oldestCachedTs > 0 && oldestCachedTs <= (start + (secs * 7)));
  const overlapBars = closedOnly ? 2 : 4;
  const incrementalStart = lastCachedTs > 0 && cachedCoverageEnough
  ? Math.max(start, lastCachedTs - (secs * overlapBars))

@@ -141,13 +141,19 @@ function bindCommonWindowEvents(win) {
   });
   auxiliaryWindows.set(key, win);
   bindCommonWindowEvents(win);
-  win.once('ready-to-show', () => {
+  if (chartMode) {
    win.maximize();
    win.show();
    win.focus();
-  });
+  } else {
+   win.once('ready-to-show', () => {
+    win.maximize();
+    win.show();
+    win.focus();
+   });
+  }
   win.on('closed', () => auxiliaryWindows.delete(key));
-  win.loadFile(path.join(__dirname, '../renderer/index.html'), { query });
+  win.loadFile(path.join(__dirname, chartMode ? '../renderer/chart.html' : '../renderer/index.html'), { query });
   return { ok: true, windowId: win.webContents.id, reused: false };
  }
 

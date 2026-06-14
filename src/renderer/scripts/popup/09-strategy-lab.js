@@ -17,6 +17,9 @@
  let strategyLabResearchWatchlist = [];
  let strategyLabMinScore = 0;
  let strategyLabHideAvoid = false;
+ let strategyLabAdvancedOpen = false;
+ let strategyLabMasterSearchOpen = false;
+ let strategyLabMasterSearchQuery = '';
  const STRATEGY_LAB_ROW_STALE_MS = 30 * 60 * 1000;
  const STRATEGY_LAB_OUTCOME_KEY = 'strategyLabOutcomeTrackerV1';
  const STRATEGY_LAB_REVIEW_TIMEFRAME = '1d';
@@ -974,17 +977,18 @@ function labEarlyOpportunityRows(snapshot = strategyLabSnapshot) {
  }
 
  function buildActions() {
+ const masterSearchButton = '<button type="button" class="bsm secondary strategy-master-stock-button" id="btnStrategyMasterStock" aria-expanded="' + (strategyLabMasterSearchOpen ? 'true' : 'false') + '">Master Stock</button>';
  if (activeStrategyLabId === 'current') {
- return '<button type="button" class="bsm primary" id="btnOpenCurrentScan">Open Current Scan</button><button type="button" class="bsm secondary" id="btnRefreshStrategyLab">Refresh</button>';
+ return `${masterSearchButton}<button type="button" class="bsm primary" id="btnOpenCurrentScan">Open Current Scan</button><button type="button" class="bsm secondary" id="btnRefreshStrategyLab">Refresh</button>`;
  }
  const strategy = getStrategyMeta();
  const notificationToggle = isScannerOnly()
  ? `<button type="button" class="bsm ${strategyLabScannerNotificationsEnabled ? 'primary active' : 'secondary'} radar-notify-toggle" id="btnStrategyLabNotificationToggle" aria-pressed="${strategyLabScannerNotificationsEnabled ? 'true' : 'false'}" title="Turn Scanner Lab desktop notifications on or off"><span>${strategyLabScannerNotificationsEnabled ? 'Notifications On' : 'Notifications Off'}</span></button>`
  : '';
  if (activeStrategyLabId === 'early') {
- return `${notificationToggle}<button type="button" class="bsm primary" id="btnRunAllStrategyScans">Run All Scanners</button><button type="button" class="bsm secondary" id="btnRefreshStrategyLab">Refresh</button>`;
+ return `${masterSearchButton}${notificationToggle}<button type="button" class="bsm primary" id="btnRunAllStrategyScans">Run All Scanners</button><button type="button" class="bsm secondary" id="btnRefreshStrategyLab">Refresh</button>`;
  }
- return `${notificationToggle}<button type="button" class="bsm primary" id="btnRunStrategyScan" data-run-strategy="${labEsc(strategy.id)}">Run ${labEsc(strategy.shortName || strategy.displayName || strategy.id)} Scan</button>
+ return `${masterSearchButton}${notificationToggle}<button type="button" class="bsm primary" id="btnRunStrategyScan" data-run-strategy="${labEsc(strategy.id)}">Run ${labEsc(strategy.shortName || strategy.displayName || strategy.id)} Scan</button>
  <button type="button" class="bsm secondary" id="btnRefreshStrategyLab">Refresh</button>`;
  }
 
@@ -1454,7 +1458,6 @@ function labEarlyOpportunityRows(snapshot = strategyLabSnapshot) {
  const tone = rowTone(row);
  const strategy = labStrategyId(row);
  const eventType = String(row.eventType || row.raw?.eventType || row.raw?.earlyType || '').toLowerCase();
- if (labRowIsStale(row) || row.checks?.staleSource || Number(row.raw?.freshness?.staleCount || 0) > 0) return 'avoid';
  if (row.checks?.mixedConflict || row.raw?.consensus?.mixedConflict) return 'avoid';
  if (tone === 'ignore' || row.signal === 'IGNORE' || /avoid|trap|late/.test(eventType)) return 'avoid';
  if (strategy === 'stage') {
@@ -1596,8 +1599,8 @@ function labEarlyOpportunityRows(snapshot = strategyLabSnapshot) {
 
  function buildAdvancedStrategyDetails(rows = [], status = {}) {
  if (!isScannerOnly()) return '';
- return `<details class="strategy-advanced-details">
- <summary><span>Advanced details</span><strong>Open full scanner data, alerts, scorecards, and raw table</strong></summary>
+ return `<details class="strategy-advanced-details"${strategyLabAdvancedOpen ? ' open' : ''}>
+ <summary><span>Research data</span><strong>Optional: scorecards, alerts, comparisons, and raw table</strong></summary>
  <div class="strategy-advanced-body">
  ${buildStrategyResearchDashboard(rows, status)}
  ${buildStrategyScorecard(rows, status)}
@@ -1611,6 +1614,57 @@ function labEarlyOpportunityRows(snapshot = strategyLabSnapshot) {
  ${buildStrategyTable(rows)}
  </div>
  </details>`;
+ }
+
+ function labMasterStockMatches(query = '') {
+ const normalized = String(query || '').trim().toUpperCase();
+ if (!normalized) return [];
+ const strategies = [
+  { id: 'early', shortName: 'Early Opportunity', displayName: 'Early Opportunity' },
+  { id: 'current', shortName: 'Current Scan', displayName: 'Current Scan' },
+  ...scannerRegistryList().filter(strategy => strategy?.id && strategy.id !== 'current' && strategy.id !== 'early'),
+ ];
+ const seen = new Set();
+ return strategies
+ .flatMap(strategy => labStrategyRows(strategyLabSnapshot || {}, strategy.id)
+  .filter(row => String(row.symbol || '').toUpperCase().includes(normalized))
+  .map(row => ({ ...row, strategyId: strategy.id, strategyLabel: strategy.shortName || strategy.displayName || strategy.id })))
+ .filter(row => {
+  const key = `${row.strategyId}:${String(row.symbol || '').toUpperCase()}`;
+  if (seen.has(key)) return false;
+  seen.add(key);
+  return true;
+ })
+ .sort((a, b) => {
+  const aExact = String(a.symbol || '').toUpperCase() === normalized ? 0 : 1;
+  const bExact = String(b.symbol || '').toUpperCase() === normalized ? 0 : 1;
+  return aExact - bExact || Number(b.score || b.confidence || 0) - Number(a.score || a.confidence || 0);
+ })
+ .slice(0, 30);
+ }
+
+ function buildMasterStockSearch() {
+ if (!strategyLabMasterSearchOpen) return '';
+ const matches = labMasterStockMatches(strategyLabMasterSearchQuery);
+ const resultHtml = strategyLabMasterSearchQuery
+ ? matches.length
+ ? matches.map(row => `<button type="button" class="strategy-master-stock-result ${rowTone(row)}" data-master-stock-strategy="${labEsc(row.strategyId)}" data-master-stock-symbol="${labEsc(row.symbol)}">
+ <strong>${labEsc(row.symbol)}</strong><span>${labEsc(row.strategyLabel)}</span><small>${labEsc(labGuidedAction(row))} | Score ${labFmt(row.score || row.confidence, 0)}${labRowIsStale(row) ? ` | Stale ${labEsc(labRowFreshness(row).ageLabel)}` : ''}</small>
+ </button>`).join('')
+ : '<div class="strategy-master-stock-empty">No stored strategy result matches this stock. Run the relevant scanner to add it to the local database.</div>'
+ : '<div class="strategy-master-stock-empty">Search a stock symbol to see every strategy result stored locally.</div>';
+ return `<section class="strategy-master-stock-search">
+ <div class="strategy-master-stock-heading">
+ <strong>Search all stored strategies</strong>
+ <small>Type a stock symbol. Keyboard shortcuts are paused while this field is active.</small>
+ </div>
+ <div class="strategy-master-stock-form" id="strategyMasterStockForm">
+ <label for="strategyMasterStockInput">Stock symbol</label>
+ <input id="strategyMasterStockInput" type="search" value="${labEsc(strategyLabMasterSearchQuery)}" placeholder="Search SBIN, RELIANCE, TCS..." autocomplete="off">
+ <button type="button" class="bsm primary" id="btnStrategyMasterStockSearch">Search</button>
+ </div>
+ <div class="strategy-master-stock-results">${resultHtml}</div>
+ </section>`;
  }
 
  function buildAlertSummary(rows = []) {
@@ -2974,7 +3028,7 @@ ${buildAlertControls(row)}
 </aside>`;
 }
 
-function buildDetail(row = null) {
+function buildFullDetail(row = null) {
   if (activeStrategyLabId === 'early') return buildEarlyDetail(row);
   if (activeStrategyLabId === 'radar') return buildRadarDetail(row);
   if (activeStrategyLabId === 'reversal') return buildReversalDetail(row);
@@ -2983,6 +3037,47 @@ function buildDetail(row = null) {
   if (activeStrategyLabId === 'pullback') return buildPullbackDetail(row);
   if (activeStrategyLabId === 'native_straddle') return buildNativeStraddleDetail(row);
   return activeStrategyLabId === 'stage' ? buildStageDetail(row) : buildGenericDetail(row);
+}
+
+function buildDetail(row = null) {
+ if (!row) {
+  return '<aside class="strategy-lab-detail strategy-decision-inspector"><div class="strategy-detail-empty">Select a setup to review its action, reason, levels, freshness, and charts.</div></aside>';
+ }
+ const raw = row.raw || {};
+ const levels = raw.chartLevels || {};
+ const plan = raw.tradePlan || {};
+ const pack = labDecisionPack(row);
+ const freshness = labRowFreshness(row);
+ const entry = row.entry || row.triggerPrice || plan.trigger || levels.trigger || raw.latestPrice;
+ const stop = row.stop || row.protectLevel || plan.stop || levels.stop || levels.invalidation || raw.stop;
+ const target = row.targets?.target1 || row.targets?.target2R || plan.target || levels.target1 || raw.target;
+ const reason = pack.whyNotNow[0] || pack.whySelected[0] || labPlainWhy(row) || row.setupLabel || 'Review the chart before taking action.';
+ return `<aside class="strategy-lab-detail strategy-decision-inspector ${labDirectionClass(row)}">
+  <div class="strategy-detail-head">
+   <div><span>${labEsc(getStrategyMeta(row.strategyId || activeStrategyLabId)?.displayName || 'Strategy')}</span><strong>${labSymbolWithDirection(row)}</strong></div>
+   <em class="${rowTone(row)}">${labEsc(labPriorityLabel(row))}</em>
+  </div>
+  <div class="strategy-decision-action">
+   <span>Action</span>
+   <strong>${labEsc(pack.nextAction)}</strong>
+   <p>${labEsc(reason)}</p>
+  </div>
+  <div class="strategy-detail-grid strategy-decision-levels">
+   <div><span>Entry</span><strong>${labPrice(entry)}</strong></div>
+   <div><span>Stop</span><strong>${labPrice(stop)}</strong></div>
+   <div><span>Target</span><strong>${labPrice(target)}</strong></div>
+   <div><span>Freshness</span><strong class="${freshness.stale ? 'loss' : 'good'}">${labEsc(freshness.stale ? `Stale · ${freshness.ageLabel}` : freshness.ageLabel)}</strong></div>
+  </div>
+  <div class="strategy-detail-actions">
+   <button type="button" data-strategy-chart-review="${labEsc(row.symbol)}">Trend 1D</button>
+   <button type="button" data-strategy-entry-chart="${labEsc(row.symbol)}">Entry 4H</button>
+   <button type="button" data-strategy-watchlist-toggle="${labEsc(row.symbol)}">${strategyLabResearchWatchlist.includes(row.symbol) ? 'Saved' : 'Save to review'}</button>
+  </div>
+  <details class="strategy-inspector-evidence">
+   <summary>Full evidence</summary>
+   <div class="strategy-inspector-evidence-body">${buildFullDetail(row)}</div>
+  </details>
+ </aside>`;
 }
 
  function stopStrategyLabPolling() {
@@ -3342,7 +3437,42 @@ function alignStrategyHelpTooltips(root) {
 }
 
 function bindStrategyLab(root, rows) {
+ if (!root?.querySelectorAll) return;
  alignStrategyHelpTooltips(root);
+ root.querySelector('.strategy-advanced-details')?.addEventListener('toggle', event => {
+  strategyLabAdvancedOpen = event.currentTarget.open === true;
+ });
+ root.querySelector('#btnStrategyMasterStock')?.addEventListener('click', () => {
+  strategyLabMasterSearchOpen = !strategyLabMasterSearchOpen;
+  renderStrategyLab(strategyLabSnapshot);
+  if (strategyLabMasterSearchOpen) window.setTimeout(() => document.getElementById('strategyMasterStockInput')?.focus(), 0);
+ });
+ const runMasterStockSearch = () => {
+  strategyLabMasterSearchQuery = String(root.querySelector('#strategyMasterStockInput')?.value || '').trim().toUpperCase();
+  renderStrategyLab(strategyLabSnapshot);
+ };
+ root.querySelector('#btnStrategyMasterStockSearch')?.addEventListener('click', runMasterStockSearch);
+ const masterStockInput = root.querySelector('#strategyMasterStockInput');
+ masterStockInput?.addEventListener('input', event => {
+  strategyLabMasterSearchQuery = String(event.currentTarget?.value || '').toUpperCase();
+ });
+ masterStockInput?.addEventListener('keydown', event => {
+  event.stopPropagation();
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  runMasterStockSearch();
+ });
+ masterStockInput?.addEventListener('keyup', event => event.stopPropagation());
+ masterStockInput?.addEventListener('keypress', event => event.stopPropagation());
+ root.querySelectorAll('[data-master-stock-symbol]').forEach(button => {
+  button.addEventListener('click', () => {
+   activeStrategyLabId = button.dataset.masterStockStrategy || activeStrategyLabId;
+   selectedStrategySymbol = button.dataset.masterStockSymbol || '';
+   strategyLabViewMode = 'all';
+   strategyLabMasterSearchOpen = false;
+   renderStrategyLab(strategyLabSnapshot);
+  });
+ });
  root.querySelectorAll('[data-strategy-lab-select]').forEach(button => {
  button.addEventListener('click', () => {
  activeStrategyLabId = button.dataset.strategyLabSelect || 'current';
@@ -3578,12 +3708,16 @@ if (!selectedStrategySymbol && rows[0]?.symbol) selectedStrategySymbol = rows[0]
  function renderStrategyLab(snapshot = strategyLabSnapshot) {
  const root = document.getElementById('strategyLabRoot');
  if (!root) return;
+ const activeElement = document.activeElement;
+ const masterInputFocused = activeElement?.id === 'strategyMasterStockInput';
+ if (masterInputFocused) strategyLabMasterSearchQuery = String(activeElement.value || '').toUpperCase();
  strategyLabSnapshot = snapshot || {};
  const rows = labRowsForActive(strategyLabSnapshot);
  const status = labStatusForActive(strategyLabSnapshot);
  const selected = rows.find(row => row.symbol === selectedStrategySymbol) || rows[0] || null;
  root.innerHTML = `<div class="strategy-lab-shell strategy-lab-shell-guided">
  ${buildStrategyLabTop(rows, status)}
+ ${buildMasterStockSearch()}
  ${buildGuidedBestRead(rows, status)}
  <div class="strategy-lab-layout strategy-lab-layout-guided">
  <section class="strategy-lab-main">
@@ -3594,6 +3728,14 @@ if (!selectedStrategySymbol && rows[0]?.symbol) selectedStrategySymbol = rows[0]
  </div>
  </div>`;
  bindStrategyLab(root, rows);
+ if (masterInputFocused && strategyLabMasterSearchOpen) {
+  const restoredInput = document.getElementById('strategyMasterStockInput');
+  if (restoredInput) {
+   restoredInput.focus({ preventScroll: true });
+   const end = restoredInput.value.length;
+   restoredInput.setSelectionRange?.(end, end);
+  }
+ }
  syncStrategyLabRadarRefresh();
  }
 

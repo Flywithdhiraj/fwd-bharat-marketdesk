@@ -234,6 +234,7 @@
  bindStorageListener();
  bindKeyboardShortcuts(SURFACE_DETACHED);
  await queueSurfaceRender(SURFACE_DETACHED, true);
+ document.getElementById('chartFastLoader')?.remove();
  globalThis.__fwdDetachedChartRenderComplete = true;
  }
 

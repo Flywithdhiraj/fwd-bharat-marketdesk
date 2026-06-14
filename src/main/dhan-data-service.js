@@ -246,6 +246,8 @@ const DHAN_CANDLE_RATE_LIMIT_BACKOFF_MS = 15000;
 const DHAN_CANDLE_MAX_RETRIES = 3;
 const DHAN_INTRADAY_CHUNK_DAYS = 90;
 const DHAN_INTRADAY_MAX_HISTORY_DAYS = 90;
+const DHAN_HISTORICAL_CHUNK_DAYS = 365;
+const DHAN_HISTORICAL_MAX_HISTORY_DAYS = 3650;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const IST_TIME_ZONE = 'Asia/Kolkata';
 const NSE_BSE_EQUITY_HOLIDAYS_2026 = Object.freeze({
@@ -911,6 +913,130 @@ function buildCommoditySpreadClosePoints(firstRows = [], secondRows = []) {
  }).filter(Boolean).sort((a, b) => a.time - b.time);
 }
 
+function buildCommoditySpreadLegSeries(firstRows = [], secondRows = []) {
+ const secondByTime = new Map((Array.isArray(secondRows) ? secondRows : [])
+  .filter(row => Number.isFinite(Number(row?.time)))
+  .map(row => [Number(row.time), row]));
+ const near = [];
+ const far = [];
+ (Array.isArray(firstRows) ? firstRows : []).forEach(first => {
+  const time = Number(first?.time);
+  const second = secondByTime.get(time);
+  const firstClose = Number(first?.close);
+  const secondClose = Number(second?.close);
+  if (!second || !Number.isFinite(time) || !Number.isFinite(firstClose) || !Number.isFinite(secondClose)) return;
+  near.push({ time, value: firstClose });
+  far.push({ time, value: secondClose });
+ });
+ return { near, far };
+}
+
+function validateCommoditySpreadLegPrices(spreadRows = [], legSeries = {}) {
+ const nearByTime = new Map((Array.isArray(legSeries.near) ? legSeries.near : []).map(point => [Number(point.time), Number(point.value)]));
+ const farByTime = new Map((Array.isArray(legSeries.far) ? legSeries.far : []).map(point => [Number(point.time), Number(point.value)]));
+ let checked = 0;
+ let maxAbsoluteError = 0;
+ (Array.isArray(spreadRows) ? spreadRows : []).forEach(row => {
+  const time = Number(row?.time);
+  const near = nearByTime.get(time);
+  const far = farByTime.get(time);
+  const spread = Number(row?.close);
+  if (![near, far, spread].every(Number.isFinite)) return;
+  checked += 1;
+  maxAbsoluteError = Math.max(maxAbsoluteError, Math.abs((far - near) - spread));
+ });
+ return {
+  checked,
+  maxAbsoluteError: +maxAbsoluteError.toFixed(6),
+  valid: checked > 0 && maxAbsoluteError <= 0.01,
+  formula: 'Far close - Near close = displayed spread close',
+ };
+}
+
+function buildCommodityNearestExpiryEvents(pair = {}, archive = {}, spreadRows = [], legSeries = {}, nowMs = Date.now()) {
+ const contracts = archive.contracts && typeof archive.contracts === 'object' ? archive.contracts : {};
+ const firstUnderlying = String(pair.firstInstrument?.underlyingSymbol || pair.firstInstrument?.symbol || '').trim().toUpperCase();
+ const secondUnderlying = String(pair.secondInstrument?.underlyingSymbol || pair.secondInstrument?.symbol || '').trim().toUpperCase();
+ const contractById = new Map(Object.values(contracts).map(contract => [String(contract.securityId || ''), contract]));
+ const candidates = [];
+ if (pair.type === 'matched') {
+  const firstByExpiry = new Map(Object.values(contracts)
+   .filter(contract => String(contract.underlyingSymbol || '').toUpperCase() === firstUnderlying)
+   .map(contract => [String(contract.expiry || ''), contract]));
+  Object.values(contracts)
+   .filter(contract => String(contract.underlyingSymbol || '').toUpperCase() === secondUnderlying)
+   .forEach(second => {
+    const first = firstByExpiry.get(String(second.expiry || ''));
+    if (!first) return;
+    candidates.push({
+     expiry: second.expiry,
+     firstSecurityId: first.securityId,
+     secondSecurityId: second.securityId,
+     firstSymbol: first.tradingSymbol,
+     secondSymbol: second.tradingSymbol,
+     source: 'same_expiry_contract_archive',
+    });
+   });
+ } else {
+  const snapshots = Array.isArray(archive.pairSnapshots?.[firstUnderlying]) ? archive.pairSnapshots[firstUnderlying] : [];
+  snapshots.forEach(snapshot => {
+   const near = contractById.get(String(snapshot.nearSecurityId || ''));
+   const far = contractById.get(String(snapshot.farSecurityId || ''));
+   candidates.push({
+    expiry: snapshot.nearExpiry || near?.expiry || '',
+    firstSecurityId: snapshot.nearSecurityId,
+    secondSecurityId: snapshot.farSecurityId,
+    firstSymbol: near?.tradingSymbol || '',
+    secondSymbol: far?.tradingSymbol || '',
+    source: 'archived_front_contract',
+   });
+  });
+ }
+ candidates.push({
+  expiry: pair.firstInstrument?.expiry || '',
+  firstSecurityId: pair.firstInstrument?.securityId,
+  secondSecurityId: pair.secondInstrument?.securityId,
+  firstSymbol: pair.firstInstrument?.tradingSymbol || '',
+  secondSymbol: pair.secondInstrument?.tradingSymbol || '',
+  source: pair.type === 'matched' ? 'active_same_expiry_pair' : 'active_front_contract',
+ });
+ const spread = (Array.isArray(spreadRows) ? spreadRows : []).slice().sort((a, b) => Number(a.time) - Number(b.time));
+ const firstByTime = new Map((Array.isArray(legSeries.near) ? legSeries.near : []).map(point => [Number(point.time), Number(point.value)]));
+ const secondByTime = new Map((Array.isArray(legSeries.far) ? legSeries.far : []).map(point => [Number(point.time), Number(point.value)]));
+ const unique = new Map();
+ candidates.forEach(candidate => {
+  const expiryMs = parseDerivativeExpiryMs(candidate.expiry);
+  if (!(expiryMs > 0)) return;
+  const key = `${candidate.firstSecurityId || ''}:${candidate.secondSecurityId || ''}:${expiryMs}`;
+  if (unique.has(key)) return;
+  const expiryTime = Math.floor(expiryMs / 1000);
+  let candle = null;
+  for (let index = spread.length - 1; index >= 0; index -= 1) {
+   if (Number(spread[index]?.time) <= expiryTime) {
+    candle = spread[index];
+    break;
+   }
+  }
+  const candleTime = Number(candle?.time || 0);
+  const hasExpiryPrice = candleTime > 0 && expiryTime - candleTime <= 10 * DAY_MS / 1000;
+  unique.set(key, {
+   time: hasExpiryPrice ? candleTime : expiryTime,
+   expiryTime,
+   expiry: candidate.expiry,
+   expired: expiryMs <= Number(nowMs || Date.now()),
+   firstSecurityId: String(candidate.firstSecurityId || ''),
+   secondSecurityId: String(candidate.secondSecurityId || ''),
+   firstSymbol: candidate.firstSymbol || '',
+   secondSymbol: candidate.secondSymbol || '',
+   spreadPrice: hasExpiryPrice ? Number(candle?.close) : null,
+   firstPrice: hasExpiryPrice ? firstByTime.get(candleTime) ?? null : null,
+   secondPrice: hasExpiryPrice ? secondByTime.get(candleTime) ?? null : null,
+   source: candidate.source,
+  });
+ });
+ return [...unique.values()].sort((a, b) => a.expiryTime - b.expiryTime);
+}
+
 function repairCommoditySpreadGlitches(rows = []) {
  const result = (Array.isArray(rows) ? rows : []).map(row => ({ ...row }));
  for (let index = 1; index < result.length - 1; index += 1) {
@@ -1398,6 +1524,78 @@ function filterCandleRowsByTime(rows = [], startMs = 0, endMs = Date.now()) {
  });
 }
 
+function filterMatchedCommodityRows(pair = {}, firstRows = [], secondRows = [], resolution = '1d') {
+ const firstByTime = new Map((Array.isArray(firstRows) ? firstRows : []).map(row => [Number(row?.time), row]));
+ const secondByTime = new Map((Array.isArray(secondRows) ? secondRows : []).map(row => [Number(row?.time), row]));
+ const times = [...firstByTime.keys()]
+  .filter(time => Number.isFinite(time) && secondByTime.has(time))
+  .sort((a, b) => a - b);
+ const comparable = times.map(time => {
+  const first = firstByTime.get(time);
+  const second = secondByTime.get(time);
+  const firstClose = Number(first?.close);
+  const secondClose = Number(second?.close);
+  const midpoint = (Math.abs(firstClose) + Math.abs(secondClose)) / 2;
+  const relativeGap = midpoint > 0 ? Math.abs(secondClose - firstClose) / midpoint : Infinity;
+  return {
+   time,
+   valid: firstClose > 0 && secondClose > 0 && relativeGap <= 0.03,
+   relativeGap,
+  };
+ });
+ let endIndex = comparable.length - 1;
+ while (endIndex >= 0 && !comparable[endIndex].valid) endIndex -= 1;
+ if (endIndex < 0) {
+  return {
+   firstRows: [],
+   secondRows: [],
+   quality: {
+    valid: false,
+    reason: 'No synchronized same-expiry bars have comparable full/mini contract prices.',
+    synchronizedBars: times.length,
+    retainedBars: 0,
+    excludedBars: times.length,
+    maximumRelativeGapPct: null,
+   },
+  };
+ }
+ let startIndex = endIndex;
+ let invalidRun = 0;
+ for (let index = endIndex; index >= 0; index -= 1) {
+  if (comparable[index].valid) {
+   invalidRun = 0;
+   startIndex = index;
+  } else {
+   invalidRun += 1;
+   if (invalidRun >= 3) {
+    startIndex = index + invalidRun;
+    break;
+   }
+  }
+ }
+ const retained = comparable.slice(startIndex, endIndex + 1).filter(item => item.valid);
+ const retainedTimes = new Set(retained.map(item => item.time));
+ const maximumRelativeGapPct = retained.length
+  ? Math.max(...retained.map(item => item.relativeGap)) * 100
+  : null;
+ return {
+  firstRows: [...retainedTimes].map(time => firstByTime.get(time)).filter(Boolean),
+  secondRows: [...retainedTimes].map(time => secondByTime.get(time)).filter(Boolean),
+  quality: {
+   valid: retained.length >= 20,
+   reason: retained.length >= 20
+    ? 'Matched history is limited to the latest synchronized segment where full/mini quoted prices remain within 3%.'
+    : 'Too few comparable same-expiry bars remain after removing rolling or mismatched contract history.',
+   pairType: pair.type,
+   resolution,
+   synchronizedBars: times.length,
+   retainedBars: retained.length,
+   excludedBars: Math.max(0, times.length - retained.length),
+   maximumRelativeGapPct: maximumRelativeGapPct == null ? null : +maximumRelativeGapPct.toFixed(3),
+  },
+ };
+}
+
 function commoditySpreadHistoryWindow(pair = {}, resolution = '1d', requestedStart = 0, requestedEnd = Date.now()) {
  const end = Number(requestedEnd || Date.now()) || Date.now();
  let start = Number(requestedStart || 0) || (end - 730 * DAY_MS);
@@ -1420,6 +1618,15 @@ function clipCommoditySpreadRowsForPair(pair = {}, firstRows = [], secondRows = 
  const secondUnderlying = normalizeUniverseSymbol(pair.secondInstrument?.underlyingSymbol || pair.secondInstrument?.symbol || '');
  const isCalendarPair = firstUnderlying && firstUnderlying === secondUnderlying
   && String(pair.firstInstrument?.expiry || '') !== String(pair.secondInstrument?.expiry || '');
+ if (pair.type === 'matched') {
+  const matched = filterMatchedCommodityRows(pair, firstClipped, secondClipped, resolution);
+  return {
+   ...window,
+   firstRows: matched.firstRows,
+   secondRows: matched.secondRows,
+   matchedQuality: matched.quality,
+  };
+ }
  if (!isCalendarPair) {
   return { ...window, firstRows: firstClipped, secondRows: secondClipped };
  }
@@ -1566,6 +1773,8 @@ function commoditySpreadCostEstimate(pair = {}, snapshot = {}) {
   statutoryChargesIncluded: false,
   valuePerSpreadPoint: +valuePerSpreadPoint.toFixed(4),
   matchedExposure,
+  firstExposure: +firstExposure.toFixed(4),
+  secondExposure: +secondExposure.toFixed(4),
   wideningSlippagePoints: wideningSlippagePoints == null ? null : +wideningSlippagePoints.toFixed(4),
   narrowingSlippagePoints: narrowingSlippagePoints == null ? null : +narrowingSlippagePoints.toFixed(4),
   brokerageBreakevenPoints: valuePerSpreadPoint > 0 ? +((brokerage + brokerageGst) / valuePerSpreadPoint).toFixed(4) : null,
@@ -1584,6 +1793,10 @@ function commoditySpreadSafeguards(pair = {}, snapshot = {}, nowMs = Date.now())
  const firstWidthPct = firstWidth != null && firstPrice > 0 ? firstWidth / firstPrice * 100 : null;
  const secondWidthPct = secondWidth != null && secondPrice > 0 ? secondWidth / secondPrice * 100 : null;
  const warnings = [];
+ const firstExposure = Number(pair.firstLots || 1) * commodityPriceMultiplier(pair.firstInstrument).multiplier;
+ const secondExposure = Number(pair.secondLots || 1) * commodityPriceMultiplier(pair.secondInstrument).multiplier;
+ if (pair.type === 'matched' && String(pair.firstInstrument?.expiry || '') !== String(pair.secondInstrument?.expiry || '')) warnings.push('Size-matched commodity legs must use the same expiry.');
+ if (pair.type === 'matched' && firstExposure !== secondExposure) warnings.push('Size-matched commodity legs do not have equal price exposure.');
  if (daysToNearestExpiry < 5) warnings.push('Nearest leg expires in less than 5 days.');
  if (!snapshot.depthConfirmed) warnings.push('Both legs do not have complete executable depth.');
  if (Number(snapshot.firstVolume || 0) <= 0 || Number(snapshot.secondVolume || 0) <= 0) warnings.push('One or both legs have no reported volume.');
@@ -2365,6 +2578,10 @@ function buildIntradayChunks(startMs = 0, endMs = 0, maxDays = DHAN_INTRADAY_CHU
  return chunks;
 }
 
+function buildHistoricalChunks(startMs = 0, endMs = 0, maxDays = DHAN_HISTORICAL_CHUNK_DAYS) {
+ return buildIntradayChunks(startMs, endMs, maxDays);
+}
+
 function getIstDateParts(input = Date.now()) {
  const date = input instanceof Date ? input : new Date(input);
  const parts = new Intl.DateTimeFormat('en-GB', {
@@ -2512,7 +2729,7 @@ function isDhanNoHistoricalDataResponse(response = {}) {
  return /DH-905|DH-907|unable to fetch data|incorrect parameters|no data present|Missing required fields/i.test(text);
 }
 
-function createDhanDataService({ app, credentialStore, errorJournal } = {}) {
+function createDhanDataService({ app, credentialStore, errorJournal, candleCache } = {}) {
  const cachePath = () => path.join(app.getPath('userData'), INSTRUMENT_CACHE_FILE);
  const commodityCandleCachePath = () => path.join(app.getPath('userData'), COMMODITY_CANDLE_CACHE_FILE);
  const commodityContractArchivePath = () => path.join(app.getPath('userData'), COMMODITY_CONTRACT_ARCHIVE_FILE);
@@ -3306,23 +3523,39 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
   const clippedDaily = clipCommoditySpreadRowsForPair(pair, nearDaily.rows, farDaily.rows, '1d', dailyStart, nowMs);
   const dailyQuality = sanitizeCommoditySpreadRows(buildCommoditySpreadClosePoints(clippedDaily.firstRows, clippedDaily.secondRows));
   const daily = dailyQuality.rows;
+  const dailyLegs = buildCommoditySpreadLegSeries(clippedDaily.firstRows, clippedDaily.secondRows);
   if (isDegenerateCommoditySpread(daily, pair)) {
    throw new Error(`${pair.family} daily spread history collapsed to an invalid all-zero series.`);
   }
   const nearIntraday = await getCommodityCachedCandles(pair.firstInstrument, '5m', intradayStart, nowMs, { force: options.force === true });
   const farIntraday = await getCommodityCachedCandles(pair.secondInstrument, '5m', intradayStart, nowMs, { force: options.force === true });
-  const intradayQuality = sanitizeCommoditySpreadRows(nearIntraday?.ok && farIntraday?.ok
-   ? buildCommoditySynchronizedSpreadCandles(nearIntraday.rows, farIntraday.rows, 3600)
+  const clippedIntraday = nearIntraday?.ok && farIntraday?.ok
+   ? clipCommoditySpreadRowsForPair(pair, nearIntraday.rows, farIntraday.rows, '5m', intradayStart, nowMs)
+   : { firstRows: [], secondRows: [] };
+  const intradayQuality = sanitizeCommoditySpreadRows(clippedIntraday.firstRows.length && clippedIntraday.secondRows.length
+   ? buildCommoditySynchronizedSpreadCandles(clippedIntraday.firstRows, clippedIntraday.secondRows, 3600)
    : []);
   const intraday = intradayQuality.rows;
+  const intradayLegs = buildCommoditySpreadLegSeries(
+   aggregateCandleRows(clippedIntraday.firstRows, 60 * 60),
+   aggregateCandleRows(clippedIntraday.secondRows, 60 * 60)
+  );
   const rollEvents = buildCommoditySpreadRollEvents(daily, pair);
   return {
    family: pair.family,
    pair,
    daily,
    intraday,
+   legSeries: {
+    daily: dailyLegs,
+    intraday: intradayLegs,
+   },
    bands: buildCommoditySpreadBands(daily, 60),
    rollEvents,
+   matchedHistoryQuality: {
+    daily: clippedDaily.matchedQuality || null,
+    intraday: clippedIntraday.matchedQuality || null,
+   },
    coverage: {
     requestedDailyDays: COMMODITY_SPREAD_MAX_DAILY_LOOKBACK_DAYS,
     requestedIntradayDays: COMMODITY_SPREAD_INTRADAY_HISTORY_DAYS,
@@ -3336,13 +3569,15 @@ async function getMarketFeed(message = {}, endpoint = '/marketfeed/ltp') {
     excludedIntradayRows: intradayQuality.excluded,
    },
    sourceQuality: {
-    cleaningVersion: 2,
+    cleaningVersion: 4,
     daily: 'exact_active_contract_pair',
     intraday: intraday.length ? 'exact_active_contract_synchronized_5m' : 'unavailable',
     exactHistoricalContractArchive: false,
     badTicksExcluded: dailyQuality.badTicks + intradayQuality.badTicks,
     rollDiscontinuitiesExcluded: dailyQuality.rollDiscontinuities + intradayQuality.rollDiscontinuities,
-    note: 'Daily and intraday history use the exact active near and next contract security IDs. Older expired pairs are archived prospectively only.',
+    note: pair.type === 'matched'
+     ? 'Same-expiry full/mini history excludes rolling or mismatched bars when quoted prices diverge by more than 3%.'
+     : 'Daily and intraday history use the exact active near and next contract security IDs. Older expired pairs are archived prospectively only.',
    },
    fetchedAt: Date.now(),
   };
@@ -3441,15 +3676,19 @@ async function startCommoditySpreadBackfill(message = {}) {
 
  async function getCommoditySpreadExpiryCatalog(message = {}) {
   const underlying = String(message.underlying || message.family || '').trim().toUpperCase();
+  const underlyings = underlying.split('/').map(value => value.trim()).filter(Boolean);
   const archive = await readCommodityContractArchive();
   const contracts = Object.values(archive.contracts || {})
-   .filter(item => !underlying || item.underlyingSymbol === underlying)
+   .filter(item => !underlyings.length || underlyings.includes(String(item.underlyingSymbol || '').toUpperCase()))
    .sort((a, b) => parseDerivativeExpiryMs(a.expiry) - parseDerivativeExpiryMs(b.expiry));
+  const pairSnapshots = underlyings.length <= 1
+   ? (underlying ? (archive.pairSnapshots?.[underlying] || []) : archive.pairSnapshots || {})
+   : underlyings.flatMap(underlyingSymbol => (archive.pairSnapshots?.[underlyingSymbol] || []).map(snapshot => ({ ...snapshot, underlyingSymbol })));
   return {
    ok: true,
    underlying,
    contracts,
-   pairSnapshots: underlying ? (archive.pairSnapshots?.[underlying] || []) : archive.pairSnapshots || {},
+   pairSnapshots,
    updatedAt: Number(archive.updatedAt || 0),
    methodology: 'Contract identities are retained prospectively. Historical Dhan rolling expiry-code segments are labelled separately.',
   };
@@ -3469,7 +3708,7 @@ async function startCommoditySpreadBackfill(message = {}) {
    || String(entry?.pair?.secondInstrument?.securityId || '') !== String(pair.secondInstrument.securityId);
   const invalidDaily = isDegenerateCommoditySpread(entry?.daily, pair);
   const incompleteDailyWindow = Number(entry?.coverage?.requestedDailyDays || 0) < COMMODITY_SPREAD_MAX_DAILY_LOOKBACK_DAYS;
-  const outdatedCleaning = Number(entry?.sourceQuality?.cleaningVersion || 0) < 2;
+  const outdatedCleaning = Number(entry?.sourceQuality?.cleaningVersion || 0) < 4;
   if (!entry || pairChanged || invalidDaily || incompleteDailyWindow || outdatedCleaning || message.force === true) {
    try {
     entry = await fetchCommoditySpreadHistoryEntry(pair, { force: message.force === true });
@@ -3501,12 +3740,33 @@ async function startCommoditySpreadBackfill(message = {}) {
     .finally(() => commoditySpreadRefreshes.delete(pair.family));
    commoditySpreadRefreshes.set(pair.family, refresh);
   }
-  let rows = resolution === '1d' ? entry.daily : entry.intraday;
+  let rows;
+  let legSeries;
+  if (resolution === '1d') {
+   rows = entry.daily;
+   legSeries = entry.legSeries?.daily || { near: [], far: [] };
+  } else if (resolution === '1w') {
+   rows = aggregateCandleRows(entry.daily, 7 * 24 * 60 * 60);
+   legSeries = {
+    near: aggregateCandleRows((entry.legSeries?.daily?.near || []).map(point => ({ time: point.time, open: point.value, high: point.value, low: point.value, close: point.value })), 7 * 24 * 60 * 60).map(row => ({ time: row.time, value: row.close })),
+    far: aggregateCandleRows((entry.legSeries?.daily?.far || []).map(point => ({ time: point.time, open: point.value, high: point.value, low: point.value, close: point.value })), 7 * 24 * 60 * 60).map(row => ({ time: row.time, value: row.close })),
+   };
+  } else if (resolution === '4h') {
+   rows = aggregateCandleRows(entry.intraday, 4 * 60 * 60);
+   legSeries = {
+    near: aggregateCandleRows((entry.legSeries?.intraday?.near || []).map(point => ({ time: point.time, open: point.value, high: point.value, low: point.value, close: point.value })), 4 * 60 * 60).map(row => ({ time: row.time, value: row.close })),
+    far: aggregateCandleRows((entry.legSeries?.intraday?.far || []).map(point => ({ time: point.time, open: point.value, high: point.value, low: point.value, close: point.value })), 4 * 60 * 60).map(row => ({ time: row.time, value: row.close })),
+   };
+  } else {
+   rows = entry.intraday;
+   legSeries = entry.legSeries?.intraday || { near: [], far: [] };
+  }
   if (view === 'current') {
    const currentStart = parseDerivativeExpiryMs(pair.firstInstrument.expiry) - COMMODITY_SPREAD_MAX_DAILY_LOOKBACK_DAYS * DAY_MS;
    rows = rows.filter(row => Number(row.time) * 1000 >= currentStart);
   }
   rows = mergeCommodityLiveSpread(rows, snapshot, resolution);
+  const legPriceValidation = validateCommoditySpreadLegPrices(rows, legSeries);
   const decision = buildCommoditySpreadDecision({
    dailyRows: entry.daily,
    intradayRows: entry.intraday,
@@ -3514,23 +3774,34 @@ async function startCommoditySpreadBackfill(message = {}) {
    snapshot,
   });
   const archive = await readCommodityContractArchive();
-  const pairSnapshots = archive.pairSnapshots?.[pair.family] || [];
+  const spreadUnderlyings = Array.from(new Set([
+   pair.firstInstrument?.underlyingSymbol,
+   pair.secondInstrument?.underlyingSymbol,
+  ].map(value => String(value || '').trim().toUpperCase()).filter(Boolean)));
+  const expiryCatalog = Object.values(archive.contracts || {}).filter(item => spreadUnderlyings.includes(String(item.underlyingSymbol || '').toUpperCase()));
+  const pairSnapshots = pair.type === 'matched'
+   ? spreadUnderlyings.flatMap(underlyingSymbol => (archive.pairSnapshots?.[underlyingSymbol] || []).map(snapshotRow => ({ ...snapshotRow, underlyingSymbol })))
+   : archive.pairSnapshots?.[spreadUnderlyings[0]] || [];
+  const nearestExpiryEvents = buildCommodityNearestExpiryEvents(pair, archive, rows, legSeries);
   const sourceQuality = {
    ...entry.sourceQuality,
    exactHistoricalContractArchive: pairSnapshots.length > 1,
    archivedPairSnapshots: pairSnapshots.length,
+   matchedHistory: entry.matchedHistoryQuality || null,
   };
   return {
    ok: true,
    readOnly: true,
    symbol: `MCX-SPREAD:${pair.key}`,
    displayName: `${pair.label} | ${pair.canonicalLabel}`,
-   timeframe: resolution === '1d' ? '1d' : '1h',
-   chartType: resolution === '1d' ? 'line' : 'candles',
+   timeframe: resolution,
+   chartType: resolution === '1d' || resolution === '1w' ? 'line' : 'candles',
    candles: rows,
+   legSeries,
+   nearestExpiryEvents,
    points: resolution === '1d' ? rows : [],
    bands: entry.bands,
-   rollEvents: (entry.rollEvents || []).slice(-4),
+   rollEvents: entry.rollEvents || [],
    coverage: entry.coverage,
    sourceQuality,
    stale,
@@ -3568,24 +3839,43 @@ async function startCommoditySpreadBackfill(message = {}) {
     validity: snapshot.validity || null,
    },
    contractDetails: {
-    formula: `${pair.secondInstrument.tradingSymbol} (far) - ${pair.firstInstrument.tradingSymbol} (near)`,
+    pairType: pair.type,
+    formula: pair.type === 'matched'
+     ? `${pair.secondInstrument.tradingSymbol} quote - ${pair.firstInstrument.tradingSymbol} quote; P&L uses ${pair.firstLots}:${pair.secondLots} equal-exposure lots`
+     : `${pair.secondInstrument.tradingSymbol} (${pair.secondRole}) - ${pair.firstInstrument.tradingSymbol} (${pair.firstRole})`,
     near: {
+     role: pair.firstRole,
+     lots: pair.firstLots,
      tradingSymbol: pair.firstInstrument.tradingSymbol,
      securityId: pair.firstInstrument.securityId,
      expiry: pair.firstInstrument.expiry,
      lotSize: pair.firstInstrument.lotSize,
     },
     far: {
+     role: pair.secondRole,
+     lots: pair.secondLots,
      tradingSymbol: pair.secondInstrument.tradingSymbol,
      securityId: pair.secondInstrument.securityId,
      expiry: pair.secondInstrument.expiry,
      lotSize: pair.secondInstrument.lotSize,
     },
    },
+   pnlModel: {
+    pairType: pair.type,
+    sameExpiry: String(pair.firstInstrument.expiry || '') === String(pair.secondInstrument.expiry || ''),
+    firstLots: pair.firstLots,
+    secondLots: pair.secondLots,
+    firstExposure: snapshot.costs?.firstExposure ?? null,
+    secondExposure: snapshot.costs?.secondExposure ?? null,
+    valuePerSpreadPoint: snapshot.costs?.valuePerSpreadPoint ?? null,
+    buySpreadProfitRule: 'Profit when Second minus First rises after costs.',
+    sellSpreadProfitRule: 'Profit when Second minus First falls after costs.',
+   },
    dataQuality: {
     ...(decision.dataQuality || {}),
     staleHistory: stale,
     source: sourceQuality,
+    legPriceValidation,
    },
    pair,
    snapshot,
@@ -3595,11 +3885,11 @@ async function startCommoditySpreadBackfill(message = {}) {
     : view === 'historical'
      ? 'archived_contract_catalog_with_active_pair_chart'
      : 'active_contract_pair',
-   expiryCatalog: Object.values(archive.contracts || {}).filter(item => item.underlyingSymbol === pair.family),
+   expiryCatalog,
    pairSnapshots,
-   expiryCatalogCount: Object.values(archive.contracts || {}).filter(item => item.underlyingSymbol === pair.family).length,
-   methodology: resolution === '1d'
-    ? `${view === 'historical' ? 'Archived contract identities are shown separately; unavailable expired-contract candles are not fabricated. ' : ''}Daily spread uses exact active Far close minus exact active Near close. It does not fabricate synthetic daily highs or lows.`
+   expiryCatalogCount: expiryCatalog.length,
+   methodology: resolution === '1d' || resolution === '1w'
+    ? `${view === 'historical' ? 'Archived contract identities are shown separately; unavailable expired-contract candles are not fabricated. ' : ''}${pair.type === 'matched' ? 'Same-expiry full/mini history is cropped to the latest synchronized segment with comparable quoted prices. ' : ''}Daily spread uses exact second-leg close minus exact first-leg close. It does not fabricate synthetic daily highs or lows.`
     : 'Hourly spread candles aggregate synchronized five-minute Far-close minus Near-close observations.',
   };
  }
@@ -3617,7 +3907,9 @@ async function startCommoditySpreadBackfill(message = {}) {
   if (!firstHistory?.ok || !secondHistory?.ok) return !firstHistory?.ok ? firstHistory : secondHistory;
   const clipped = clipCommoditySpreadRowsForPair(pair, firstHistory.rows, secondHistory.rows, resolution, start, end);
   const candles = buildCommoditySpreadCandles(clipped.firstRows, clipped.secondRows);
+  const legSeries = buildCommoditySpreadLegSeries(clipped.firstRows, clipped.secondRows);
   const analysis = analyzeCommoditySpreadCandles(candles);
+  const legPriceValidation = validateCommoditySpreadLegPrices(candles, legSeries);
   return {
    ok: true,
    readOnly: true,
@@ -3625,12 +3917,14 @@ async function startCommoditySpreadBackfill(message = {}) {
    displayName: `${pair.label} | ${pair.canonicalLabel}`,
    timeframe: resolution,
    candles,
+   legSeries,
    analysis,
+   dataQuality: { legPriceValidation, matchedHistory: clipped.matchedQuality || null },
    pair,
    historyStart: clipped.start,
    historyEnd: clipped.end,
    discardedCandles: Math.max(0, Number(firstHistory.rows?.length || 0) - clipped.firstRows.length) + Math.max(0, Number(secondHistory.rows?.length || 0) - clipped.secondRows.length),
-   methodology: 'Synthetic spread candle is second-leg price minus first-leg price. Daily spread history is clipped to the active front-contract window so stale/continuous futures rows are not mixed into the chart. A rising chart is widening; a falling chart is narrowing.',
+   methodology: `${pair.type === 'matched' ? 'Same-expiry full/mini bars are retained only while quoted prices remain economically comparable. ' : ''}Synthetic spread candle is second-leg price minus first-leg price. Daily spread history is clipped to the active front-contract window so stale/continuous futures rows are not mixed into the chart. A rising chart is widening; a falling chart is narrowing.`,
   };
  }
 
@@ -4086,11 +4380,54 @@ async function startCommoditySpreadBackfill(message = {}) {
  async function getCandles(message = {}) {
   const instrument = message.instrument && typeof message.instrument === 'object' ? message.instrument : await findInstrument(message.symbol || message.securityId);
   if (!instrument) return { ok: false, status: 404, error: 'Instrument/security ID was not found in the local market-data cache.' };
-  const resolution = normalizeResolution(message.resolution || '4h');
+  const requestedResolution = String(message.resolution || '4h').trim().toLowerCase();
+  const cacheResolution = requestedResolution === '1w'
+   ? '1w'
+   : requestedResolution === '1d'
+   ? '1d'
+   : '4h';
+  const resolution = normalizeResolution(requestedResolution);
   const endMs = Number(message.end || 0) > 1000000000000 ? Number(message.end) : (Number(message.end || 0) > 0 ? Number(message.end) * 1000 : Date.now());
   const requestedStartMs = Number(message.start || 0) > 1000000000000 ? Number(message.start) : (Number(message.start || 0) > 0 ? Number(message.start) * 1000 : endMs - (resolution.kind === 'historical' ? 730 * 86400000 : 30 * 86400000));
   const intradayEarliestMs = endMs - (DHAN_INTRADAY_MAX_HISTORY_DAYS * DAY_MS);
-  const startMs = resolution.kind === 'intraday' ? Math.max(requestedStartMs, intradayEarliestMs) : requestedStartMs;
+  const historicalEarliestMs = endMs - (DHAN_HISTORICAL_MAX_HISTORY_DAYS * DAY_MS);
+  const boundedStartMs = resolution.kind === 'intraday'
+   ? Math.max(requestedStartMs, intradayEarliestMs)
+   : Math.max(requestedStartMs, historicalEarliestMs);
+  const cacheSymbol = String(message.symbol || instrument.tradingSymbol || instrument.symbol || instrument.securityId || '').trim().toUpperCase();
+  const cachedRecord = candleCache?.isNativeCandleResolution?.(cacheResolution)
+   ? await candleCache.get(cacheSymbol, cacheResolution).catch(() => null)
+   : null;
+  const cachedRows = Array.isArray(cachedRecord?.rows) ? cachedRecord.rows : [];
+  const oldestCachedMs = cachedRows.length ? Number(cachedRows[0]?.time || 0) * 1000 : 0;
+  const newestCachedMs = cachedRows.length ? Number(cachedRows[cachedRows.length - 1]?.time || 0) * 1000 : 0;
+  const overlapMs = Math.max(resolution.seconds * 1000 * 2, DAY_MS);
+  const cacheCoversStart = oldestCachedMs > 0 && oldestCachedMs <= boundedStartMs + (resolution.seconds * 1000);
+  const cacheCoversEnd = newestCachedMs > 0 && newestCachedMs >= endMs - (resolution.seconds * 1000);
+  const cacheFresh = Date.now() - Number(cachedRecord?.updatedAt || 0) < Math.max(60 * 1000, Math.min(resolution.seconds * 1000, 6 * 60 * 60 * 1000));
+  if (cachedRows.length && cacheCoversStart && cacheCoversEnd && cacheFresh && message.force !== true) {
+   return {
+    ok: true,
+    status: 200,
+    instrument,
+    rows: cachedRows.filter(row => Number(row.time || 0) * 1000 >= boundedStartMs && Number(row.time || 0) * 1000 <= endMs),
+    chunks: [],
+    apiCalls: 0,
+    cached: true,
+    incremental: true,
+    cache: {
+     symbol: cacheSymbol,
+     resolution: cacheResolution,
+     rowCount: cachedRows.length,
+     oldestTime: Number(cachedRows[0]?.time || 0),
+     newestTime: Number(cachedRows[cachedRows.length - 1]?.time || 0),
+     updatedAt: Number(cachedRecord?.updatedAt || 0),
+    },
+   };
+  }
+  const startMs = cachedRows.length && cacheCoversStart && newestCachedMs > 0
+   ? Math.max(boundedStartMs, newestCachedMs - overlapMs)
+   : boundedStartMs;
   const baseBody = {
    securityId: String(instrument.securityId),
    exchangeSegment: instrument.exchangeSegment,
@@ -4102,7 +4439,7 @@ async function startCommoditySpreadBackfill(message = {}) {
   const endpoint = resolution.kind === 'historical' ? '/charts/historical' : '/charts/intraday';
   const ranges = resolution.kind === 'intraday'
    ? buildIntradayChunks(startMs, endMs, Number(message.chunkDays || DHAN_INTRADAY_CHUNK_DAYS))
-   : [{ startMs, endMs }];
+   : buildHistoricalChunks(startMs, endMs, Number(message.chunkDays || DHAN_HISTORICAL_CHUNK_DAYS));
   const chunks = [];
   const currentCooldownMs = Math.max(0, candleBlockedUntil - Date.now());
   if (currentCooldownMs > 0 && message.failFastOnRateLimit === true) {
@@ -4153,6 +4490,17 @@ async function startCommoditySpreadBackfill(message = {}) {
       error: `Chart data is cooling down after a Dhan rate-limit warning. Retry in ${Math.max(1, Math.ceil(retryAfterMs / 1000))} seconds.`,
      };
     }
+    if (cachedRows.length) {
+     return {
+      ...response,
+      ok: true,
+      instrument,
+      rows: cachedRows.filter(row => Number(row.time || 0) * 1000 >= boundedStartMs && Number(row.time || 0) * 1000 <= endMs),
+      cached: true,
+      stale: true,
+      apiCalls: chunks.length,
+     };
+    }
     return response;
    }
    chunks.push({
@@ -4163,13 +4511,39 @@ async function startCommoditySpreadBackfill(message = {}) {
    });
   }
   const lastResponse = chunks[chunks.length - 1] || { ok: true, status: 200, data: {} };
-  const mergedRows = aggregateCandleRows(mergeCandleRows(chunks), resolution.aggregateSeconds || 0);
+  const fetchedRows = aggregateCandleRows(mergeCandleRows(chunks), resolution.aggregateSeconds || 0);
+  let mergedRows = fetchedRows;
+  if (candleCache?.isNativeCandleResolution?.(cacheResolution) && cacheSymbol && (fetchedRows.length || cachedRows.length)) {
+   const saved = await candleCache.put({
+    symbol: cacheSymbol,
+    resolution: cacheResolution,
+    rows: [...cachedRows, ...fetchedRows],
+    updatedAt: Date.now(),
+   }).catch(error => {
+    errorJournal?.append?.('dhan:candle-cache-write', error, { cacheSymbol, cacheResolution });
+    return null;
+   });
+   if (saved?.ok && Array.isArray(saved.rows)) mergedRows = saved.rows;
+  } else if (cachedRows.length) {
+   mergedRows = candleCache?.mergeRows ? candleCache.mergeRows(cachedRows, fetchedRows) : fetchedRows;
+  }
+  const requestedRows = mergedRows.filter(row => Number(row.time || 0) * 1000 >= boundedStartMs && Number(row.time || 0) * 1000 <= endMs);
   return {
    ...lastResponse,
    instrument,
-   rows: mergedRows,
+   rows: requestedRows,
    chunks: chunks.map(chunk => ({ fromDate: chunk.fromDate, toDate: chunk.toDate, count: chunk.rows.length })),
    apiCalls: chunks.length,
+   cached: cachedRows.length > 0,
+   incremental: cachedRows.length > 0 && cacheCoversStart,
+   cache: {
+    symbol: cacheSymbol,
+    resolution: cacheResolution,
+    rowCount: mergedRows.length,
+    oldestTime: Number(mergedRows[0]?.time || 0),
+    newestTime: Number(mergedRows[mergedRows.length - 1]?.time || 0),
+    updatedAt: Date.now(),
+   },
    request: {
     securityId: String(instrument.securityId || ''),
     exchangeSegment: String(instrument.exchangeSegment || ''),
@@ -4585,6 +4959,9 @@ module.exports = {
   buildCommoditySpreadPairs,
   buildCommoditySpreadCandles,
   buildCommoditySpreadClosePoints,
+  buildCommoditySpreadLegSeries,
+  validateCommoditySpreadLegPrices,
+  buildCommodityNearestExpiryEvents,
   repairCommoditySpreadGlitches,
   sanitizeCommoditySpreadRows,
   mergeCommodityLiveSpread,
@@ -4594,6 +4971,7 @@ module.exports = {
   buildCommoditySpreadRollEvents,
   buildCommoditySpreadDecision,
   clipCommoditySpreadRowsForPair,
+  filterMatchedCommodityRows,
   analyzeCommoditySpreadCandles,
   commoditySpreadCostEstimate,
   commoditySpreadSafeguards,
@@ -4607,6 +4985,7 @@ module.exports = {
   isNseEquityInstrument,
   isBseEquityInstrument,
   buildIntradayChunks,
+  buildHistoricalChunks,
   getNseBseMarketSession,
   mergeCandleRows,
   aggregateCandleRows,

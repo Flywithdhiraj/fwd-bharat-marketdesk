@@ -2,6 +2,15 @@ body.app-is-locked {
  overflow: hidden;
 }
 
+body.app-auth-pending > :not(#appLockOverlay):not(script) {
+ visibility: hidden !important;
+}
+
+body.app-auth-pending {
+ overflow: hidden;
+ background: #03101a;
+}
+
 .app-lock-overlay {
  position: fixed;
  inset: 0;

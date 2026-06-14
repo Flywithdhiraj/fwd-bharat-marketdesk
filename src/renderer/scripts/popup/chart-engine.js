@@ -9,23 +9,30 @@
  text: 'rgba(210, 220, 232, 0.78)',
  up: '#1de9b6',
  down: '#ff5d7a',
- ema9: '#57f3ca',
- ema30: '#ffd277',
- ema100: '#4fd1ff',
- sma20: '#c8a8ff',
- sma50: '#86a8ff',
- sma200: '#f2a65a',
- vwap: '#ff9c33',
- bollinger: '#9bb6ff',
- rsi: '#79ddff',
- macd: '#57f3ca',
- signal: '#ffd277',
- atr: '#f2a65a',
- obv: '#c8a8ff',
- obvSma: '#ff4757',
- indexCompare: '#ffb84d',
- supertrendUp: '#1de9b6',
- supertrendDown: '#ff5d7a',
+ spread: '#22d3ee',
+ nearLeg: '#fbbf24',
+ farLeg: '#fb7185',
+ expiry: '#f97316',
+ liquidityRoll: '#eab308',
+ ema9: '#2dd4bf',
+ ema30: '#facc15',
+ ema100: '#38bdf8',
+ sma20: '#f472b6',
+ sma50: '#818cf8',
+ sma200: '#fb923c',
+ vwap: '#f43f5e',
+ bollingerUpper: '#a78bfa',
+ bollingerBasis: '#94a3b8',
+ bollingerLower: '#60a5fa',
+ rsi: '#84cc16',
+ macd: '#06b6d4',
+ signal: '#e879f9',
+ atr: '#a3e635',
+ obv: '#f97316',
+ obvSma: '#ec4899',
+ indexCompare: '#f59e0b',
+ supertrendUp: '#10b981',
+ supertrendDown: '#ef4444',
  supportDaily: '#ffd84e',
  supportIntraday: '#00c3ff',
  resistanceDaily: '#ff4757',
@@ -50,13 +57,56 @@
  .replace(/'/g, '&#39;');
  }
 
- function toTime(value = 0) {
+function toTime(value = 0) {
  const numeric = Number(value || 0);
  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
  return Math.floor(numeric > 1e12 ? numeric / 1000 : numeric);
  }
 
- function lineData(candles = [], values = [], visibleTimes = null, options = {}) {
+ function commodityExpiryTimeline(dataset = {}, candles = []) {
+ const firstTime = toTime(candles[0]?.time);
+ const lastTime = toTime(candles[candles.length - 1]?.time);
+ if (!firstTime || !lastTime) return [];
+ const archivedFrontExpiries = Array.isArray(dataset.spreadNearestExpiryEvents) ? dataset.spreadNearestExpiryEvents : [];
+ if (archivedFrontExpiries.length) {
+ return archivedFrontExpiries.map(event => ({
+ ...event,
+ time: toTime(event.time || event.expiryTime),
+ symbols: [event.firstSymbol, event.secondSymbol].filter(Boolean),
+ })).filter(event => event.time >= firstTime - 24 * 60 * 60 && event.time <= lastTime + 370 * 24 * 60 * 60);
+ }
+ const contracts = [
+ ...(Array.isArray(dataset.spreadExpiryCatalog) ? dataset.spreadExpiryCatalog : []),
+ dataset.spreadContractDetails?.near || null,
+ dataset.spreadContractDetails?.far || null,
+ ].filter(Boolean);
+ const byExpiry = new Map();
+ contracts.forEach(contract => {
+ const rawExpiry = String(contract.expiry || contract.expiryDate || '').trim();
+ if (!rawExpiry) return;
+ const parsed = Date.parse(rawExpiry.includes('T') ? rawExpiry : rawExpiry.replace(' ', 'T'));
+ if (!Number.isFinite(parsed)) return;
+ const time = Math.floor(parsed / 1000);
+ if (time < firstTime - 24 * 60 * 60 || time > lastTime + 370 * 24 * 60 * 60) return;
+ const symbol = String(contract.tradingSymbol || contract.symbol || contract.underlyingSymbol || '').trim();
+ const current = byExpiry.get(time) || { time, symbols: [] };
+ if (symbol && !current.symbols.includes(symbol)) current.symbols.push(symbol);
+ byExpiry.set(time, current);
+ });
+ return [...byExpiry.values()].sort((a, b) => a.time - b.time);
+ }
+
+ function spreadLegData(points = [], visibleTimes = null) {
+ return (Array.isArray(points) ? points : []).map(point => {
+ const time = toTime(point?.time);
+ const value = Number(point?.value ?? point?.close);
+ if (!time || !Number.isFinite(value)) return null;
+ if (visibleTimes?.size && !visibleTimes.has(time)) return null;
+ return { time, value };
+ }).filter(Boolean);
+ }
+
+function lineData(candles = [], values = [], visibleTimes = null, options = {}) {
  const minValue = Number(options.minValue ?? Number.NEGATIVE_INFINITY);
  const positiveOnly = options.positiveOnly === true;
  const skipLeadingZero = options.skipLeadingZero === true;
@@ -158,11 +208,16 @@
  vertLines: { color: 'rgba(0, 0, 0, 0)', visible: false },
  horzLines: { color: 'rgba(0, 0, 0, 0)', visible: false },
  },
- rightPriceScale: {
- borderColor: 'rgba(255, 255, 255, 0.10)',
- scaleMargins: { top: 0.05, bottom: 0.12 },
- },
- timeScale: {
+rightPriceScale: {
+borderColor: 'rgba(255, 255, 255, 0.10)',
+scaleMargins: { top: 0.05, bottom: 0.12 },
+},
+leftPriceScale: {
+visible: false,
+borderColor: 'rgba(255, 255, 255, 0.10)',
+scaleMargins: { top: 0.05, bottom: 0.12 },
+},
+timeScale: {
  borderColor: 'rgba(255, 255, 255, 0.10)',
  timeVisible: true,
  secondsVisible: false,
@@ -1353,6 +1408,11 @@ ${tooltip}
  showVwap: payload.state?.showVwap === true,
  indicators: payload.state?.indicators || {},
  compareWithIndex: payload.state?.compareWithIndex !== false,
+ showSpreadLegs: payload.state?.showSpreadLegs !== false,
+ showSpreadExpiries: payload.state?.showSpreadExpiries !== false,
+ spreadLegCount: (payload.dataset?.spreadLegSeries?.near?.length || 0) + (payload.dataset?.spreadLegSeries?.far?.length || 0),
+ spreadExpiryCount: payload.dataset?.spreadExpiryCatalog?.length || 0,
+ nearestExpiryCount: payload.dataset?.spreadNearestExpiryEvents?.length || 0,
  indexCompareCount: payload.indexComparison?.candles?.length || 0,
  indexCompareNewest: payload.indexComparison?.candles?.[payload.indexComparison?.candles?.length - 1]?.time || 0,
  candleCount: payload.dataset?.candles?.length || 0,
@@ -1453,13 +1513,57 @@ ${tooltip}
  wickDownColor: COLORS.down,
  priceFormat,
  }, 0);
- priceSeries.setData(chartType === 'line'
+ const expiryTimeline = allowSigned && state.showSpreadExpiries !== false
+ ? commodityExpiryTimeline(payload.dataset, visibleCandles)
+ : [];
+ const expiryWhitespace = expiryTimeline
+ .filter(event => !visibleCandles.some(candle => candle.time === event.time))
+ .map(event => ({ time: event.time }));
+ const mainSeriesData = chartType === 'line'
  ? visibleCandles.map(candle => ({ time: candle.time, value: candle.close }))
- : visibleCandles);
+ : visibleCandles;
+ priceSeries.setData([...mainSeriesData, ...expiryWhitespace].sort((a, b) => toTime(a.time) - toTime(b.time)));
+
+ const spreadLegSeries = payload.dataset?.spreadLegSeries || {};
+ if (allowSigned && state.showSpreadLegs !== false) {
+ const nearData = spreadLegData(spreadLegSeries.near, visibleTimes);
+ const farData = spreadLegData(spreadLegSeries.far, visibleTimes);
+ if (nearData.length || farData.length) {
+ chart.applyOptions({
+ leftPriceScale: {
+ visible: true,
+ borderColor: 'rgba(251, 191, 36, 0.28)',
+ scaleMargins: { top: 0.05, bottom: 0.12 },
+ },
+ });
+ }
+ const contracts = payload.dataset?.spreadContractDetails || {};
+ const isMatchedSpread = contracts.pairType === 'matched';
+ const firstLegTitle = isMatchedSpread
+ ? `${contracts.near?.lots || 1}x ${contracts.near?.tradingSymbol || contracts.near?.role || 'First'}`
+ : `Near ${contracts.near?.tradingSymbol || ''}`.trim();
+ const secondLegTitle = isMatchedSpread
+ ? `${contracts.far?.lots || 1}x ${contracts.far?.tradingSymbol || contracts.far?.role || 'Second'}`
+ : `Far ${contracts.far?.tradingSymbol || ''}`.trim();
+ addLine(chart, firstLegTitle, nearData, COLORS.nearLeg, 0, {
+ priceScaleId: 'left',
+ lineWidth: 2,
+ showTitle: true,
+ lastValueVisible: true,
+ crosshairMarkerVisible: true,
+ });
+ addLine(chart, secondLegTitle, farData, COLORS.farLeg, 0, {
+ priceScaleId: 'left',
+ lineWidth: 2,
+ showTitle: true,
+ lastValueVisible: true,
+ crosshairMarkerVisible: true,
+ });
+ }
 
  const spreadBands = payload.dataset?.spreadBands || null;
  if (allowSigned && spreadBands && Array.isArray(spreadBands.mean) && spreadBands.mean.length === candles.length) {
-  addLine(chart, 'Spread Mean', lineData(candles, spreadBands.mean, visibleTimes), '#ffd277', 0, { lineWidth: 2, showTitle: true });
+  addLine(chart, 'Spread Mean', lineData(candles, spreadBands.mean, visibleTimes), COLORS.ema30, 0, { lineWidth: 2, showTitle: true });
   addLine(chart, '+1 SD', lineData(candles, spreadBands.upper1, visibleTimes), 'rgba(121, 221, 255, 0.72)', 0, { lineWidth: 1 });
   addLine(chart, '-1 SD', lineData(candles, spreadBands.lower1, visibleTimes), 'rgba(121, 221, 255, 0.72)', 0, { lineWidth: 1 });
   addLine(chart, '+2 SD', lineData(candles, spreadBands.upper2, visibleTimes), 'rgba(255, 93, 122, 0.62)', 0, { lineWidth: 1 });
@@ -1517,9 +1621,9 @@ ${tooltip}
  }
  if (active.vwap) addLine(chart, 'VWAP', lineData(candles, indicators.vwap, visibleTimes, { positiveOnly: true }), COLORS.vwap, 0, { ...indicatorLabelOptions, lineWidth: 3 });
  if (active.bollinger) {
- addLine(chart, 'BB Upper', lineData(candles, indicators.bbUpper, visibleTimes, { positiveOnly: true }), COLORS.bollinger, 0, { lineWidth: 1, lastValueVisible: false });
- addLine(chart, 'BB Basis', lineData(candles, indicators.bbMiddle, visibleTimes, { positiveOnly: true }), 'rgba(155, 182, 255, 0.56)', 0, { lineWidth: 1, lastValueVisible: false });
- addLine(chart, 'BB Lower', lineData(candles, indicators.bbLower, visibleTimes, { positiveOnly: true }), COLORS.bollinger, 0, { lineWidth: 1, lastValueVisible: false });
+ addLine(chart, 'BB Upper', lineData(candles, indicators.bbUpper, visibleTimes, { positiveOnly: true }), COLORS.bollingerUpper, 0, { lineWidth: 1, lastValueVisible: false });
+ addLine(chart, 'BB Basis', lineData(candles, indicators.bbMiddle, visibleTimes, { positiveOnly: true }), COLORS.bollingerBasis, 0, { lineWidth: 1, lastValueVisible: false });
+ addLine(chart, 'BB Lower', lineData(candles, indicators.bbLower, visibleTimes, { positiveOnly: true }), COLORS.bollingerLower, 0, { lineWidth: 1, lastValueVisible: false });
  }
  if (active.supertrend) {
  const stData = lineData(candles, indicators.supertrend, visibleTimes, { positiveOnly: true });
@@ -1593,14 +1697,21 @@ ${tooltip}
  shape: marker.shape || 'circle',
  text: String(marker.label || '').slice(0, 18),
  })).filter(marker => marker.time);
- const spreadRollMarkers = (payload.dataset?.spreadRollEvents || []).slice(-4).map(marker => ({
+ const spreadRollMarkers = (payload.dataset?.spreadRollEvents || []).map(marker => ({
   time: toTime(marker.time),
   position: 'aboveBar',
-  color: COLORS.signal,
+  color: marker.type === 'expiry_fallback' ? COLORS.expiry : COLORS.liquidityRoll,
   shape: 'square',
   text: marker.type === 'expiry_fallback' ? 'Expiry roll' : 'Liquidity roll',
  })).filter(marker => marker.time);
- const allMarkers = [...replayMarkers, ...intelligenceMarkers, ...spreadRollMarkers];
+ const spreadExpiryMarkers = expiryTimeline.map(event => ({
+ time: event.time,
+ position: 'aboveBar',
+ color: COLORS.expiry,
+ shape: 'arrowDown',
+ text: `${event.expired === false ? 'Upcoming ' : ''}Expiry${Number.isFinite(Number(event.spreadPrice)) ? ` | Spread ${formatPrice(event.spreadPrice)}` : ''}${Number.isFinite(Number(event.firstPrice)) ? ` | L1 ${formatPrice(event.firstPrice)}` : ''}${Number.isFinite(Number(event.secondPrice)) ? ` | L2 ${formatPrice(event.secondPrice)}` : ''}`.slice(0, 88),
+ }));
+ const allMarkers = [...replayMarkers, ...intelligenceMarkers, ...spreadRollMarkers, ...spreadExpiryMarkers];
  if (allMarkers.length && globalThis.LightweightCharts.createSeriesMarkers) {
  globalThis.LightweightCharts.createSeriesMarkers(priceSeries, allMarkers);
  }

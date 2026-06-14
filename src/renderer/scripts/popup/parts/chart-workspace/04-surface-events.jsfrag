@@ -10,7 +10,18 @@
  return reviewRenderPromise;
  }
  if (surface === SURFACE_DETACHED) {
- detachedRenderPromise = detachedRenderPromise.then(() => renderSurface(SURFACE_DETACHED, force)).catch(() => {});
+ detachedRenderPromise = detachedRenderPromise
+ .then(() => renderSurface(SURFACE_DETACHED, force))
+ .catch(error => {
+ const root = detachedSurface.root;
+ if (root) {
+ root.innerHTML = `<section class="chart-pane-loading chart-load-error" role="alert">
+ <div class="chart-pane-loading-title">Chart could not open</div>
+ <div class="chart-pane-loading-copy">${escapeHtml(error?.message || 'The detached chart failed while loading local data.')}</div>
+ </section>`;
+ }
+ console.error('[FWD chart] Detached render failed', error);
+ });
  return detachedRenderPromise;
  }
  previewRenderPromise = previewRenderPromise.then(() => renderSurface(SURFACE_PREVIEW, force)).catch(() => {});
@@ -159,7 +170,7 @@
  presetMeta,
  })
  : null;
- const shouldLoadIndexContext = dataset?.ok && !dataset?.syntheticIndex && state.compareWithIndex !== false;
+ const shouldLoadIndexContext = dataset?.ok && !dataset?.syntheticIndex && !dataset?.commoditySpread && state.compareWithIndex !== false;
  const indexDataset = shouldLoadIndexContext
  ? await loadFwdIndexChartDataset({ symbol: FWD_INDEX_SYMBOL, timeframe: '1d' }, strategy).catch(() => null)
  : null;
@@ -189,6 +200,8 @@
  const executionPayload = fastSingle
  ? { state: executionState, dataset: null, model: null, indicators: {}, intelligence: null }
  : await buildChartPayload(`${surface}-execution`, executionState, strategy, orderContext, activeSignal, signalState?.marketIndex || null, force, forceData);
+ const renderRoot = surfaceRef.root;
+ if (!surfaceRef.mounted || !renderRoot || !document.body.contains(renderRoot)) return;
  const scanResults = Array.isArray(signalState?.scanResults) ? signalState.scanResults : [];
  const contextData = {
  scanResults,
@@ -199,7 +212,7 @@
  const markup = buildDeskMarkup(surface, state, strategy, primaryPayload, executionPayload, activeSignal, signalState?.marketIndex || null, contextData);
  if (!force && markup === surfaceRef.lastMarkup) return;
  surfaceRef.lastMarkup = markup;
- surfaceRef.root.innerHTML = markup;
+ renderRoot.innerHTML = markup;
  bindSurfaceControls(surface, state, executionPayload.model || primaryPayload.model);
  const renderCharts = () => {
  const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
@@ -209,7 +222,8 @@
  ];
  for (const item of chartItems) {
  const chartId = `${surface}-${item.key}`;
- const chartContainer = surfaceRef.root.querySelector(`[data-ds-lwc-chart="${chartId}"]`);
+ if (!surfaceRef.mounted || surfaceRef.root !== renderRoot || !document.body.contains(renderRoot)) return;
+ const chartContainer = renderRoot.querySelector(`[data-ds-lwc-chart="${chartId}"]`);
  if (chartContainer && item.payload.model && item.payload.dataset?.ok && globalThis.FWDTradeDeskChartEngine?.render) {
  globalThis.FWDTradeDeskChartEngine.render(chartContainer, {
  surface: chartId,
@@ -294,7 +308,7 @@
  presetMeta,
  })
  : null;
- const shouldLoadIndexContext = dataset?.ok && !dataset?.syntheticIndex && state.compareWithIndex !== false;
+ const shouldLoadIndexContext = dataset?.ok && !dataset?.syntheticIndex && !dataset?.commoditySpread && state.compareWithIndex !== false;
  const indexDataset = shouldLoadIndexContext
  ? await loadFwdIndexChartDataset({ symbol: FWD_INDEX_SYMBOL, timeframe: '1d' }, strategy).catch(() => null)
  : null;
@@ -302,6 +316,8 @@
  ? await buildIndexCorrelation(chartState.symbol, signalState?.marketIndex || null, indexDataset).catch(() => null)
  : null;
  const indexComparison = shouldLoadIndexContext ? buildIndexComparison(chartState.symbol, signalState?.marketIndex || null, indexDataset) : null;
+ const renderRoot = surfaceRef.root;
+ if (!surfaceRef.mounted || !renderRoot || !document.body.contains(renderRoot)) return;
  const markup = buildChartMarkup(
  surface,
  chartState,
@@ -317,11 +333,12 @@
  );
  if (!force && markup === surfaceRef.lastMarkup) return;
  surfaceRef.lastMarkup = markup;
- surfaceRef.root.innerHTML = markup;
+ renderRoot.innerHTML = markup;
  bindSurfaceControls(surface, state, model);
  const renderChart = () => {
  const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
- const chartContainer = surfaceRef.root.querySelector(`[data-ds-lwc-chart="${surface}"]`);
+ if (!surfaceRef.mounted || surfaceRef.root !== renderRoot || !document.body.contains(renderRoot)) return;
+ const chartContainer = renderRoot.querySelector(`[data-ds-lwc-chart="${surface}"]`);
  if (!chartContainer || !model || !dataset?.ok || !globalThis.FWDTradeDeskChartEngine?.render) return;
  globalThis.FWDTradeDeskChartEngine.render(chartContainer, {
  surface,
@@ -855,6 +872,14 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  }
  if (key === 'showGrid') {
  await updateChartState(surface, currentState => ({ showGrid: currentState.showGrid !== true }));
+ return;
+ }
+ if (key === 'showSpreadLegs') {
+ await updateChartState(surface, currentState => ({ showSpreadLegs: currentState.showSpreadLegs === false }), { forceRender: true });
+ return;
+ }
+ if (key === 'showSpreadExpiries') {
+ await updateChartState(surface, currentState => ({ showSpreadExpiries: currentState.showSpreadExpiries === false }), { forceRender: true });
  return;
  }
  if (key === 'hideEventCandles') {

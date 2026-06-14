@@ -1,0 +1,16 @@
+{
+  "generatedAt": "",
+  "status": "PENDING",
+  "methodology": {
+    "source": "Official MCX date-wise bhavcopy",
+    "strategy": "Rolling spread research with chronological holdout",
+    "limitations": "No pair is approved until at least three years of exchange data is downloaded and the out-of-sample tests pass."
+  },
+  "coverage": {
+    "rows": 0,
+    "tradingDays": 0,
+    "firstDate": "",
+    "lastDate": ""
+  },
+  "results": []
+}
