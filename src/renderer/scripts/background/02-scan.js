@@ -10,6 +10,7 @@ const {
  computeLeadershipState,
  computeSectorBreadth,
  deriveSignalPersistence,
+ formatIndiaTime: scanFormatIndiaTime,
  formatThresholdSummary,
  mergeWatchlists,
  sanitizeKeyLevelSettings: scanSanitizeKeyLevelSettings,
@@ -2018,7 +2019,7 @@ async function runScan() {
  // -- Save scan results to storage (with quota-exceeded fallback) --
  let storageSaveOk = true;
  const scanCompletedAt = Date.now();
- const scanCompletedLabel = new Date(scanCompletedAt).toLocaleTimeString();
+ const scanCompletedLabel = scanFormatIndiaTime(scanCompletedAt);
  const scannerUniverseSnapshot = {
   scanResults: enrichedResults,
   alerts: currentAlerts,

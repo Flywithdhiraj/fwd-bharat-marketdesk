@@ -10,6 +10,7 @@ function read(relativePath) {
 }
 
 const scanText = read('src/renderer/scripts/background/02-scan.js');
+const commonText = read('src/renderer/scripts/shared/common.js');
 const shellText = read('src/renderer/index.html') + read('src/renderer/scripts/popup/01-shell.js');
 const ribbonStyleText = read('src/renderer/styles/16-index-ribbon.css');
 const registryText = read('src/renderer/scripts/shared/strategy-registry.js');
@@ -18,6 +19,9 @@ const chartWorkspaceText = read('src/renderer/scripts/popup/07-chart-workspace.j
 const runtimeText = read('src/renderer/scripts/background/04-runtime.js');
 
 assert(scanText.includes('Indices:'), 'scanner should log index tape state');
+assert(commonText.includes("timeZone: 'Asia/Kolkata'"), 'shared scan timestamps should be formatted explicitly in India time');
+assert(scanText.includes('scanFormatIndiaTime(scanCompletedAt)'), 'scanner should save its completion label in India time');
+assert(shellText.includes('formatScannerIndiaTime(preloaded?.lastScanTs, lastScan)'), 'scanner UI should correct saved labels from their timestamp');
 assert(scanText.includes("benchmarkSymbol: 'NIFTY'"), 'scanner should expose NIFTY as benchmark symbol');
 assert(scanText.includes("method: 'FWD Index benchmark'"), 'scanner should identify the FWD Index benchmark method in user-facing data');
 assert(scanText.includes('indexTape'), 'scanner should expose the live Dhan index tape');

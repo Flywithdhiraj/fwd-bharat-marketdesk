@@ -514,6 +514,12 @@ function formatScanStripStatus(statusText) {
  return text;
 }
 
+function formatScannerIndiaTime(timestamp = 0, fallback = '') {
+ const formatter = globalThis.FWDTradeDeskShared?.formatIndiaTime;
+ const formatted = typeof formatter === 'function' ? formatter(timestamp) : '';
+ return formatted || String(fallback || '');
+}
+
 function updateStatusBar(status, pct, lastScan, scanActive = false, scanHeartbeat = 0, preloaded = null) {
  const dot = document.getElementById('sdot');
  const stxt = document.getElementById('stxt');
@@ -531,6 +537,7 @@ function updateStatusBar(status, pct, lastScan, scanActive = false, scanHeartbea
  const progress = Number.isFinite(+pct) ? Math.max(0, Math.min(100, +pct)) : 0;
  const statusText = String(status || '').trim();
  const pendingCount = Number(universeMeta.pending || 0);
+ const scanTimeLabel = formatScannerIndiaTime(preloaded?.lastScanTs, lastScan);
  const completedScanWithPartialWarning = !!lastScan && !scanActive && (/using partial results/i.test(statusText) || universeMeta.partial || (pendingCount > 0 && !universeMeta.completed));
  const failedStatus = /stopped|failed|rate limit|too many|unavailable|error/i.test(statusText);
  const completedStatus = !completedScanWithPartialWarning && (universeMeta.completed || /^ok done|^ready\b|complete/i.test(statusText) || progress >= 100);
@@ -556,8 +563,8 @@ function updateStatusBar(status, pct, lastScan, scanActive = false, scanHeartbea
  scanning = true;
  } else {
  if (dot) dot.className = failedStatus ? 'sdot red' : (progress === 100 ? 'sdot green' : 'sdot');
- const readyText = lastScan
- ? `Ready - last scan ${lastScan}${universeLabel ? ` | ${universeLabel}` : ''}${scannedCount || totalCount ? ` | ${scannedCount || '--'}/${totalCount || '--'} scanned` : ''}`
+ const readyText = scanTimeLabel
+ ? `Ready - last scan ${scanTimeLabel}${universeLabel ? ` | ${universeLabel}` : ''}${scannedCount || totalCount ? ` | ${scannedCount || '--'}/${totalCount || '--'} scanned` : ''}`
  : 'Ready - click Scan Now';
  if (stxt) stxt.textContent = completedScanWithPartialWarning
  ? statusText
@@ -577,7 +584,7 @@ if (scanning) {
  }
  }
  }
- if (lastScan && slst) slst.textContent = `Last: ${lastScan}${universeLabel ? ` | ${universeLabel}` : ''}${scannedCount || totalCount ? ` | ${scannedCount || '--'}/${totalCount || '--'}` : ''}`;
+ if (scanTimeLabel && slst) slst.textContent = `Last: ${scanTimeLabel}${universeLabel ? ` | ${universeLabel}` : ''}${scannedCount || totalCount ? ` | ${scannedCount || '--'}/${totalCount || '--'}` : ''}`;
 }
 
 
@@ -1116,6 +1123,7 @@ async function selectScannerUniverse(universe = 'fno_stocks', { runNow = false }
   };
   strategy.maxCoins = getScannerUniverseDefaultLimit(scanUniverse);
  const savedSnapshot = data?.[SCAN_UNIVERSE_SNAPSHOTS_KEY]?.[scanUniverse] || null;
+ const savedScanTimeLabel = formatScannerIndiaTime(savedSnapshot?.lastScanTs, savedSnapshot?.lastScan);
  const restorePayload = savedSnapshot && typeof savedSnapshot === 'object'
  ? {
   scanResults: Array.isArray(savedSnapshot.scanResults) ? savedSnapshot.scanResults : [],
@@ -1128,13 +1136,13 @@ async function selectScannerUniverse(universe = 'fno_stocks', { runNow = false }
   sectorBreadth: savedSnapshot.sectorBreadth || null,
   candleFetchStats: savedSnapshot.candleFetchStats || null,
   marketIndex: savedSnapshot.marketIndex || null,
-  lastScan: savedSnapshot.lastScan || '',
+  lastScan: savedScanTimeLabel,
   lastScanTs: Number(savedSnapshot.lastScanTs || 0),
   scannedStocks: Number(savedSnapshot.scannedStocks || savedSnapshot.scannerUniverseMeta?.scanned || 0),
   totalStocks: Number(savedSnapshot.totalStocks || savedSnapshot.scannerUniverseMeta?.count || 0),
   scannerUniverseMeta: savedSnapshot.scannerUniverseMeta || { universe: scanUniverse, label: getScannerUniverseLabel(scanUniverse) },
-  scanStatus: savedSnapshot.lastScan ? `Ready - restored ${getScannerUniverseLabel(scanUniverse)} scan ${savedSnapshot.lastScan}` : `Ready - ${getScannerUniverseLabel(scanUniverse)} selected`,
-  scanProgress: savedSnapshot.lastScan ? 100 : 0,
+  scanStatus: savedScanTimeLabel ? `Ready - restored ${getScannerUniverseLabel(scanUniverse)} scan ${savedScanTimeLabel}` : `Ready - ${getScannerUniverseLabel(scanUniverse)} selected`,
+  scanProgress: savedScanTimeLabel ? 100 : 0,
   scanActive: false,
   scanHeartbeat: Date.now(),
  }
@@ -1158,7 +1166,7 @@ async function selectScannerUniverse(universe = 'fno_stocks', { runNow = false }
  updateScannerUniverseButtons(scanUniverse);
  showSystemToast?.(
  `${getScannerUniverseLabel(scanUniverse)} selected`,
- savedSnapshot?.lastScan ? `Restored saved scan from ${savedSnapshot.lastScan}. Use Scan Now to refresh.` : 'Use Scan Now to run this universe.',
+ savedScanTimeLabel ? `Restored saved scan from ${savedScanTimeLabel}. Use Scan Now to refresh.` : 'Use Scan Now to run this universe.',
  'success',
  2400
  );

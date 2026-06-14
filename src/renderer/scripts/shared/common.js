@@ -61,6 +61,19 @@
  .replace(/\s+/g, '');
  }
 
+ function formatIndiaTime(value = Date.now()) {
+ const timestamp = Number(value);
+ if (!Number.isFinite(timestamp) || timestamp <= 0) return '';
+ const label = new Date(timestamp).toLocaleTimeString('en-IN', {
+  timeZone: 'Asia/Kolkata',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: true,
+ }).toUpperCase();
+ return `${label} IST`;
+ }
+
  function getIndianEquitySector(value = '') {
  const raw = normalizeIndianEquitySymbol(value);
  if (!raw) return '';
@@ -2356,6 +2369,7 @@
  getRegimeThresholds,
  getSetupFamilyMeta,
  formatThresholdSummary,
+ formatIndiaTime,
  normalizeBaseSymbol,
  normalizeIndianEquitySymbol,
  getIndianEquitySector,
