@@ -219,13 +219,13 @@
  const detachedSurface = {
  mounted: false,
  root: null,
- refreshNonce: 0,
+ refreshNonce: null,
  uiMode: 'default',
  };
  const previewSurface = {
  mounted: false,
  root: null,
- refreshNonce: 0,
+ refreshNonce: null,
  getOrderContext: null,
  getDisplaySymbol: null,
  uiMode: 'default',
@@ -233,14 +233,14 @@
  const tabSurface = {
  mounted: false,
  root: null,
- refreshNonce: 0,
+ refreshNonce: null,
  uiMode: 'default',
  autoSelectedBest: false,
  };
  const reviewSurface = {
  mounted: false,
  root: null,
- refreshNonce: 0,
+ refreshNonce: null,
  uiMode: 'default',
  };
  let storageListenerBound = false;

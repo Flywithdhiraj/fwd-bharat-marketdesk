@@ -14,7 +14,6 @@
  keyLevelSettings: nextSettings,
  },
  });
- await setChartState({ refreshNonce: Date.now() });
  await queueSurfaceRender(surface, true);
  return nextSettings;
  }
@@ -145,7 +144,6 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  panelWidths: current.panelWidths || { ...DEFAULT_PANEL_WIDTHS },
  collapsedPanels: current.collapsedPanels || {},
  maximizedPanel: null,
- refreshNonce: Date.now(),
  });
  }
 
@@ -1309,6 +1307,7 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  },
  keyLevels: normalizeKeyLevels(cachedEntry.keyLevels || null),
  fetchedAt: Number(cachedEntry.fetchedAt || 0),
+ localOnly: true,
  };
  }
  const response = await runtimeSend('v16:getPublicCandles', {
@@ -1318,6 +1317,8 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  keyLevelSettings: sanitizeKeyLevelSettings(strategy.keyLevelSettings || {}),
  startTime: requirement.startMs || undefined,
  endTime: requirement.endMs || undefined,
+ localOnly: options.forceData !== true,
+ forceRefresh: options.forceData === true,
  });
  if (!response?.ok) {
  if (cachedEntry && Array.isArray(cachedEntry.candles) && cachedEntry.candles.length) {
@@ -1336,11 +1337,12 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  fetchedAt: Number(cachedEntry.fetchedAt || 0),
  error: response?.error || 'Failed to refresh the chart.',
  stale: true,
+ localOnly: true,
  };
  }
  return {
  ok: false,
- error: response?.error || 'Failed to load public candles.',
+ error: response?.error || 'No local candle data is available. Run a scan or click Refresh.',
  candles: [],
  studies: {},
  keyLevels: null,
@@ -1362,7 +1364,8 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  candles,
  studies,
  keyLevels,
- fetchedAt: Date.now(),
+ fetchedAt: Number(response?.sourceUpdatedAt || 0) || Date.now(),
+ localOnly: response?.localOnly === true,
  candleCount: candles.length,
  oldestTime: candles[0]?.time || 0,
  newestTime: candles[candles.length - 1]?.time || 0,
@@ -1378,6 +1381,7 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  studies,
  keyLevels,
  fetchedAt: payload.fetchedAt,
+ localOnly: payload.localOnly,
  };
  }
 

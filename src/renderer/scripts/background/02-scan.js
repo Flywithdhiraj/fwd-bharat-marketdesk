@@ -40,7 +40,12 @@ function buildDecisionState(results = [], marketIndex = null, manualWatchlist = 
 const CLOSED_CANDLE_FETCH_OPTIONS = Object.freeze({ closedOnly: true });
 const SCAN_CANDLE_PACE_MS = 1800;
 const SCAN_CANDLE_TIMEOUT_MS = 30000;
-const SCAN_CANDLE_FETCH_OPTIONS = Object.freeze({ closedOnly: true, timeoutMs: SCAN_CANDLE_TIMEOUT_MS, paceMs: SCAN_CANDLE_PACE_MS });
+const SCAN_CANDLE_FETCH_OPTIONS = Object.freeze({
+ closedOnly: true,
+ force: true,
+ timeoutMs: SCAN_CANDLE_TIMEOUT_MS,
+ paceMs: SCAN_CANDLE_PACE_MS,
+});
 const SCAN_CONTEXT_DAILY_CANDLES = 260;
 const SCANNER_ALLOWED_TIMEFRAMES = new Set(['4h', '1d']);
 const SCANNER_UNIVERSE_DEFAULT = 'fno_stocks';

@@ -221,13 +221,13 @@
  const detachedSurface = {
  mounted: false,
  root: null,
- refreshNonce: 0,
+ refreshNonce: null,
  uiMode: 'default',
  };
  const previewSurface = {
  mounted: false,
  root: null,
- refreshNonce: 0,
+ refreshNonce: null,
  getOrderContext: null,
  getDisplaySymbol: null,
  uiMode: 'default',
@@ -235,14 +235,14 @@
  const tabSurface = {
  mounted: false,
  root: null,
- refreshNonce: 0,
+ refreshNonce: null,
  uiMode: 'default',
  autoSelectedBest: false,
  };
  const reviewSurface = {
  mounted: false,
  root: null,
- refreshNonce: 0,
+ refreshNonce: null,
  uiMode: 'default',
  };
  let storageListenerBound = false;
@@ -1124,7 +1124,6 @@ function defaultVisibleCount(resolution = '4h') {
  keyLevelSettings: nextSettings,
  },
  });
- await setChartState({ refreshNonce: Date.now() });
  await queueSurfaceRender(surface, true);
  return nextSettings;
  }
@@ -1255,7 +1254,6 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  panelWidths: current.panelWidths || { ...DEFAULT_PANEL_WIDTHS },
  collapsedPanels: current.collapsedPanels || {},
  maximizedPanel: null,
- refreshNonce: Date.now(),
  });
  }
 
@@ -2419,6 +2417,7 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  },
  keyLevels: normalizeKeyLevels(cachedEntry.keyLevels || null),
  fetchedAt: Number(cachedEntry.fetchedAt || 0),
+ localOnly: true,
  };
  }
  const response = await runtimeSend('v16:getPublicCandles', {
@@ -2428,6 +2427,8 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  keyLevelSettings: sanitizeKeyLevelSettings(strategy.keyLevelSettings || {}),
  startTime: requirement.startMs || undefined,
  endTime: requirement.endMs || undefined,
+ localOnly: options.forceData !== true,
+ forceRefresh: options.forceData === true,
  });
  if (!response?.ok) {
  if (cachedEntry && Array.isArray(cachedEntry.candles) && cachedEntry.candles.length) {
@@ -2446,11 +2447,12 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  fetchedAt: Number(cachedEntry.fetchedAt || 0),
  error: response?.error || 'Failed to refresh the chart.',
  stale: true,
+ localOnly: true,
  };
  }
  return {
  ok: false,
- error: response?.error || 'Failed to load public candles.',
+ error: response?.error || 'No local candle data is available. Run a scan or click Refresh.',
  candles: [],
  studies: {},
  keyLevels: null,
@@ -2472,7 +2474,8 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  candles,
  studies,
  keyLevels,
- fetchedAt: Date.now(),
+ fetchedAt: Number(response?.sourceUpdatedAt || 0) || Date.now(),
+ localOnly: response?.localOnly === true,
  candleCount: candles.length,
  oldestTime: candles[0]?.time || 0,
  newestTime: candles[candles.length - 1]?.time || 0,
@@ -2488,6 +2491,7 @@ function signalTimeframe(signal = {}, fallback = '4h') {
  studies,
  keyLevels,
  fetchedAt: payload.fetchedAt,
+ localOnly: payload.localOnly,
  };
  }
 
@@ -4793,7 +4797,7 @@ function buildChartTabPicker(state = {}, options = {}) {
  : dataset?.ok
  ? (dataset?.syntheticIndex
  ? `${dataset?.symbol || FWD_INDEX_SYMBOL} | ${chartInstrumentDescription} | ${model?.totalCount || dataset?.candles?.length || 0} ${dataset?.syntheticMetric ? 'points' : 'bars'} | ${String(dataset?.historyMode || 'daily index history').replace(/_/g, ' ')}${dataset?.marketIndex?.regime ? ` | ${String(dataset.marketIndex.regime).replace(/_/g, ' ')}` : ''}`
- : `${RESOLUTION_LABELS[normalizeTimeframe(state.timeframe)]} | loaded ${model?.totalCount || 0} candles${dataset?.candles?.[0]?.time ? ` from ${formatChartDate(dataset.candles[0].time)}` : ''}${dataset?.candles?.length ? ` to ${formatChartDate(dataset.candles[dataset.candles.length - 1].time)}` : ''} | visible ${model?.visibleCount || 0}${dataset?.stale ? ' | using cached data' : ''}`)
+ : `${RESOLUTION_LABELS[normalizeTimeframe(state.timeframe)]} | loaded ${model?.totalCount || 0} candles${dataset?.candles?.[0]?.time ? ` from ${formatChartDate(dataset.candles[0].time)}` : ''}${dataset?.candles?.length ? ` to ${formatChartDate(dataset.candles[dataset.candles.length - 1].time)}` : ''} | visible ${model?.visibleCount || 0}${dataset?.localOnly ? ' | local storage' : ''}${dataset?.stale ? ' | using cached data' : ''}`)
  : (dataset?.error || 'Failed to load chart data.');
  const hasReplay = !!state.replaySeed || !!normalizeReplayMode(state.replayMode);
  const replayControls = !isReview && model && isAdvancedSurface && state.symbol ? buildReplayControls(state, model) : '';
@@ -5212,7 +5216,9 @@ function buildChartTabPicker(state = {}, options = {}) {
  if (surface === SURFACE_PREVIEW && orderContext) {
  await persistPreviewOrderContext(orderContext, state);
  }
- const refreshChanged = surfaceRef.refreshNonce !== Number(state.refreshNonce || 0);
+ const hasRenderedBefore = surfaceRef.refreshNonce !== null && surfaceRef.refreshNonce !== undefined;
+ const previousRefreshNonce = Number(surfaceRef.refreshNonce || 0);
+ const refreshChanged = hasRenderedBefore && previousRefreshNonce !== Number(state.refreshNonce || 0);
  const signalState = await localGet(['scanResults', 'marketIndex', 'decisionShortlist', 'manualWatchlist', 'watchlist', 'autoWatchlist']);
  const activeSignal = (Array.isArray(signalState?.scanResults) ? signalState.scanResults : [])
  .find(item => String(item?.symbol || '').trim().toUpperCase() === String(state.symbol || '').trim().toUpperCase()) || null;
@@ -6595,7 +6601,7 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  reviewSurface.mounted = false;
  reviewSurface.root = null;
  reviewSurface.uiMode = 'default';
- reviewSurface.refreshNonce = 0;
+ reviewSurface.refreshNonce = null;
  reviewSurface.lastMarkup = '';
  }
 
@@ -6670,7 +6676,6 @@ function bindSurfaceControls(surface = SURFACE_PREVIEW, state = {}, chartModel =
  chartTradingDraft: null,
  chartTradingMode: 'select',
  orderContext: null,
- refreshNonce: Date.now(),
  uiMode: 'journal',
  });
  }

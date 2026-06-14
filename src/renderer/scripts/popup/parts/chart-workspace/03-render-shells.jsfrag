@@ -1619,7 +1619,7 @@ function buildChartTabPicker(state = {}, options = {}) {
  : dataset?.ok
  ? (dataset?.syntheticIndex
  ? `${dataset?.symbol || FWD_INDEX_SYMBOL} | ${chartInstrumentDescription} | ${model?.totalCount || dataset?.candles?.length || 0} ${dataset?.syntheticMetric ? 'points' : 'bars'} | ${String(dataset?.historyMode || 'daily index history').replace(/_/g, ' ')}${dataset?.marketIndex?.regime ? ` | ${String(dataset.marketIndex.regime).replace(/_/g, ' ')}` : ''}`
- : `${RESOLUTION_LABELS[normalizeTimeframe(state.timeframe)]} | loaded ${model?.totalCount || 0} candles${dataset?.candles?.[0]?.time ? ` from ${formatChartDate(dataset.candles[0].time)}` : ''}${dataset?.candles?.length ? ` to ${formatChartDate(dataset.candles[dataset.candles.length - 1].time)}` : ''} | visible ${model?.visibleCount || 0}${dataset?.stale ? ' | using cached data' : ''}`)
+ : `${RESOLUTION_LABELS[normalizeTimeframe(state.timeframe)]} | loaded ${model?.totalCount || 0} candles${dataset?.candles?.[0]?.time ? ` from ${formatChartDate(dataset.candles[0].time)}` : ''}${dataset?.candles?.length ? ` to ${formatChartDate(dataset.candles[dataset.candles.length - 1].time)}` : ''} | visible ${model?.visibleCount || 0}${dataset?.localOnly ? ' | local storage' : ''}${dataset?.stale ? ' | using cached data' : ''}`)
  : (dataset?.error || 'Failed to load chart data.');
  const hasReplay = !!state.replaySeed || !!normalizeReplayMode(state.replayMode);
  const replayControls = !isReview && model && isAdvancedSurface && state.symbol ? buildReplayControls(state, model) : '';

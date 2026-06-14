@@ -267,7 +267,9 @@
  if (surface === SURFACE_PREVIEW && orderContext) {
  await persistPreviewOrderContext(orderContext, state);
  }
- const refreshChanged = surfaceRef.refreshNonce !== Number(state.refreshNonce || 0);
+ const hasRenderedBefore = surfaceRef.refreshNonce !== null && surfaceRef.refreshNonce !== undefined;
+ const previousRefreshNonce = Number(surfaceRef.refreshNonce || 0);
+ const refreshChanged = hasRenderedBefore && previousRefreshNonce !== Number(state.refreshNonce || 0);
  const signalState = await localGet(['scanResults', 'marketIndex', 'decisionShortlist', 'manualWatchlist', 'watchlist', 'autoWatchlist']);
  const activeSignal = (Array.isArray(signalState?.scanResults) ? signalState.scanResults : [])
  .find(item => String(item?.symbol || '').trim().toUpperCase() === String(state.symbol || '').trim().toUpperCase()) || null;
